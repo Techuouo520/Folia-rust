@@ -31,8 +31,13 @@ pub enum OmniError {
     Unavailable,
     #[error("not signed in")]
     SignedOut,
+    /// The platform has no such capability in the original either.
+    #[error("{0} is not supported on this platform")]
+    Unsupported(&'static str),
     #[error("cannot draw the sign-in code")]
     Qr(#[from] qrcode::types::QrError),
+    #[error("cannot read the sign-in code picture: {0}")]
+    QrImage(String),
     #[error("system keyring refused")]
     Keyring(#[from] keyring::Error),
     #[error("cannot write {path}")]
@@ -56,6 +61,14 @@ pub struct AudioSource {
     pub extension: String,
     /// The platform only gave a preview clip, not the whole song.
     pub preview: bool,
+}
+
+/// A song's whole file as the platform hands it out, decrypted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioFile {
+    pub bytes: Vec<u8>,
+    /// File extension, such as `ogg`.
+    pub extension: String,
 }
 
 /// One platform the original lists in its sign-in window, with its mark: a letter on a colour.
@@ -82,11 +95,21 @@ const PLATFORMS: [(&str, &str, &str, char, u32); 7] = [
     ("qishui", "汽水音乐", "汽水", '汽', 0x19a58c),
 ];
 
-/// A QR sign-in session: `key` is what the platform is asked about, `url` what the phone scans.
+/// A QR sign-in session: `key` is what the platform is asked about, `content` what the phone scans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginCode {
     pub key: String,
-    pub url: String,
+    pub content: QrContent,
+}
+
+/// What a sign-in code holds: an address to encode, or the platform's own picture of the code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QrContent {
+    Url(String),
+    /// A PNG of the code as the platform drew it; its modules are read back from the picture.
+    Png(Vec<u8>),
+    /// A page to open in the system browser; the platform waits for the answer it sends back.
+    Browser(String),
 }
 
 /// What the platform says about a sign-in code.
@@ -198,6 +221,11 @@ pub trait Provider: Send + Sync {
         offset: u32,
     ) -> BoxFuture<'a, Result<Page<Track>, OmniError>>;
     fn audio_source<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<AudioSource, OmniError>>;
+    /// The song's file when the platform hands it out itself (decrypted) instead of at an address; `None` for
+    /// platforms whose `audio_source` is downloaded.
+    fn audio_file<'a>(&'a self, _song: &'a OnlineId) -> Option<BoxFuture<'a, Result<AudioFile, OmniError>>> {
+        None
+    }
     fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>>;
     fn login_code(&self) -> BoxFuture<'_, Result<LoginCode, OmniError>>;
     fn check_login<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<LoginState, OmniError>>;
@@ -221,6 +249,10 @@ pub trait Provider: Send + Sync {
     ) -> BoxFuture<'a, Result<(), OmniError>>;
     fn favorite_albums(&self) -> BoxFuture<'_, Result<Vec<Collection>, OmniError>>;
     fn radio_feed(&self, limit: u32) -> BoxFuture<'_, Result<RadioFeed, OmniError>>;
+    /// Whether the platform has daily songs at all (`supportsDailySongs`); the radio tab shows no card otherwise.
+    fn has_daily_songs(&self) -> bool {
+        true
+    }
     fn explore(&self) -> BoxFuture<'_, Result<Vec<ExploreSection>, OmniError>>;
     /// The address of `url` resized to `px` square on the platform's image CDN, when `url` is on it.
     fn sized_cover(&self, url: &str, px: u32) -> Option<String>;
@@ -279,7 +311,11 @@ impl Omni {
     /// Asks for a sign-in code and draws it as a QR matrix.
     pub async fn login_qr(&self, provider: &str) -> Result<LoginQr, OmniError> {
         let code = self.provider(provider)?.login_code().await?;
-        LoginQr::encode(code.key, &code.url)
+        match code.content {
+            QrContent::Url(url) => LoginQr::encode(code.key, &url),
+            QrContent::Png(png) => LoginQr::from_png(code.key, &png),
+            QrContent::Browser(url) => Ok(LoginQr::browser(code.key, url)),
+        }
     }
 
     pub async fn check_login(&self, provider: &str, key: &str) -> Result<LoginState, OmniError> {
@@ -339,6 +375,10 @@ impl Omni {
         self.provider(provider)?.radio_feed(limit).await
     }
 
+    pub fn has_daily_songs(&self, provider: &str) -> bool {
+        self.provider(provider).is_ok_and(|found| found.has_daily_songs())
+    }
+
     pub async fn explore(&self, provider: &str) -> Result<Vec<ExploreSection>, OmniError> {
         self.provider(provider)?.explore().await
     }
@@ -351,7 +391,19 @@ impl Omni {
             return Ok(cached);
         }
 
-        let source = self.provider(&song.provider)?.audio_source(song).await?;
+        let provider = self.provider(&song.provider)?;
+        if let Some(file) = provider.audio_file(song) {
+            let AudioFile { bytes, extension } = file.await?;
+            let path = dir.join(format!("{stem}.{extension}"));
+            let io_err = |source| OmniError::Io { path: path.clone(), source };
+            std::fs::create_dir_all(&dir).map_err(io_err)?;
+            let partial = path.with_extension("part");
+            std::fs::write(&partial, &bytes).map_err(io_err)?;
+            std::fs::rename(&partial, &path).map_err(io_err)?;
+            tracing::info!(song = %stem, bytes = bytes.len(), "audio cached from the platform");
+            return Ok(path);
+        }
+        let source = provider.audio_source(song).await?;
         let path = dir.join(format!("{stem}.{}", source.extension));
         let io_err = |source| OmniError::Io { path: path.clone(), source };
         std::fs::create_dir_all(&dir).map_err(io_err)?;

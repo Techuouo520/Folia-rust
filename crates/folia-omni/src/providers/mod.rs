@@ -1,7 +1,19 @@
 // Registry of the platform providers compiled in; each platform is a cargo feature named after its id.
 
+#[cfg(feature = "bodian")]
+mod bodian;
+#[cfg(feature = "kugou")]
+mod kugou;
 #[cfg(feature = "netease")]
 mod netease;
+#[cfg(feature = "qishui")]
+mod qishui;
+#[cfg(feature = "qq")]
+mod qq;
+#[cfg(feature = "spotify")]
+mod spotify;
+#[cfg(feature = "ytm")]
+mod ytm;
 
 use crate::Provider;
 
@@ -9,5 +21,17 @@ pub fn all(http: &reqwest::Client) -> Vec<Box<dyn Provider>> {
     vec![
         #[cfg(feature = "netease")]
         Box::new(netease::Netease::new(http.clone())),
+        #[cfg(feature = "kugou")]
+        Box::new(kugou::Kugou::new(http.clone())),
+        #[cfg(feature = "qq")]
+        Box::new(qq::Qq::new(http.clone())),
+        #[cfg(feature = "bodian")]
+        Box::new(bodian::Bodian::new(http.clone())),
+        #[cfg(feature = "ytm")]
+        Box::new(ytm::Ytm::new(http.clone())),
+        #[cfg(feature = "spotify")]
+        Box::new(spotify::Spotify::new(http.clone())),
+        #[cfg(feature = "qishui")]
+        Box::new(qishui::Qishui::new(http.clone())),
     ]
 }

@@ -292,9 +292,9 @@ pub enum Message {
 
 impl LibraryPage {
     /// Shows what the index already holds; scanning only happens on import or reload.
-    pub fn new(db_path: PathBuf, tab: HomeTab, omni: Option<Omni>) -> (Self, Task<Message>) {
+    pub fn new(db_path: PathBuf, tab: HomeTab, omni: Option<Omni>, provider: Option<&str>) -> (Self, Task<Message>) {
         let task = load(db_path.clone(), None, false);
-        let (online, restore) = Online::new(omni);
+        let (online, restore) = Online::new(omni, provider);
         let page = Self {
             db_path,
             tracks: Vec::new(),
@@ -674,9 +674,18 @@ impl LibraryPage {
             .map(|poster| &poster.ground)
     }
 
-    /// After a confirmed sign-in, keeps the session and reads the account.
-    pub fn signed_in(&mut self) -> Task<Message> {
-        self.online.signed_in_now().map(Message::Online)
+    /// After a confirmed sign-in on `provider`, keeps the session and reads the account.
+    pub fn signed_in(&mut self, provider: &'static str, i18n: &I18n) -> Task<Message> {
+        let task = self.online.signed_in_now(provider).map(Message::Online);
+        self.layer = None;
+        Task::batch([task, self.rebuild(i18n)])
+    }
+
+    /// Shows another platform whose session is kept.
+    pub fn switch_provider(&mut self, provider: &'static str, i18n: &I18n) -> Task<Message> {
+        let task = self.online.switch_to(provider).map(Message::Online);
+        self.layer = None;
+        Task::batch([task, self.rebuild(i18n)])
     }
 
     pub fn sign_out(&mut self, i18n: &I18n) -> Task<Message> {
@@ -1159,7 +1168,9 @@ impl LibraryPage {
             }
             HomeTab::Radio => {
                 if let Some(feed) = self.online.radio.ready() {
-                    for collection in radio_cards(feed, i18n) {
+                    let provider = self.online.provider();
+                    let daily = self.online.omni().is_none_or(|omni| omni.has_daily_songs(provider));
+                    for collection in radio_cards(feed, provider, daily, i18n) {
                         let description = radio_description(&collection, i18n);
                         card(&collection, description, &mut tiles, &mut actions);
                     }
@@ -1409,7 +1420,7 @@ impl LibraryPage {
         let AccountState::Guest { ran_out } = self.online.account else { return None };
         let connect = i18n.t("libraryBravaisHome.connect");
         if ran_out {
-            let provider = provider_label(self.online.omni());
+            let provider = provider_label(self.online.omni(), self.online.provider());
             return Some((
                 i18n.format("libraryBravaisHome.wallHint.reloginTitle", &[("provider", &provider)]),
                 i18n.format("libraryBravaisHome.wallHint.reloginBody", &[("connect", connect)]),
@@ -1487,9 +1498,9 @@ impl LibraryPage {
 }
 
 /// The platform's short name, as the original's `providerLabel`.
-pub fn provider_label(omni: Option<&Omni>) -> String {
-    omni.and_then(|omni| omni.platforms().into_iter().find(|platform| platform.id == online::PROVIDER))
-        .map_or_else(|| online::PROVIDER.to_owned(), |platform| platform.short_name.to_owned())
+pub fn provider_label(omni: Option<&Omni>, provider: &str) -> String {
+    omni.and_then(|omni| omni.platforms().into_iter().find(|platform| platform.id == provider))
+        .map_or_else(|| provider.to_owned(), |platform| platform.short_name.to_owned())
 }
 
 /// `libraryBravais.trackCount_one` / `_other`, as i18next picks a plural.
@@ -1536,9 +1547,9 @@ fn section_summary(section: &folia_omni::ExploreSection, i18n: &I18n) -> String 
 }
 
 /// `buildOnlineRadioCards`: personal FM and the daily songs before the recommended playlists.
-fn radio_cards(feed: &folia_omni::RadioFeed, i18n: &I18n) -> Vec<Collection> {
+fn radio_cards(feed: &folia_omni::RadioFeed, provider: &str, daily: bool, i18n: &I18n) -> Vec<Collection> {
     let mut cards = Vec::new();
-    let provider = online::PROVIDER.to_owned();
+    let provider = provider.to_owned();
     if !feed.personal_fm.is_empty() {
         cards.push(Collection {
             provider: provider.clone(),
@@ -1551,6 +1562,10 @@ fn radio_cards(feed: &folia_omni::RadioFeed, i18n: &I18n) -> Vec<Collection> {
             // `personalFmModeLabel`: NetEase has FM modes, and the mode in use is the default one.
             description: Some(i18n.t("personalFmMode.mode.DEFAULT").to_owned()),
         });
+    }
+    if !daily {
+        cards.extend(feed.recommended.iter().cloned());
+        return cards;
     }
     cards.push(Collection {
         provider,

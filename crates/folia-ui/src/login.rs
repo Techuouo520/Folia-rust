@@ -17,7 +17,7 @@ use lucide_static_svg::Icon;
 use crate::background::blocking;
 use crate::icons::icon;
 use crate::motion::Tween;
-use crate::online::{AccountState, PROVIDER};
+use crate::online::{AccountState, Online};
 use crate::platform_icon::platform_icon;
 use crate::settings_kit::Tokens;
 
@@ -213,6 +213,10 @@ pub enum Message {
     Details,
     /// The account's sign-out: asks first (`askProviderSignOut`).
     SignOut,
+    /// Makes the chosen platform, whose session is kept, the one in use (`switchToChosen`).
+    Switch,
+    /// Opens a browser sign-in's page (`openLoginPage`).
+    OpenBrowser,
     ConfirmSignOut,
     CancelSignOut,
     Qr(u64, Result<LoginQr, Failure>),
@@ -224,8 +228,10 @@ pub enum Message {
 
 /// What the shell does after a window message.
 pub enum Effect {
-    /// The phone confirmed: keep the session and read the account.
-    Confirmed,
+    /// The phone confirmed on this platform: keep the session and read the account.
+    Confirmed(&'static str),
+    /// Show this platform, whose session is kept.
+    Switch(&'static str),
     SignOut,
 }
 
@@ -262,6 +268,10 @@ pub struct Look<'a> {
     pub daylight: bool,
     pub window: Size,
     pub platforms: Vec<Platform>,
+    /// The platform in use: `account` and `avatar` are its.
+    pub active: &'static str,
+    /// Platforms with a session kept, which can be switched to.
+    pub kept: &'a std::collections::HashSet<&'static str>,
     pub account: &'a AccountState,
     pub avatar: Option<&'a iced::widget::image::Handle>,
     /// The player holds songs: signing out empties it.
@@ -297,7 +307,7 @@ impl Login {
     }
 
     /// `openLoginWindow`: opens on the platform in use when someone is signed in; a guest picks the platform.
-    pub fn open(&mut self, provider: Option<&'static str>, signed_in: bool, omni: Option<&Omni>) -> Task<Message> {
+    pub fn open(&mut self, provider: Option<&'static str>, online: &Online, omni: Option<&Omni>) -> Task<Message> {
         let now = Instant::now();
         self.open = true;
         self.shown.set_with(1.0, UNFOLD_MS, EASE_OUT, now);
@@ -311,7 +321,7 @@ impl Login {
         self.hover = None;
         self.slide_shown = false;
         match provider {
-            Some(provider) => self.choose(provider, signed_in, omni),
+            Some(provider) => self.choose(provider, online, omni),
             None => Task::none(),
         }
     }
@@ -349,14 +359,14 @@ impl Login {
         &mut self,
         message: Message,
         omni: Option<&Omni>,
-        signed_in: bool,
+        online: &Online,
     ) -> (Task<Message>, Option<Effect>) {
         match message {
             Message::Choose(provider) => {
                 if self.chosen == Some(provider) && !matches!(self.phase, Phase::Failed(_)) {
                     return (Task::none(), None);
                 }
-                (self.choose(provider, signed_in, omni), None)
+                (self.choose(provider, online, omni), None)
             }
             Message::Hover(provider) => {
                 self.hover = provider;
@@ -383,7 +393,7 @@ impl Login {
             }
             Message::Retry => {
                 let waiting = matches!(&self.phase, Phase::Failed(failure) if Instant::now() < failure.retry_opens());
-                if signed_in || waiting {
+                if self.chosen.is_some_and(|chosen| holds_session(chosen, online)) || waiting {
                     return (Task::none(), None);
                 }
                 (self.start(omni), None)
@@ -391,6 +401,22 @@ impl Login {
             Message::SignOut => {
                 self.asking = true;
                 (Task::none(), None)
+            }
+            Message::Switch => {
+                let Some(provider) = self.chosen.filter(|chosen| *chosen != online.provider()) else {
+                    return (Task::none(), None);
+                };
+                self.close();
+                (Task::none(), Some(Effect::Switch(provider)))
+            }
+            Message::OpenBrowser => {
+                let Some(url) = self.qr.as_ref().and_then(|qr| qr.browser.clone()) else { return (Task::none(), None) };
+                let open = blocking(move || {
+                    if let Err(err) = open::that_detached(&url) {
+                        tracing::warn!(error = &err as &dyn std::error::Error, "cannot open the sign-in page");
+                    }
+                });
+                (Task::perform(open, |_| Message::Swallow), None)
             }
             Message::CancelSignOut => {
                 self.asking = false;
@@ -436,12 +462,12 @@ impl Login {
         }
     }
 
-    fn choose(&mut self, provider: &'static str, signed_in: bool, omni: Option<&Omni>) -> Task<Message> {
+    fn choose(&mut self, provider: &'static str, online: &Online, omni: Option<&Omni>) -> Task<Message> {
         self.chosen = Some(provider);
         self.sync_slide();
         self.qr = None;
         self.round += 1;
-        if signed_in {
+        if holds_session(provider, online) {
             self.phase = Phase::Idle;
             return Task::none();
         }
@@ -489,8 +515,8 @@ impl Login {
             self.fail(Failure::of(Case::Unknown, Step::Start));
             return Task::none();
         };
-        let round = self.round;
-        let work = async move { omni.login_qr(PROVIDER).await.map_err(|err| Failure::from_error(&err, Step::Start)) };
+        let (round, Some(provider)) = (self.round, self.chosen) else { return Task::none() };
+        let work = async move { omni.login_qr(provider).await.map_err(|err| Failure::from_error(&err, Step::Start)) };
         Task::perform(work, move |result| Message::Qr(round, result))
     }
 
@@ -501,10 +527,12 @@ impl Login {
     }
 
     fn check(&self, omni: Option<&Omni>) -> Task<Message> {
-        let (Some(omni), Some(qr)) = (omni.cloned(), self.qr.as_ref()) else { return Task::none() };
+        let (Some(omni), Some(qr), Some(provider)) = (omni.cloned(), self.qr.as_ref(), self.chosen) else {
+            return Task::none();
+        };
         let (round, key) = (self.round, qr.key.clone());
         let work = async move {
-            omni.check_login(PROVIDER, &key)
+            omni.check_login(provider, &key)
                 .await
                 .map_err(|err| (Failure::from_error(&err, Step::Check), Failure::network(&err)))
         };
@@ -541,8 +569,9 @@ impl Login {
                 (self.next_poll(), None)
             }
             LoginState::Confirmed => {
+                let Some(provider) = self.chosen else { return (Task::none(), None) };
                 self.phase = Phase::Reading;
-                (Task::none(), Some(Effect::Confirmed))
+                (Task::none(), Some(Effect::Confirmed(provider)))
             }
             LoginState::Expired => {
                 let case = if self.scanned_at.is_some() { Case::ExpiredAfterScan } else { Case::CodeExpired };
@@ -592,7 +621,7 @@ impl Login {
         let width = WIDTH.min(look.window.width - 2.0 * MARGIN).max(1.0);
         let platform = self.chosen.and_then(|id| look.platforms.iter().find(|platform| platform.id == id)).copied();
         let pc = platform.map(|platform| folia_visualizer::color(Rgb::hex(platform.color), 1.0));
-        let signed_in = matches!(look.account, AccountState::SignedIn(_));
+        let signed_in = self.chosen == Some(look.active) && matches!(look.account, AccountState::SignedIn(_));
         let content = self.content(&look, tokens, narrow, platform, signed_in, now);
         let mut sheet_layers = stack![];
         if let (Some(pc), false) = (pc, narrow) {
@@ -902,8 +931,10 @@ impl Login {
         let i18n = look.i18n;
         let chosen = self.chosen == Some(platform.id);
         let off = !platform.available;
-        let signed_in = platform.id == PROVIDER && matches!(look.account, AccountState::SignedIn(_));
-        let ran_out = platform.id == PROVIDER && matches!(look.account, AccountState::Guest { ran_out: true });
+        let active = platform.id == look.active;
+        let signed_in =
+            if active { matches!(look.account, AccountState::SignedIn(_)) } else { look.kept.contains(platform.id) };
+        let ran_out = active && matches!(look.account, AccountState::Guest { ran_out: true });
         let dim = if off { 0.42 } else { 1.0 };
         let fade = |color: Color| Color { a: color.a * dim, ..color };
         let color = fade(if bright { tokens.t1 } else { tokens.t2 });
@@ -917,7 +948,7 @@ impl Login {
         } else {
             let note: Element<'a, Message> = if signed_in {
                 let name = match look.account {
-                    AccountState::SignedIn(account) => account.nickname.clone(),
+                    AccountState::SignedIn(account) if active => account.nickname.clone(),
                     _ => i18n.t("login.rowSignedIn").to_owned(),
                 };
                 let ok =
@@ -950,7 +981,7 @@ impl Login {
             .spacing(2);
             face = face.push(container(names).width(Length::Fill).clip(true));
         }
-        if let (true, Some(avatar)) = (signed_in, look.avatar) {
+        if let (true, true, Some(avatar)) = (active, signed_in, look.avatar) {
             let size = if lie { 18.0 } else { 24.0 };
             face = face.push(
                 iced::widget::image(avatar.clone())
@@ -1016,7 +1047,8 @@ impl Login {
         let pc = platform.map_or(tokens.t3, |platform| folia_visualizer::color(Rgb::hex(platform.color), tokens.t1.a));
         let spin = now.saturating_duration_since(self.clock).as_secs_f32();
         let expired = matches!(&self.phase, Phase::Failed(failure) if failure.case.expired_code()) && self.qr.is_some();
-        let on_white = (self.phase == Phase::Code && self.qr.is_some()) || expired;
+        let in_browser = self.qr.as_ref().is_some_and(|qr| qr.browser.is_some());
+        let on_white = (self.phase == Phase::Code && self.qr.is_some() && !in_browser) || expired;
         let framed = platform.is_none();
         let disc = |tone: Tone, glyph: Icon, arc: bool| -> Element<'a, Message> {
             let (fill, ink) = tone_colors(tone, tokens, look.daylight);
@@ -1052,6 +1084,9 @@ impl Login {
                     .into()
             }
             (_, Some(platform)) if signed_in => account_picture(look, platform, 88.0, tokens),
+            (Phase::Code, Some(platform)) if in_browser => {
+                container(mark_faded(platform, 54.0, tokens.t1.a)).center(Length::Fixed(88.0)).into()
+            }
             (Phase::Code, Some(_)) => match &self.qr {
                 Some(qr) => canvas_widget(Code { qr, dim: 1.0, opacity: tokens.t1.a, reveal: self.reveal(now) })
                     .width(Length::Fixed(176.0))
@@ -1137,8 +1172,14 @@ impl Login {
         let mut note: Option<String> = None;
         let mut quote: Option<(String, Option<String>)> = None;
         let mut actions: Vec<(String, bool, Message)> = Vec::new();
+        let switchable = self.chosen.is_some_and(|chosen| chosen != look.active && look.kept.contains(chosen));
         let headline = match (&self.phase, platform) {
             (_, None) => i18n.t("login.choosePlatform").to_owned(),
+            (_, Some(_)) if switchable => {
+                note = Some(i18n.t("login.rowSignedIn").to_owned());
+                actions.push((i18n.format("home.switchToProvider", &[("provider", label)]), true, Message::Switch));
+                label.to_owned()
+            }
             (_, Some(_)) if signed_in => {
                 let AccountState::SignedIn(account) = look.account else { return space().into() };
                 note = Some(format!("{label} · ID: {}", account.id));
@@ -1156,6 +1197,10 @@ impl Login {
             }
             (Phase::Scanned, Some(_)) => i18n.t("home.qrScanned").to_owned(),
             (Phase::Reading, Some(_)) => i18n.t("login.readingAccount").to_owned(),
+            (Phase::Code, Some(_)) if self.qr.as_ref().is_some_and(|qr| qr.browser.is_some()) => {
+                actions.push((i18n.t("login.openBrowser").to_owned(), true, Message::OpenBrowser));
+                i18n.format("home.loginToProvider", &[("provider", label)])
+            }
             (Phase::Code | Phase::Preparing | Phase::Idle, Some(_)) => {
                 note = Some(i18n.t("home.loginNote").to_owned());
                 i18n.t("home.loginTitle").to_owned()
@@ -1203,7 +1248,7 @@ impl Login {
         }
         let mut buttons = row![].spacing(8).align_y(Alignment::Center);
         let failure = match &self.phase {
-            Phase::Failed(failure) if platform.is_some() && !signed_in => Some(failure),
+            Phase::Failed(failure) if platform.is_some() && !signed_in && !switchable => Some(failure),
             _ => None,
         };
         if let Some(failure) = failure.filter(|failure| now < failure.retry_opens()) {
@@ -1255,6 +1300,11 @@ impl Login {
             Phase::Idle | Phase::Failed(_) => None,
         }
     }
+}
+
+/// Whether `provider` needs no new sign-in: it is in use with an account, or its session is kept to switch to.
+fn holds_session(provider: &'static str, online: &Online) -> bool {
+    if provider == online.provider() { online.signed_in().is_some() } else { online.kept().contains(provider) }
 }
 
 fn account_name(account: &Account, label: &str) -> String {
