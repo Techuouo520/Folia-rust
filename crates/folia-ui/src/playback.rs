@@ -1,6 +1,7 @@
 // Playback controller: owns the player and the queue, follows track ends and loads lyrics.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use folia_core::{Lyrics, Queue, Repeat, Track};
 use folia_omni::{Collection, Omni};
@@ -28,6 +29,15 @@ pub struct Playback {
     fm: Option<Collection>,
     /// A batch is on its way; steps wait for it.
     topping_up: bool,
+    notice: Option<(String, Instant)>,
+    notice_serial: u64,
+    request: u64,
+}
+
+#[derive(Debug, Clone)]
+pub enum AudioFailure {
+    SubscriptionRequired,
+    Other(String),
 }
 
 #[derive(Debug, Clone)]
@@ -55,8 +65,12 @@ pub enum Message {
     /// Moves the queue item at the first index so that it ends up at the second (a drag in the queue list).
     Reorder(usize, usize),
     Tick,
-    LyricsLoaded(i64, Option<Lyrics>),
-    AudioReady(i64, Result<PathBuf, String>),
+    LyricsLoaded(u64, i64, Option<Lyrics>),
+    AudioReady(u64, i64, Result<PathBuf, AudioFailure>),
+    Started(u64),
+    NoticeLeaving(u64),
+    NoticeGone(u64),
+    NoticeFrame,
     /// A personal FM batch for the step away from the track with this id; `finished` as in `Queue::advance`.
     FmBatch {
         from: i64,
@@ -93,7 +107,14 @@ impl Playback {
             failures: 0,
             fm: None,
             topping_up: false,
+            notice: None,
+            notice_serial: 0,
+            request: 0,
         }
+    }
+
+    pub fn request_id(&self) -> u64 {
+        self.request
     }
 
     pub fn current(&self) -> Option<&Track> {
@@ -153,6 +174,9 @@ impl Playback {
 
     /// Empties the queue and stops, as signing out of the active platform does (`resetForProviderSwitch`).
     pub fn clear(&mut self) {
+        self.request = self.request.wrapping_add(1);
+        self.notice = None;
+        self.notice_serial = self.notice_serial.wrapping_add(1);
         self.with_player(Player::stop);
         self.queue.replace(Vec::new(), 0);
         self.set_fm(None);
@@ -241,13 +265,28 @@ impl Playback {
                 Task::none()
             }
             Message::Tick => self.tick(),
-            Message::LyricsLoaded(id, lyrics) => {
-                if self.current().is_some_and(|track| track.id == id) {
+            Message::LyricsLoaded(request, id, lyrics) => {
+                if request == self.request && self.current().is_some_and(|track| track.id == id) {
                     self.lyrics = lyrics;
                 }
                 Task::none()
             }
-            Message::AudioReady(id, result) => {
+            Message::NoticeLeaving(serial) if serial == self.notice_serial => {
+                Task::perform(blocking(|| std::thread::sleep(Duration::from_millis(220))), move |_| {
+                    Message::NoticeGone(serial)
+                })
+            }
+            Message::NoticeGone(serial) if serial == self.notice_serial => {
+                self.notice = None;
+                Task::none()
+            }
+            Message::NoticeLeaving(_) | Message::NoticeGone(_) | Message::NoticeFrame | Message::Started(_) => {
+                Task::none()
+            }
+            Message::AudioReady(request, id, result) => {
+                if request != self.request {
+                    return Task::none();
+                }
                 let Some(track) = self.queue.current_mut().filter(|track| track.id == id) else { return Task::none() };
                 match result {
                     Ok(path) => {
@@ -256,9 +295,21 @@ impl Playback {
                         let path = track.path.clone();
                         self.with_player(|player| player.load(&path));
                         self.refresh();
-                        Task::none()
+                        Task::done(Message::Started(request))
                     }
-                    Err(err) => {
+                    Err(AudioFailure::SubscriptionRequired) => {
+                        let provider = track.online.as_ref().map(|online| online.provider.clone());
+                        self.with_player(Player::stop);
+                        self.refresh();
+                        self.notice_serial = self.notice_serial.wrapping_add(1);
+                        let serial = self.notice_serial;
+                        self.notice = provider.map(|provider| (provider, Instant::now()));
+                        tracing::info!("online playback stopped: subscription required");
+                        Task::perform(blocking(|| std::thread::sleep(Duration::from_secs(6))), move |_| {
+                            Message::NoticeLeaving(serial)
+                        })
+                    }
+                    Err(AudioFailure::Other(err)) => {
                         tracing::warn!(track = %track.display_name(), error = %err, "online track unavailable");
                         self.fail()
                     }
@@ -339,8 +390,12 @@ impl Playback {
     /// Starts the current track: local files play at once, online tracks are downloaded first.
     fn start_current(&mut self) -> Task<Message> {
         let Some(track) = self.queue.current().cloned() else { return Task::none() };
+        self.request = self.request.wrapping_add(1);
+        let request = self.request;
         // A track started any other way overtakes a personal FM batch on its way.
         self.topping_up = false;
+        self.notice = None;
+        self.notice_serial = self.notice_serial.wrapping_add(1);
         self.lyrics = None;
         self.lyric_offset = 0.0;
         self.seeking = None;
@@ -349,9 +404,10 @@ impl Playback {
         let (Some(online), Some(omni)) = (track.online.clone(), self.omni.clone()) else {
             self.with_player(|player| player.load(&track.path));
             self.refresh();
-            return Task::perform(blocking(move || folia_library::lyrics_for(&track.path)), move |lyrics| {
-                Message::LyricsLoaded(id, lyrics.flatten())
+            let lyrics = Task::perform(blocking(move || folia_library::lyrics_for(&track.path)), move |lyrics| {
+                Message::LyricsLoaded(request, id, lyrics.flatten())
             });
+            return Task::batch([lyrics, Task::done(Message::Started(request))]);
         };
 
         self.with_player(Player::stop);
@@ -359,6 +415,7 @@ impl Playback {
         let (lyrics_omni, lyrics_id) = (omni.clone(), online.clone());
         let lyrics = Task::perform(async move { lyrics_omni.lyrics(&lyrics_id).await }, move |result| {
             Message::LyricsLoaded(
+                request,
                 id,
                 result.unwrap_or_else(|err| {
                     tracing::warn!(error = &err as &dyn std::error::Error, "online lyrics unavailable");
@@ -367,9 +424,31 @@ impl Playback {
             )
         });
         let audio = Task::perform(async move { omni.fetch_audio(&online).await }, move |result| {
-            Message::AudioReady(id, result.map_err(|err| error_chain(&err)))
+            Message::AudioReady(
+                request,
+                id,
+                result.map_err(|err| match err {
+                    folia_omni::OmniError::SubscriptionRequired => AudioFailure::SubscriptionRequired,
+                    err => AudioFailure::Other(error_chain(&err)),
+                }),
+            )
         });
         Task::batch([audio, lyrics])
+    }
+
+    pub fn notice_animating(&self, now: Instant) -> bool {
+        self.notice.as_ref().is_some_and(|(_, started)| {
+            let ms = now.saturating_duration_since(*started).as_millis();
+            ms < 320 || (6000..6220).contains(&ms)
+        })
+    }
+
+    pub fn subscription_notice(&self, now: Instant) -> Option<(&str, f32, f32)> {
+        let (provider, started) = self.notice.as_ref()?;
+        let ms = now.saturating_duration_since(*started).as_secs_f64() * 1000.0;
+        let entered = folia_visualizer::Ease::new(0.2, 0.8, 0.2, 1.0).at((ms / 320.0).clamp(0.0, 1.0)) as f32;
+        let left = folia_visualizer::Ease::new(0.4, 0.0, 1.0, 1.0).at(((ms - 6000.0) / 220.0).clamp(0.0, 1.0)) as f32;
+        Some((provider, entered * (1.0 - left), -18.0 * (1.0 - entered) - 10.0 * left))
     }
 
     fn refresh(&mut self) {

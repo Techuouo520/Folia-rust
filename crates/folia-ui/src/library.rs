@@ -688,8 +688,12 @@ impl LibraryPage {
         Task::batch([task, self.rebuild(i18n)])
     }
 
-    pub fn sign_out(&mut self, i18n: &I18n) -> Task<Message> {
-        let task = self.online.sign_out().map(Message::Online);
+    pub fn sign_out(&mut self, provider: &'static str, i18n: &I18n) -> Task<Message> {
+        let active = provider == self.online.provider();
+        let task = self.online.sign_out(provider).map(Message::Online);
+        if !active {
+            return task;
+        }
         self.layer = None;
         Task::batch([task, self.rebuild(i18n)])
     }

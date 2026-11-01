@@ -18,7 +18,8 @@ use crate::background::blocking;
 use crate::icons::icon;
 use crate::motion::Tween;
 use crate::online::{AccountState, Online};
-use crate::platform_icon::platform_icon;
+use crate::platform_highlight::Highlight;
+use crate::platform_icon::{mark_faded, on_color, platform_icon};
 use crate::settings_kit::Tokens;
 
 /// `LoginWindow`: 772 wide, at least 420 high, a 212px column; Sheet keeps 16px round it.
@@ -40,6 +41,7 @@ const SCANNED_LIMIT: Duration = Duration::from_secs(60);
 /// `KIT_MOTION` and `KIT_EASE`.
 const UNFOLD_MS: f64 = 300.0;
 const MOVE_MS: f64 = 220.0;
+const FAST_MS: f64 = 120.0;
 const EASE_OUT: Ease = Ease::new(0.22, 1.0, 0.36, 1.0);
 const EASE_STANDARD: Ease = Ease::new(0.4, 0.0, 0.2, 1.0);
 const EASE_IN_OUT: Ease = Ease::new(0.65, 0.0, 0.35, 1.0);
@@ -217,6 +219,7 @@ pub enum Message {
     Switch,
     /// Opens a browser sign-in's page (`openLoginPage`).
     OpenBrowser,
+    ConfirmSwitch,
     ConfirmSignOut,
     CancelSignOut,
     Qr(u64, Result<LoginQr, Failure>),
@@ -227,12 +230,20 @@ pub enum Message {
 }
 
 /// What the shell does after a window message.
+#[derive(Clone, Copy)]
 pub enum Effect {
     /// The phone confirmed on this platform: keep the session and read the account.
     Confirmed(&'static str),
     /// Show this platform, whose session is kept.
     Switch(&'static str),
-    SignOut,
+    KeepSession(&'static str),
+    SignOut(&'static str),
+}
+
+struct RowMotion {
+    provider: &'static str,
+    bright: Tween,
+    selected: Tween,
 }
 
 pub struct Login {
@@ -241,6 +252,7 @@ pub struct Login {
     chosen: Option<&'static str>,
     round: u64,
     phase: Phase,
+    idle_spins: bool,
     qr: Option<LoginQr>,
     /// When the code arrived: it is uncovered from its top-left corner (`login-reveal`).
     code_at: Option<Instant>,
@@ -252,11 +264,10 @@ pub struct Login {
     /// The platforms in the column's order, read when the window opens.
     rows: Vec<Platform>,
     query: String,
-    /// Which row the highlight block stands on, sliding between rows (`st-t-move`).
-    slide: Tween,
-    slide_shown: bool,
+    row_motion: Vec<RowMotion>,
     /// The sign-out question is open over the window.
     asking: bool,
+    pending_switch: Option<Effect>,
     /// A failure's details are open.
     details: bool,
 }
@@ -268,10 +279,10 @@ pub struct Look<'a> {
     pub daylight: bool,
     pub window: Size,
     pub platforms: Vec<Platform>,
-    /// The platform in use: `account` and `avatar` are its.
+    /// The platform in use; `account` and `avatar` belong to the selected platform.
     pub active: &'static str,
     /// Platforms with a session kept, which can be switched to.
-    pub kept: &'a std::collections::HashSet<&'static str>,
+    pub online: &'a Online,
     pub account: &'a AccountState,
     pub avatar: Option<&'a iced::widget::image::Handle>,
     /// The player holds songs: signing out empties it.
@@ -286,6 +297,7 @@ impl Login {
             chosen: None,
             round: 0,
             phase: Phase::Idle,
+            idle_spins: false,
             qr: None,
             code_at: None,
             scanned_at: None,
@@ -295,11 +307,23 @@ impl Login {
             hover: None,
             rows: Vec::new(),
             query: String::new(),
-            slide: Tween::new(0.0, MOVE_MS, EASE_OUT, now),
-            slide_shown: false,
+            row_motion: Vec::new(),
             asking: false,
+            pending_switch: None,
             details: false,
         }
+    }
+
+    pub fn refresh_rows(&mut self, online: &Online) {
+        if !self.open {
+            return;
+        }
+        self.rows = online.platforms();
+        self.sync_row_motion();
+    }
+
+    pub fn chosen_provider(&self) -> Option<&'static str> {
+        self.chosen
     }
 
     pub fn is_open(&self) -> bool {
@@ -316,10 +340,11 @@ impl Login {
         self.qr = None;
         self.done_at = None;
         self.round += 1;
-        self.rows = omni.map(Omni::platforms).unwrap_or_default();
+        self.rows = online.platforms();
         self.query.clear();
         self.hover = None;
-        self.slide_shown = false;
+        self.row_motion.clear();
+        self.sync_row_motion();
         match provider {
             Some(provider) => self.choose(provider, online, omni),
             None => Task::none(),
@@ -329,23 +354,30 @@ impl Login {
     /// Ends this round: the window fades out and a sign-in in progress stops.
     pub fn close(&mut self) {
         self.asking = false;
+        self.pending_switch = None;
         self.open = false;
         self.round += 1;
         self.shown.set_with(0.0, MOVE_MS, EASE_OUT, Instant::now());
     }
 
     pub fn animating(&self, now: Instant) -> bool {
-        if self.shown.running(now) || self.done_at.is_some() || self.slide.running(now) {
+        if self.shown.running(now) || self.done_at.is_some() {
             return true;
         }
         let counting = matches!(&self.phase, Phase::Failed(failure) if now < failure.retry_opens());
         self.open
-            && (counting || matches!(self.phase, Phase::Preparing | Phase::Code | Phase::Reading | Phase::Scanned))
+            && (self.row_motion.iter().any(|row| row.bright.running(now) || row.selected.running(now))
+                || counting
+                || (self.phase == Phase::Idle && self.idle_spins)
+                || matches!(self.phase, Phase::Preparing | Phase::Code | Phase::Reading | Phase::Scanned))
     }
 
     /// Follows the account after a confirmed code: read means done, nobody means the account was not read.
-    pub fn sync(&mut self, account: &AccountState) {
-        if self.phase != Phase::Reading || self.done_at.is_some() {
+    pub fn sync(&mut self, online: &Online) {
+        self.idle_spins =
+            self.chosen.is_some_and(|provider| matches!(online.account_for(provider), AccountState::Resolving));
+        let account = &online.account;
+        if self.phase != Phase::Reading || self.done_at.is_some() || self.pending_switch.is_some() {
             return;
         }
         match account {
@@ -360,29 +392,30 @@ impl Login {
         message: Message,
         omni: Option<&Omni>,
         online: &Online,
+        has_track: bool,
     ) -> (Task<Message>, Option<Effect>) {
         match message {
             Message::Choose(provider) => {
-                if self.chosen == Some(provider) && !matches!(self.phase, Phase::Failed(_)) {
+                if self.chosen == Some(provider)
+                    && !matches!(self.phase, Phase::Failed(_))
+                    && (self.phase != Phase::Idle || holds_session(provider, online))
+                {
                     return (Task::none(), None);
                 }
                 (self.choose(provider, online, omni), None)
             }
             Message::Hover(provider) => {
                 self.hover = provider;
-                self.sync_slide();
+                self.sync_row_motion();
                 (Task::none(), None)
             }
             Message::Query(query) => {
                 self.query = query;
                 self.hover = None;
-                self.sync_slide();
+                self.sync_row_motion();
                 (Task::none(), None)
             }
-            Message::Close if self.asking => {
-                self.asking = false;
-                (Task::none(), None)
-            }
+            Message::Close if self.asking || self.pending_switch.is_some() => self.cancel_question(),
             Message::Close => {
                 self.close();
                 (Task::none(), None)
@@ -406,8 +439,7 @@ impl Login {
                 let Some(provider) = self.chosen.filter(|chosen| *chosen != online.provider()) else {
                     return (Task::none(), None);
                 };
-                self.close();
-                (Task::none(), Some(Effect::Switch(provider)))
+                self.request_switch(Effect::Switch(provider), has_track)
             }
             Message::OpenBrowser => {
                 let Some(url) = self.qr.as_ref().and_then(|qr| qr.browser.clone()) else { return (Task::none(), None) };
@@ -418,13 +450,21 @@ impl Login {
                 });
                 (Task::perform(open, |_| Message::Swallow), None)
             }
-            Message::CancelSignOut => {
-                self.asking = false;
-                (Task::none(), None)
+            Message::CancelSignOut => self.cancel_question(),
+            Message::ConfirmSwitch => {
+                let effect = self.pending_switch.take();
+                if matches!(effect, Some(Effect::Confirmed(_))) {
+                    self.phase = Phase::Reading;
+                }
+                if matches!(effect, Some(Effect::Switch(_))) {
+                    self.close();
+                }
+                (Task::none(), effect)
             }
             Message::ConfirmSignOut => {
+                let provider = self.chosen;
                 self.close();
-                (Task::none(), Some(Effect::SignOut))
+                (Task::none(), provider.map(Effect::SignOut))
             }
             Message::Qr(round, result) if round == self.round => match result {
                 Ok(qr) => {
@@ -440,7 +480,15 @@ impl Login {
                 }
             },
             Message::Poll(round) if round == self.round => (self.check(omni), None),
-            Message::Checked(round, result) if round == self.round => self.checked(result),
+            Message::Checked(round, result) if round == self.round => {
+                let (task, effect) = self.checked(result);
+                if let Some(Effect::Confirmed(provider)) = effect {
+                    let (next, effect) =
+                        self.request_switch(Effect::Confirmed(provider), has_track && provider != online.provider());
+                    return (Task::batch([task, next]), effect.or(Some(Effect::KeepSession(provider))));
+                }
+                (task, effect)
+            }
             Message::Qr(..) | Message::Poll(_) | Message::Checked(..) | Message::Swallow => (Task::none(), None),
             Message::Frame => {
                 let now = Instant::now();
@@ -462,9 +510,31 @@ impl Login {
         }
     }
 
+    fn request_switch(&mut self, effect: Effect, ask: bool) -> (Task<Message>, Option<Effect>) {
+        if ask {
+            self.pending_switch = Some(effect);
+            if matches!(effect, Effect::Confirmed(_)) {
+                self.phase = Phase::Idle;
+            }
+            return (Task::none(), None);
+        }
+        if matches!(effect, Effect::Switch(_)) {
+            self.close();
+        }
+        (Task::none(), Some(effect))
+    }
+
+    fn cancel_question(&mut self) -> (Task<Message>, Option<Effect>) {
+        self.asking = false;
+        if matches!(self.pending_switch.take(), Some(Effect::Confirmed(_))) {
+            self.phase = Phase::Idle;
+        }
+        (Task::none(), None)
+    }
+
     fn choose(&mut self, provider: &'static str, online: &Online, omni: Option<&Omni>) -> Task<Message> {
         self.chosen = Some(provider);
-        self.sync_slide();
+        self.sync_row_motion();
         self.qr = None;
         self.round += 1;
         if holds_session(provider, online) {
@@ -491,16 +561,25 @@ impl Login {
         at(self.hover).or_else(|| at(self.chosen))
     }
 
-    /// Slides the highlight to the lit row; the first one it lands on it simply appears on.
-    fn sync_slide(&mut self) {
+    /// Row colours use `st-t-fast`; the measured background moves independently in `Highlight`.
+    fn sync_row_motion(&mut self) {
         let rows = self.shown_rows();
-        let Some(index) = self.lit(&rows) else { return };
+        let lit = self.lit(&rows).and_then(|index| rows.get(index)).map(|row| row.id);
         let now = Instant::now();
-        if self.slide_shown {
-            self.slide.set(index as f32, now);
-        } else {
-            self.slide = Tween::new(index as f32, MOVE_MS, EASE_OUT, now);
-            self.slide_shown = true;
+        for platform in &self.rows {
+            let selected = f32::from(self.chosen == Some(platform.id));
+            let bright = f32::from(self.chosen == Some(platform.id) || lit == Some(platform.id));
+            match self.row_motion.iter_mut().find(|row| row.provider == platform.id) {
+                Some(row) => {
+                    row.bright.set(bright, now);
+                    row.selected.set(selected, now);
+                }
+                None => self.row_motion.push(RowMotion {
+                    provider: platform.id,
+                    bright: Tween::new(bright, FAST_MS, EASE_STANDARD, now),
+                    selected: Tween::new(selected, FAST_MS, EASE_STANDARD, now),
+                }),
+            }
         }
     }
 
@@ -621,7 +700,7 @@ impl Login {
         let width = WIDTH.min(look.window.width - 2.0 * MARGIN).max(1.0);
         let platform = self.chosen.and_then(|id| look.platforms.iter().find(|platform| platform.id == id)).copied();
         let pc = platform.map(|platform| folia_visualizer::color(Rgb::hex(platform.color), 1.0));
-        let signed_in = self.chosen == Some(look.active) && matches!(look.account, AccountState::SignedIn(_));
+        let signed_in = matches!(look.account, AccountState::SignedIn(_));
         let content = self.content(&look, tokens, narrow, platform, signed_in, now);
         let mut sheet_layers = stack![];
         if let (Some(pc), false) = (pc, narrow) {
@@ -665,7 +744,7 @@ impl Login {
             .align_y(Alignment::Start)
             .padding(Padding { top, right: MARGIN, bottom: MARGIN, left: MARGIN });
         let mut layers = stack![scrim, placed].width(Length::Fill).height(Length::Fill);
-        if self.asking {
+        if self.asking || self.pending_switch.is_some() {
             layers = layers.push(self.question(&look, tokens, platform, look.has_track));
         }
         Some(layers.into())
@@ -681,12 +760,19 @@ impl Login {
     ) -> Element<'a, Message> {
         let i18n = look.i18n;
         let label = platform.map(|platform| platform.short_name).unwrap_or_default();
-        let title = i18n.format("account.logoutConfirmTitle", &[("provider", label)]);
+        let switching = self.pending_switch.is_some();
+        let title = if switching {
+            i18n.t("home.switchOnlineProvider").to_owned()
+        } else {
+            i18n.format("account.logoutConfirmTitle", &[("provider", label)])
+        };
         let mut lines = Vec::new();
-        if let AccountState::SignedIn(account) = look.account {
+        if switching {
+            lines.push(i18n.format("home.confirmOnlineProviderSwitch", &[("provider", label)]));
+        } else if let AccountState::SignedIn(account) = look.account {
             lines.push(account.nickname.clone());
         }
-        if empties {
+        if empties && !switching && self.chosen == Some(look.active) {
             lines.push(i18n.t("account.logoutClearsQueue").to_owned());
         }
         let close = button(container(icon(Icon::X, 16.0, tokens.t2)).center(Length::Fill))
@@ -723,7 +809,16 @@ impl Login {
         let footer = row![
             space().width(Length::Fill),
             kit_button(i18n.t("ui.cancel").to_owned(), false, Message::CancelSignOut, tokens),
-            kit_button(i18n.t("account.logout").to_owned(), true, Message::ConfirmSignOut, danger),
+            kit_button(
+                if switching {
+                    i18n.format("home.switchToProvider", &[("provider", label)])
+                } else {
+                    i18n.t("account.logout").to_owned()
+                },
+                true,
+                if switching { Message::ConfirmSwitch } else { Message::ConfirmSignOut },
+                if switching { tokens } else { danger }
+            ),
         ]
         .spacing(8)
         .padding(Padding { top: 4.0, right: 16.0, bottom: 16.0, left: 16.0 });
@@ -853,44 +948,27 @@ impl Login {
         let room = REST_HEIGHT - 16.0 - if searching { 38.0 } else { 0.0 };
         let height = if lie { 36.0 } else { (room / rows.len().max(1) as f32).clamp(46.0, 68.0) };
         let lit = self.lit(&rows);
-        let lit_id = lit.and_then(|index| rows.get(index)).map(|row| row.id);
-        let items = rows.iter().map(|&platform| {
-            let bright = self.chosen == Some(platform.id) || lit_id == Some(platform.id);
-            self.platform_row(look, tokens, platform, lie, height, bright)
-        });
-        let list: Element<'a, Message> = if lie {
-            iced::widget::scrollable(row(items).spacing(4))
-                .direction(iced::widget::scrollable::Direction::Horizontal(
-                    iced::widget::scrollable::Scrollbar::new().width(0).scroller_width(0),
-                ))
-                .into()
-        } else if rows.is_empty() {
+        let items = rows.iter().map(|&platform| self.platform_row(look, tokens, platform, lie, height, now));
+        let list: Element<'a, Message> = if rows.is_empty() {
             container(text(i18n.t("login.noPlatformMatch")).size(13).color(tokens.t3))
                 .padding([24.0, 0.0])
                 .center_x(Length::Fill)
                 .into()
         } else {
-            let fill2 = tokens.fill2;
-            let block: Element<'a, Message> = match lit {
-                Some(_) => column![
-                    space().height(Length::Fixed(self.slide.value(now) * height)),
-                    container(space()).width(Length::Fill).height(Length::Fixed(height)).style(
-                        move |_theme: &Theme| {
-                            container::Style {
-                                background: Some(Background::Color(fill2)),
-                                border: Border { radius: 8.0.into(), ..Border::default() },
-                                ..container::Style::default()
-                            }
-                        }
-                    ),
-                ]
-                .into(),
-                None => space().into(),
-            };
-            let total = height * rows.len() as f32;
-            stack![container(block).width(Length::Fill).height(Length::Fixed(total)), column(items).width(Length::Fill)]
-                .into()
+            let content: Element<'a, Message> =
+                if lie { row(items).spacing(4).into() } else { column(items).width(Length::Fill).into() };
+            let painted = Highlight::new(content, lit, tokens.fill2);
+            if lie {
+                iced::widget::scrollable(painted)
+                    .direction(iced::widget::scrollable::Direction::Horizontal(
+                        iced::widget::scrollable::Scrollbar::new().width(0).scroller_width(0),
+                    ))
+                    .into()
+            } else {
+                painted.into()
+            }
         };
+        let list: Element<'a, Message> = mouse_area(list).on_exit(Message::Hover(None)).into();
         if !searching {
             return list;
         }
@@ -926,18 +1004,19 @@ impl Login {
         platform: Platform,
         lie: bool,
         height: f32,
-        bright: bool,
+        now: Instant,
     ) -> Element<'a, Message> {
         let i18n = look.i18n;
-        let chosen = self.chosen == Some(platform.id);
+        let motion = self.row_motion.iter().find(|row| row.provider == platform.id);
+        let bright = motion.map_or(0.0, |row| row.bright.value(now));
+        let selected = motion.map_or(0.0, |row| row.selected.value(now));
         let off = !platform.available;
-        let active = platform.id == look.active;
-        let signed_in =
-            if active { matches!(look.account, AccountState::SignedIn(_)) } else { look.kept.contains(platform.id) };
-        let ran_out = active && matches!(look.account, AccountState::Guest { ran_out: true });
+        let account = look.online.account_for(platform.id);
+        let signed_in = matches!(account, AccountState::SignedIn(_));
+        let ran_out = matches!(account, AccountState::Guest { ran_out: true });
         let dim = if off { 0.42 } else { 1.0 };
         let fade = |color: Color| Color { a: color.a * dim, ..color };
-        let color = fade(if bright { tokens.t1 } else { tokens.t2 });
+        let color = fade(Color { a: tokens.t2.a + (tokens.t1.a - tokens.t2.a) * bright, ..tokens.t1 });
         let mut face = row![].spacing(if lie { 10 } else { 12 }).align_y(Alignment::Center);
         face = face.push(mark_faded(platform, if lie { 22.0 } else { 30.0 }, dim * tokens.t1.a));
         if lie {
@@ -947,8 +1026,8 @@ impl Login {
             );
         } else {
             let note: Element<'a, Message> = if signed_in {
-                let name = match look.account {
-                    AccountState::SignedIn(account) if active => account.nickname.clone(),
+                let name = match account {
+                    AccountState::SignedIn(account) => account.nickname.clone(),
                     _ => i18n.t("login.rowSignedIn").to_owned(),
                 };
                 let ok =
@@ -981,7 +1060,7 @@ impl Login {
             .spacing(2);
             face = face.push(container(names).width(Length::Fill).clip(true));
         }
-        if let (true, true, Some(avatar)) = (active, signed_in, look.avatar) {
+        if let (true, Some(avatar)) = (signed_in, look.online.avatar_for(platform.id)) {
             let size = if lie { 18.0 } else { 24.0 };
             face = face.push(
                 iced::widget::image(avatar.clone())
@@ -991,14 +1070,12 @@ impl Login {
                     .opacity(tokens.t1.a),
             );
         }
-        let fill2 = tokens.fill2;
         let row_button = button(container(face).height(Length::Fill).align_y(Alignment::Center))
             .width(if lie { Length::Shrink } else { Length::Fill })
             .height(Length::Fixed(height))
             .padding(if lie { Padding::from([0.0, 8.0]) } else { Padding::from([0.0, 10.0]) })
             .on_press_maybe((!off).then_some(Message::Choose(platform.id)))
             .style(move |_theme: &Theme, _status| button::Style {
-                background: (lie && bright).then_some(Background::Color(fill2)),
                 border: Border { radius: 8.0.into(), ..Border::default() },
                 ..button::Style::default()
             });
@@ -1006,7 +1083,7 @@ impl Login {
             row_button.into()
         } else {
             // The chosen row's bar sits on the row's left edge, over its padding.
-            let pc = folia_visualizer::color(Rgb::hex(platform.color), if chosen { tokens.t1.a } else { 0.0 });
+            let pc = folia_visualizer::color(Rgb::hex(platform.color), selected * tokens.t1.a);
             let bar = container(space()).width(Length::Fixed(3.0)).height(Length::Fixed(height * 0.38)).style(
                 move |_theme: &Theme| container::Style {
                     background: Some(Background::Color(pc)),
@@ -1017,10 +1094,8 @@ impl Login {
             stack![row_button, container(bar).height(Length::Fixed(height)).align_y(Alignment::Center)].into()
         };
         let id = platform.id;
-        let hovered: Element<'a, Message> = mouse_area(item)
-            .on_enter(if off { Message::Swallow } else { Message::Hover(Some(id)) })
-            .on_exit(Message::Hover(None))
-            .into();
+        let hovered: Element<'a, Message> =
+            mouse_area(item).on_enter(if off { Message::Swallow } else { Message::Hover(Some(id)) }).into();
         if off {
             iced::widget::Tooltip::new(
                 hovered,
@@ -1126,6 +1201,9 @@ impl Login {
             }
             (Phase::Scanned, Some(_)) => disc(Tone::Calm, Icon::Smartphone, false),
             (Phase::Reading, Some(_)) => disc(Tone::Calm, Icon::User, true),
+            (Phase::Idle, Some(platform)) if !self.idle_spins => {
+                container(mark_faded(platform, 54.0, tokens.t1.a)).center(Length::Fixed(88.0)).into()
+            }
             (Phase::Preparing | Phase::Idle, Some(platform)) => stack![
                 container(mark_faded(platform, 30.0, tokens.t1.a)).center(Length::Fixed(54.0)),
                 canvas_widget(Arc { line: tokens.line, pc, turn: spin })
@@ -1172,17 +1250,14 @@ impl Login {
         let mut note: Option<String> = None;
         let mut quote: Option<(String, Option<String>)> = None;
         let mut actions: Vec<(String, bool, Message)> = Vec::new();
-        let switchable = self.chosen.is_some_and(|chosen| chosen != look.active && look.kept.contains(chosen));
         let headline = match (&self.phase, platform) {
             (_, None) => i18n.t("login.choosePlatform").to_owned(),
-            (_, Some(_)) if switchable => {
-                note = Some(i18n.t("login.rowSignedIn").to_owned());
-                actions.push((i18n.format("home.switchToProvider", &[("provider", label)]), true, Message::Switch));
-                label.to_owned()
-            }
             (_, Some(_)) if signed_in => {
                 let AccountState::SignedIn(account) = look.account else { return space().into() };
                 note = Some(format!("{label} · ID: {}", account.id));
+                if self.chosen != Some(look.active) {
+                    actions.push((i18n.format("home.switchToProvider", &[("provider", label)]), true, Message::Switch));
+                }
                 actions.push((i18n.t("account.logout").to_owned(), false, Message::SignOut));
                 account_name(account, label)
             }
@@ -1248,7 +1323,7 @@ impl Login {
         }
         let mut buttons = row![].spacing(8).align_y(Alignment::Center);
         let failure = match &self.phase {
-            Phase::Failed(failure) if platform.is_some() && !signed_in && !switchable => Some(failure),
+            Phase::Failed(failure) if platform.is_some() && !signed_in => Some(failure),
             _ => None,
         };
         if let Some(failure) = failure.filter(|failure| now < failure.retry_opens()) {
@@ -1304,7 +1379,7 @@ impl Login {
 
 /// Whether `provider` needs no new sign-in: it is in use with an account, or its session is kept to switch to.
 fn holds_session(provider: &'static str, online: &Online) -> bool {
-    if provider == online.provider() { online.signed_in().is_some() } else { online.kept().contains(provider) }
+    matches!(online.account_for(provider), AccountState::SignedIn(_) | AccountState::Resolving)
 }
 
 fn account_name(account: &Account, label: &str) -> String {
@@ -1342,51 +1417,6 @@ fn dot<'a>(color: Color, size: f32) -> Element<'a, Message> {
             ..container::Style::default()
         })
         .into()
-}
-
-/// `PlatformMark`: the platform's app icon, or its letter on its colour, 42% of the size, dark or white by contrast.
-fn mark_faded<'a>(platform: Platform, size: f32, alpha: f32) -> Element<'a, Message> {
-    if let Some(handle) = platform_icon(platform.id) {
-        return iced::widget::image(handle)
-            .width(Length::Fixed(size))
-            .height(Length::Fixed(size))
-            .border_radius(size / 2.0)
-            .opacity(alpha)
-            .into();
-    }
-    let color = folia_visualizer::color(Rgb::hex(platform.color), alpha);
-    let on = Color { a: alpha, ..on_color(platform.color) };
-    container(
-        text(platform.letter.to_string())
-            .size((size * 0.42).round())
-            .font(crate::typeface::font(iced::font::Weight::Bold))
-            .color(on),
-    )
-    .center(Length::Fixed(size))
-    .style(move |_theme: &Theme| container::Style {
-        background: Some(Background::Color(color)),
-        border: Border { radius: (size / 2.0).into(), ..Border::default() },
-        ..container::Style::default()
-    })
-    .into()
-}
-
-/// `onAccentColor`: `#17171a` or white, whichever contrasts more.
-fn on_color(hex: u32) -> Color {
-    let luminance = |hex: u32| {
-        let channel = |shift: u32| {
-            let value = ((hex >> shift) & 0xff) as f32 / 255.0;
-            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
-        };
-        0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
-    };
-    let contrast = |a: f32, b: f32| (a.max(b) + 0.05) / (a.min(b) + 0.05);
-    let base = luminance(hex);
-    if contrast(luminance(0x17171a), base) >= contrast(1.0, base) {
-        Color::from_rgb8(0x17, 0x17, 0x1a)
-    } else {
-        Color::WHITE
-    }
 }
 
 /// `AccountPicture`: the avatar or the nickname's first character, with the platform's mark in the corner.

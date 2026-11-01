@@ -71,6 +71,8 @@ struct UrlResponse {
 
 #[derive(Deserialize)]
 struct UrlEntry {
+    code: Option<i64>,
+    fee: Option<i64>,
     url: Option<String>,
     #[serde(rename = "type")]
     kind: Option<String>,
@@ -135,7 +137,12 @@ impl Provider for Netease {
             let params = json!({ "ids": format!("[{}]", song.id), "level": LEVEL, "encodeType": "flac" });
             let response: UrlResponse = self.post("/api/song/enhance/player/url/v1", params).await?;
             let entry = response.data.into_iter().next().ok_or(OmniError::Unavailable)?;
-            let url = entry.url.filter(|url| !url.is_empty()).ok_or(OmniError::Unavailable)?;
+            let failure = if entry.code == Some(-110) && entry.fee == Some(1) {
+                OmniError::SubscriptionRequired
+            } else {
+                OmniError::Unavailable
+            };
+            let url = entry.url.filter(|url| !url.is_empty()).ok_or(failure)?;
             let extension = entry.kind.map(|kind| kind.to_ascii_lowercase()).unwrap_or_else(|| "mp3".to_owned());
             Ok(AudioSource { url, extension, preview: entry.free_trial.is_some_and(|info| !info.is_null()) })
         })

@@ -29,6 +29,8 @@ pub enum OmniError {
     Response(String),
     #[error("song is not playable")]
     Unavailable,
+    #[error("a paid subscription is required to play this song")]
+    SubscriptionRequired,
     #[error("not signed in")]
     SignedOut,
     /// The platform has no such capability in the original either.
@@ -80,7 +82,7 @@ pub struct Platform {
     pub letter: char,
     /// `0xRRGGBB`.
     pub color: u32,
-    /// Compiled in with a provider; the others are listed as not configured.
+    /// The provider is compiled into this build.
     pub available: bool,
 }
 
@@ -289,13 +291,14 @@ impl Omni {
     pub fn platforms(&self) -> Vec<Platform> {
         PLATFORMS
             .iter()
+            .filter(|&&(id, ..)| self.providers.iter().any(|provider| provider.id() == id))
             .map(|&(id, display_name, short_name, letter, color)| Platform {
                 id,
                 display_name,
                 short_name,
                 letter,
                 color,
-                available: self.providers.iter().any(|provider| provider.id() == id),
+                available: true,
             })
             .collect()
     }

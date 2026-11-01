@@ -65,7 +65,7 @@ impl Provider for Spotify {
         Some(Box::pin(async move {
             let session = self.client.session().ok_or(OmniError::SignedOut)?;
             if session.user.premium == Some(false) {
-                return Err(OmniError::Unsupported("playback without Spotify Premium"));
+                return Err(OmniError::SubscriptionRequired);
             }
             let token = self.client.access_token(false).await?;
             let bytes = self.player.file(&token, &song.id).await?;

@@ -15,7 +15,7 @@ use crate::{
 
 /// `QQ_SEARCH_MAX_KEYWORD_LENGTH` and `QQ_SEARCH_MAX_PAGE_SIZE`.
 const MAX_KEYWORD: usize = 60;
-const MAX_PAGE: u32 = 50;
+const MAX_PAGE: u32 = 20;
 const ANONYMOUS_KEPT: usize = 100;
 /// `QQ_QUALITY_FALLBACKS.high`: the file prefix and extension of each tier.
 const TIERS: [(&str, &str); 2] = [("M800", "mp3"), ("M500", "mp3")];
@@ -82,24 +82,30 @@ pub async fn search(
 
 /// `searchQQSongs` of `qqLyricProvider`: the lite app's search, type 7.
 async fn anonymous_search(client: &Client, keyword: &str, page: u32, size: u32) -> Result<Page<Track>, OmniError> {
-    let data = client
-        .light("music.search.SearchCgiService", "DoSearchForQQMusicLite", search_param(keyword, page, size, 7))
-        .await?;
+    let data = client.search(search_param(keyword, page, size, 7)).await?;
+    if let Some(code) = data.get("code").and_then(Value::as_i64)
+        && code != 0
+    {
+        return Err(OmniError::Platform(code));
+    }
+    if !data.pointer("/body/item_song").is_some_and(Value::is_array) {
+        return Err(OmniError::Response("QQ search returned no song list".to_owned()));
+    }
     Ok(search_page(&data))
 }
 
 fn search_param(keyword: &str, page: u32, size: u32, kind: u32) -> Value {
-    let search_id = (musicu::now_millis() % 86_400_000) as u64 + u64::from_be_bytes(random8()) % 100_000_000_000_000;
+    // `searchIdOf` in qq-music-api 3.3.3: eighteen decimal digits with a nonzero first digit.
+    let random = musicu::random_bytes(18);
+    let search_id: String = random
+        .into_iter()
+        .enumerate()
+        .map(|(index, byte)| char::from(b'0' + if index == 0 { 1 + byte % 9 } else { byte % 10 }))
+        .collect();
     json!({
-        "search_id": search_id.to_string(), "remoteplace": "search.android.keyboard", "query": keyword,
+        "search_id": search_id, "remoteplace": "search.android.keyboard", "query": keyword,
         "search_type": kind, "num_per_page": size, "page_num": page, "highlight": 0, "nqc_flag": 0, "page_id": 1, "grp": 1,
     })
-}
-
-fn random8() -> [u8; 8] {
-    let mut word = [0u8; 8];
-    word.copy_from_slice(&musicu::random_bytes(8));
-    word
 }
 
 fn search_page(data: &Value) -> Page<Track> {

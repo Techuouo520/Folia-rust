@@ -1,9 +1,11 @@
 // The online account and the home tabs' online data, all through the `Omni` facade and off the UI thread.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use folia_omni::{Account, Collection, ExploreSection, Omni, RadioFeed};
 use iced::Task;
+
+use crate::platform_rows::{ProviderRowStatus, order_provider_rows};
 
 use crate::background::{blocking, error_chain};
 
@@ -58,7 +60,7 @@ pub enum Message {
     Explore(String, Result<Vec<ExploreSection>, String>),
     /// The answer to 「换一批」.
     ExploreRefreshed(String, Result<Vec<ExploreSection>, String>),
-    Avatar(String, Option<folia_library::Cover>),
+    Avatar(&'static str, String, Option<folia_library::Cover>),
     Forgotten,
 }
 
@@ -72,7 +74,8 @@ pub struct Online {
     /// Platforms holding a session read from the keyring or signed in during this run.
     kept: HashSet<&'static str>,
     pub account: AccountState,
-    restored: bool,
+    accounts: HashMap<&'static str, AccountState>,
+    avatars: HashMap<&'static str, iced::widget::image::Handle>,
     pub playlists: Feed<Vec<Collection>>,
     pub albums: Feed<Vec<Collection>>,
     pub radio: Feed<RadioFeed>,
@@ -83,7 +86,7 @@ pub struct Online {
 }
 
 impl Online {
-    /// Reads every platform's kept session from the system keyring, then asks who the chosen one belongs to.
+    /// Restores each platform from the keyring and reads every restored account once.
     pub fn new(omni: Option<Omni>, preferred: Option<&str>) -> (Self, Task<Message>) {
         let available: Vec<&'static str> = omni
             .as_ref()
@@ -111,7 +114,8 @@ impl Online {
             provider,
             kept: HashSet::new(),
             account,
-            restored: false,
+            accounts: HashMap::new(),
+            avatars: HashMap::new(),
             playlists: Feed::Idle,
             albums: Feed::Idle,
             radio: Feed::Idle,
@@ -131,9 +135,27 @@ impl Online {
         self.provider
     }
 
-    /// Platforms with a session in memory: they can be switched to without a new sign-in.
-    pub fn kept(&self) -> &HashSet<&'static str> {
-        &self.kept
+    pub fn platforms(&self) -> Vec<folia_omni::Platform> {
+        let platforms = self.omni.as_ref().map(Omni::platforms).unwrap_or_default();
+        order_provider_rows(
+            platforms.into_iter().map(|platform| {
+                let status = match self.account_for(platform.id) {
+                    AccountState::SignedIn(_) => ProviderRowStatus::SignedIn,
+                    AccountState::Guest { ran_out: true } => ProviderRowStatus::RanOut,
+                    _ => ProviderRowStatus::SignedOut,
+                };
+                (platform, status)
+            }),
+            Some(self.provider),
+        )
+    }
+
+    pub fn account_for(&self, provider: &str) -> &AccountState {
+        self.accounts.get(provider).unwrap_or(&AccountState::Guest { ran_out: false })
+    }
+
+    pub fn avatar_for(&self, provider: &str) -> Option<&iced::widget::image::Handle> {
+        self.avatars.get(provider)
     }
 
     /// `requestSwitch`: shows another platform whose session is kept, reading its account anew.
@@ -143,11 +165,10 @@ impl Online {
         }
         tracing::info!(provider, "online platform switched");
         self.provider = provider;
-        self.restored = true;
-        self.account = AccountState::Resolving;
-        self.avatar = None;
+        self.account = self.account_for(provider).clone();
+        self.avatar = self.avatar_for(provider).cloned();
         self.reset_feeds();
-        self.read_account()
+        self.read_account(provider)
     }
 
     pub fn signed_in(&self) -> Option<&Account> {
@@ -170,33 +191,44 @@ impl Online {
                         Err(err) => tracing::warn!(provider, error = %err, "no kept online session"),
                     }
                 }
-                self.restored = self.kept.contains(self.provider);
-                if self.restored {
-                    return (self.read_account(), false);
+                if !self.kept.contains(self.provider) {
+                    self.account = AccountState::Guest { ran_out: false };
                 }
-                self.account = AccountState::Guest { ran_out: false };
-                (Task::none(), true)
+                let providers: Vec<_> = self.kept.iter().copied().collect();
+                (Task::batch(providers.into_iter().map(|provider| self.read_account(provider))), true)
             }
-            Message::Account(provider, _) if provider != self.provider => (Task::none(), false),
+            Message::Account(provider, _) if !self.kept.contains(provider) => (Task::none(), false),
             Message::Account(provider, Ok(Some(account))) => {
                 tracing::info!(provider, "online account read");
+                self.accounts.insert(provider, AccountState::SignedIn(account.clone()));
+                let avatar = self.load_avatar(provider, &account);
+                if provider != self.provider {
+                    return (avatar, false);
+                }
                 self.account = AccountState::SignedIn(account.clone());
                 self.reset_feeds();
-                (Task::batch([self.load_playlists(&account), self.load_avatar(&account)]), true)
+                (Task::batch([self.load_playlists(&account), avatar]), true)
             }
             Message::Account(provider, Ok(None)) => {
-                // `signInRanOut`: a kept session that reads as nobody is dropped.
-                let ran_out = self.restored;
-                self.restored = false;
-                self.kept.remove(provider);
-                self.account = AccountState::Guest { ran_out };
-                self.reset_feeds();
-                (self.forget(), true)
+                let ran_out = self.kept.remove(provider);
+                let state = AccountState::Guest { ran_out };
+                self.accounts.insert(provider, state.clone());
+                self.avatars.remove(provider);
+                if provider == self.provider {
+                    self.account = state;
+                    self.reset_feeds();
+                }
+                (self.forget(provider), provider == self.provider)
             }
-            Message::Account(_, Err(err)) => {
-                tracing::warn!(error = %err, "online account unreadable");
-                self.account = AccountState::Guest { ran_out: false };
-                (Task::none(), true)
+            Message::Account(provider, Err(err)) => {
+                tracing::warn!(provider, error = %err, "online account unreadable");
+                if !matches!(self.account_for(provider), AccountState::SignedIn(_)) {
+                    self.accounts.insert(provider, AccountState::Guest { ran_out: false });
+                }
+                if provider == self.provider {
+                    self.account = self.account_for(provider).clone();
+                }
+                (Task::none(), provider == self.provider)
             }
             Message::Playlists(owner, result) => {
                 (Task::none(), self.settle(&owner, result, |online| &mut online.playlists))
@@ -234,10 +266,15 @@ impl Online {
                 shown.extend(joining);
                 (Task::none(), true)
             }
-            Message::Avatar(owner, cover) => {
-                if self.owner().is_some_and(|current| current == owner) {
-                    self.avatar = cover
-                        .map(|cover| iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba));
+            Message::Avatar(provider, user, cover) => {
+                if matches!(self.account_for(provider), AccountState::SignedIn(account) if account.id == user)
+                    && let Some(cover) = cover
+                {
+                    let handle = iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba);
+                    self.avatars.insert(provider, handle.clone());
+                    if provider == self.provider {
+                        self.avatar = Some(handle);
+                    }
                 }
                 (Task::none(), false)
             }
@@ -245,25 +282,37 @@ impl Online {
         }
     }
 
-    fn load_avatar(&mut self, account: &Account) -> Task<Message> {
-        self.avatar = None;
+    fn load_avatar(&mut self, provider: &'static str, account: &Account) -> Task<Message> {
+        self.avatars.remove(provider);
+        if provider == self.provider {
+            self.avatar = None;
+        }
         let (Some(omni), Some(url)) = (self.omni.clone(), account.avatar_url.clone()) else { return Task::none() };
-        let owner = self.owner_of(account);
+        let user = account.id.clone();
         Task::perform(crate::background::online_cover(omni, url, AVATAR_PX), move |cover| {
-            Message::Avatar(owner.clone(), cover)
+            Message::Avatar(provider, user.clone(), cover)
         })
     }
 
-    /// After a confirmed sign-in on `provider`: it becomes the platform in use, its session is kept, its account read.
+    /// Activates a confirmed account, retaining every other platform's summary.
     pub fn signed_in_now(&mut self, provider: &'static str) -> Task<Message> {
-        let Some(omni) = self.omni.clone() else { return Task::none() };
-        if provider != self.provider {
-            self.provider = provider;
-            self.avatar = None;
-            self.reset_feeds();
+        self.provider = provider;
+        self.account = self.account_for(provider).clone();
+        self.avatar = self.avatar_for(provider).cloned();
+        self.reset_feeds();
+        if self.kept.contains(provider) {
+            return match self.signed_in().cloned() {
+                Some(account) => self.load_playlists(&account),
+                None if matches!(self.account_for(provider), AccountState::Resolving) => Task::none(),
+                None => self.keep_session(provider),
+            };
         }
+        self.keep_session(provider)
+    }
+
+    pub fn keep_session(&mut self, provider: &'static str) -> Task<Message> {
+        let Some(omni) = self.omni.clone() else { return Task::none() };
         self.kept.insert(provider);
-        self.restored = false;
         let keep = blocking(move || omni.save_session(provider).map_err(|err| error_chain(&err)));
         let keep = Task::perform(keep, |result| {
             if let Some(Err(err)) = result {
@@ -271,17 +320,21 @@ impl Online {
             }
             Message::Forgotten
         });
-        Task::batch([keep, self.read_account()])
+        Task::batch([keep, self.read_account(provider)])
     }
 
     /// `logout`: tells the platform, drops the kept session, and shows the guest wall.
-    pub fn sign_out(&mut self) -> Task<Message> {
+    pub fn sign_out(&mut self, provider: &'static str) -> Task<Message> {
         let Some(omni) = self.omni.clone() else { return Task::none() };
-        let provider = self.provider;
-        self.account = AccountState::Guest { ran_out: false };
-        self.restored = false;
+        if provider == self.provider {
+            self.account = AccountState::Guest { ran_out: false };
+        }
         self.kept.remove(provider);
-        self.reset_feeds();
+        self.accounts.insert(provider, AccountState::Guest { ran_out: false });
+        self.avatars.remove(provider);
+        if provider == self.provider {
+            self.reset_feeds();
+        }
         let work = async move {
             if let Err(err) = omni.logout(provider).await {
                 tracing::warn!(error = &err as &dyn std::error::Error, "platform logout failed");
@@ -351,19 +404,35 @@ impl Online {
         )
     }
 
-    fn read_account(&mut self) -> Task<Message> {
+    fn read_account(&mut self, provider: &'static str) -> Task<Message> {
         let Some(omni) = self.omni.clone() else { return Task::none() };
-        self.account = AccountState::Resolving;
-        let provider = self.provider;
-        Task::perform(async move { omni.account(provider).await.map_err(|err| error_chain(&err)) }, move |result| {
-            Message::Account(provider, result)
-        })
+        if !matches!(self.account_for(provider), AccountState::SignedIn(_)) {
+            self.accounts.insert(provider, AccountState::Resolving);
+        }
+        if provider == self.provider {
+            self.account = self.account_for(provider).clone();
+        }
+        Task::perform(
+            async move {
+                match omni.account(provider).await {
+                    Err(folia_omni::OmniError::SignedOut) => Ok(None),
+                    result => result.map_err(|err| error_chain(&err)),
+                }
+            },
+            move |result| Message::Account(provider, result),
+        )
     }
 
-    fn forget(&self) -> Task<Message> {
+    fn forget(&self, provider: &'static str) -> Task<Message> {
         let Some(omni) = self.omni.clone() else { return Task::none() };
-        let provider = self.provider;
-        Task::perform(blocking(move || omni.forget_session(provider)), |_| Message::Forgotten)
+        Task::perform(
+            blocking(move || {
+                if let Err(err) = omni.forget_session(provider) {
+                    tracing::error!(error = &err as &dyn std::error::Error, "cannot remove the kept session");
+                }
+            }),
+            |_| Message::Forgotten,
+        )
     }
 
     /// Whose answers are kept: the platform and the account signed in on it.

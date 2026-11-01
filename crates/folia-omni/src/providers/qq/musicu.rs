@@ -148,6 +148,30 @@ impl Client {
         Ok(answer.pointer("/request/data").cloned().unwrap_or(Value::Null))
     }
 
+    /// `ANONYMOUS_LITE_COMM` and `ANONYMOUS_LITE_HEADERS` from qq-music-api 3.3.3's search route.
+    pub async fn search(&self, param: Value) -> Result<Value, OmniError> {
+        let payload = json!({
+            "comm": {
+                "ct": 11, "cv": "1003006", "v": "1003006", "tmeAppID": "qqmusiclight",
+                "nettype": "NETWORK_WIFI", "udid": "0", "uid": "0",
+            },
+            "req_0": { "module": "music.search.SearchCgiService", "method": "DoSearchForQQMusicLite", "param": param },
+        });
+        let answer = self
+            .http
+            .post(MUSICU)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::COOKIE, "tmeLoginType=-1")
+            .header(reqwest::header::USER_AGENT, "okhttp/3.14.9")
+            .body(payload.to_string())
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        unpack(answer)
+    }
+
     /// `createSessionMusicuClient(null)`: the anonymous `{ ct: 24, cv: 0 }` face.
     pub async fn anonymous(&self, module: &str, method: &str, param: Value) -> Result<Value, OmniError> {
         let payload =

@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["netease", "kugou", "qq", "bodian", "qishui", "spotify", "ytm"]
+default = ["netease", "kugou", "qq", "bodian", "qishui", "spotify"]
 netease = []
 kugou = ["dep:flate2", "dep:num-bigint"]
 qq = ["dep:flate2", "dep:num-bigint"]
