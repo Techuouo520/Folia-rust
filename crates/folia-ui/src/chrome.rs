@@ -273,14 +273,6 @@ fn mix(from: Color, to: Color, t: f32) -> Color {
     }
 }
 
-/// Catches pointer motion anywhere so the now-playing chrome can show itself. Presses fall through.
-pub fn activity<'a>() -> Element<'a, Message> {
-    mouse_area(space().width(Length::Fill).height(Length::Fill))
-        .on_move(|point| Message::Activity { x: point.x, y: point.y })
-        .on_exit(Message::Left)
-        .into()
-}
-
 /// A round overlay button. `box_px` is the diameter, matching the original's fixed pixel sizes.
 pub fn round_button<'a, M: Clone + 'a>(
     lucide: Icon,

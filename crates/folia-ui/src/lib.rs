@@ -121,6 +121,8 @@ pub enum Message {
     Playback(playback::Message),
     OpenFiles(Vec<Track>),
     Chrome(chrome::Message),
+    /// The pointer moved in a window, or left it (`None`).
+    Pointer(iced::window::Id, Option<iced::Point>),
     WindowReady(Option<iced::window::Id>),
     /// The page being left, captured to fade out over the one replacing it.
     PageShot(iced::window::Screenshot),
@@ -551,6 +553,11 @@ impl Shell {
                 Task::none()
             }
             Message::Chrome(message) => self.chrome(message),
+            Message::Pointer(window, at) if self.window == Some(window) => match at {
+                Some(at) => self.chrome(chrome::Message::Activity { x: at.x, y: at.y }),
+                None => self.chrome(chrome::Message::Left),
+            },
+            Message::Pointer(..) => Task::none(),
             Message::Login(message) => {
                 let (task, effect) = self.login.update(
                     message,
@@ -968,7 +975,7 @@ impl Shell {
             fullscreen: self.fullscreen,
         };
         frame = frame.push(self.titlebar.view(look, now).map(Message::Chrome));
-        frame = frame.push(chrome::resize_frame().map(Message::Chrome)).push(chrome::activity().map(Message::Chrome));
+        frame = frame.push(chrome::resize_frame().map(Message::Chrome));
         let now = std::time::Instant::now();
         if self.splash.showing(now) {
             // A canvas for the plain cover keeps a GPU allocation after the splash is gone.
@@ -1020,6 +1027,7 @@ impl Shell {
         let mut parts = Vec::new();
         parts.push(iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)));
         parts.push(iced::event::listen_with(fullscreen_key));
+        parts.push(iced::event::listen_with(window_pointer));
         if self.page == Page::NowPlaying {
             if self.clock.until_ms.is_some() {
                 parts.push(iced::time::every(std::time::Duration::from_millis(200)).map(|_| Message::ChromeTick));
@@ -1534,6 +1542,18 @@ fn home_dismiss(event: iced::Event, status: iced::event::Status, _id: iced::wind
             ..
         }) => Some(Message::Home(home::Message::Dismiss)),
         iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Message::Home(home::Message::Dismiss)),
+        _ => None,
+    }
+}
+
+// Window-level, like the original's capturing `mousemove` and the area's `mouseleave`: hovering a control on top
+// is not leaving, so a control appearing under a resting pointer cannot hide the chrome again.
+fn window_pointer(event: iced::Event, _status: iced::event::Status, window: iced::window::Id) -> Option<Message> {
+    match event {
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::Pointer(window, Some(position)))
+        }
+        iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::Pointer(window, None)),
         _ => None,
     }
 }
