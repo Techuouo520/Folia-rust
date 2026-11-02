@@ -63,6 +63,16 @@ impl SearchPage {
         &self.query
     }
 
+    /// Takes a query committed from the home seam (`onSearchCommitted`): the page opens straight on its results.
+    pub fn begin(&mut self, query: String) {
+        self.query = query;
+        self.results.clear();
+        self.list.reset();
+        self.busy = false;
+        self.submitted = true;
+        self.error = false;
+    }
+
     pub fn reveal(&mut self) {
         let now = Instant::now();
         self.fade_from = self.fade(now);

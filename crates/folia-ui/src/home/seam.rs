@@ -3,8 +3,11 @@
 use std::time::{Duration, Instant};
 
 use folia_render::Plate;
+use iced::advanced::layout::{self, Layout};
+use iced::advanced::widget::{Operation, Tree};
+use iced::advanced::{Clipboard, Shell, Widget};
 use iced::widget::{button, column, container, mouse_area, row, shader, space, stack, text};
-use iced::{Alignment, Background, Border, Color, Element, Length, Theme, Vector};
+use iced::{Alignment, Background, Border, Color, Element, Event, Length, Rectangle, Size, Theme, Vector, mouse};
 use lucide_static_svg::Icon;
 
 use super::{AccountSlot, HomeChrome, Host, Message};
@@ -68,9 +71,11 @@ fn plate_box(host: &Host<'_>) -> ([f32; 2], [f32; 2]) {
 
 /// Lays the content out at its own width and clips it to the opening, centred on the seam.
 fn clip_body<'a>(host: &Host<'a>, body: Element<'a, Message>) -> Element<'a, Message> {
-    let (clip_origin, clip_size, shift) = clip_frame(host);
+    let (clip_origin, clip_size, layout_size, shift) = clip_frame(host);
     let shifted = iced::widget::float(body).translate(move |_, _| shift);
-    let clipped = container(shifted).width(Length::Fixed(clip_size.0)).height(Length::Fixed(clip_size.1)).clip(true);
+    let sized = SeamLayout { content: shifted.into(), size: layout_size };
+    let clipped =
+        container(Element::new(sized)).width(Length::Fixed(clip_size.0)).height(Length::Fixed(clip_size.1)).clip(true);
     let seam = mouse_area(clipped).on_press(Message::Frame).interaction(iced::mouse::Interaction::Idle);
     container(seam)
         .width(Length::Fill)
@@ -81,42 +86,290 @@ fn clip_body<'a>(host: &Host<'a>, body: Element<'a, Message>) -> Element<'a, Mes
         .into()
 }
 
-fn clip_frame(host: &Host<'_>) -> ((f32, f32), (f32, f32), Vector) {
+/// `Length::Fixed` is clamped by the parent's maximum, so a clipped seam would reflow its panel while it opens.
+/// This wrapper keeps the layout at the content's design size; the container around it still clips the overhang.
+struct SeamLayout<'a, Message> {
+    content: Element<'a, Message>,
+    size: Size,
+}
+
+impl<Message> Widget<Message, Theme, iced::Renderer> for SeamLayout<'_, Message> {
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.content)]
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(std::slice::from_ref(&self.content));
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    fn layout(&mut self, tree: &mut Tree, renderer: &iced::Renderer, limits: &layout::Limits) -> layout::Node {
+        let max = limits.max();
+        let inflated = layout::Limits::new(
+            limits.min(),
+            Size::new(max.width.max(self.size.width), max.height.max(self.size.height)),
+        );
+        self.content.as_widget_mut().layout(&mut tree.children[0], renderer, &inflated)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.content.as_widget_mut().operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &iced::advanced::renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget().draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        self.content.as_widget().mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        tree: &'a mut Tree,
+        layout: Layout<'a>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        offset: Vector,
+    ) -> Option<iced::advanced::overlay::Element<'a, Message, Theme, iced::Renderer>> {
+        self.content.as_widget_mut().overlay(&mut tree.children[0], layout, renderer, viewport, offset)
+    }
+}
+
+fn clip_frame(host: &Host<'_>) -> ((f32, f32), (f32, f32), Size, Vector) {
     if host.horizontal {
         let top = host.seam.center - host.seam.width / 2.0;
         let clip_top = top.max(0.0);
         let height = (host.seam.width - (clip_top - top)).max(1.0);
         let layout = row_layout(host);
         let shift = Vector::new(0.0, host.seam.center - layout / 2.0 - clip_top);
-        ((0.0, clip_top), (host.window_width.max(1.0), height), shift)
+        ((0.0, clip_top), (host.window_width.max(1.0), height), Size::new(host.window_width.max(1.0), layout), shift)
     } else {
         let left = host.seam.center - host.seam.width / 2.0;
         let clip_left = left.max(0.0);
         let width = (host.seam.width - (clip_left - left)).max(1.0);
         let layout = column_layout(host);
         let shift = Vector::new(host.seam.center - layout / 2.0 - clip_left, 0.0);
-        ((clip_left, 0.0), (width, host.window_height.max(1.0)), shift)
+        ((clip_left, 0.0), (width, host.window_height.max(1.0)), Size::new(layout, host.window_height.max(1.0)), shift)
     }
 }
 
 fn column_layout(host: &Host<'_>) -> f32 {
-    match (host.spine, host.layer.as_ref().map(|layer| layer.list)) {
+    layout_of(false, host.spine, host.search.is_some(), host.layer.as_ref(), host.window_width)
+}
+
+fn row_layout(host: &Host<'_>) -> f32 {
+    layout_of(true, host.spine, host.search.is_some(), host.layer.as_ref(), host.window_width)
+}
+
+/// The laid-out width (vertical) or height (sideways) of the content a seam shows.
+pub(super) fn layout_of(
+    horizontal: bool,
+    spine: bool,
+    search: bool,
+    layer: Option<&super::LayerSeam>,
+    window_width: f32,
+) -> f32 {
+    if search {
+        return if horizontal { 212.0 } else { LAYOUT_FULL };
+    }
+    if horizontal {
+        return match (spine, layer.is_some()) {
+            (true, _) => 52.0,
+            (false, true) => 212.0,
+            (false, false) => 72.0,
+        };
+    }
+    match (spine, layer.map(|layer| layer.list)) {
         (true, _) => LAYOUT_SPINE,
-        (false, Some(true)) => super::PANEL.min(host.window_width - 52.0).max(LAYOUT_FULL.min(host.window_width)),
-        (false, Some(false)) if host.layer.as_ref().is_some_and(|layer| layer.album.is_some()) => {
-            crate::poster::width(host.window_width)
-        }
+        (false, Some(true)) => super::PANEL.min(window_width - 52.0).max(LAYOUT_FULL.min(window_width)),
+        (false, Some(false)) if layer.is_some_and(|layer| layer.album.is_some()) => crate::poster::width(window_width),
         (false, Some(false)) => LAYOUT_FULL,
         (false, None) => LAYOUT_NARROW,
     }
 }
 
-fn row_layout(host: &Host<'_>) -> f32 {
-    match (host.spine, host.layer.is_some()) {
-        (true, _) => 52.0,
-        (false, true) => 212.0,
-        (false, false) => 72.0,
-    }
+/// The home seam's global search panel (`BravaisSeamSearch`): crumbs, a boxed field, the hint and 「搜索」.
+/// It does not touch the page filter (`BravaisSeamFilterField`), which narrows the wall without a request.
+fn search_column<'a>(host: &Host<'a>, ink: Color, query: &'a str) -> Element<'a, Message> {
+    let body = column![
+        search_crumbs(host, ink),
+        space().height(Length::Fixed(16.0)),
+        search_field(host, ink, query),
+        space().height(Length::Fixed(10.0)),
+        search_hint(host, ink),
+        space().height(Length::Fixed(16.0)),
+        search_submit(host, ink),
+    ]
+    .spacing(0)
+    .padding(iced::Padding { top: 22.0, right: 22.0, bottom: 0.0, left: 22.0 })
+    .width(Length::Fixed(column_layout(host)))
+    .height(Length::Fill);
+    body.into()
+}
+
+/// The same panel in a sideways seam: crumbs over the field and button, hint last (`.bravais-seam[data-bravais-seam-axis='y']`).
+fn search_row<'a>(host: &Host<'a>, ink: Color, query: &'a str) -> Element<'a, Message> {
+    let pad_x = (host.window_width * 0.03).max(24.0);
+    let body = column![
+        search_crumbs(host, ink),
+        row![container(search_field(host, ink, query)).width(Length::Fill).max_width(720.0), search_submit(host, ink)]
+            .spacing(16)
+            .align_y(Alignment::Center),
+        search_hint(host, ink),
+    ]
+    .spacing(12)
+    .padding(iced::Padding { top: 14.0, right: pad_x, bottom: 16.0, left: pad_x })
+    .width(Length::Fill);
+    container(body).width(Length::Fill).height(Length::Fixed(row_layout(host))).align_y(Alignment::Center).into()
+}
+
+/// `书库 › 搜索` on the left, 「关闭搜索」 on the right.
+fn search_crumbs<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
+    let trail =
+        format!("{} › {}", super::tr(host, "libraryBravais.homeTitle"), super::tr(host, "libraryBravaisHome.search"));
+    let line = row![crumb_trail(trail, ink), seam_level_button(super::tr(host, "libraryBravaisHome.searchClose"), ink)]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(32.0));
+    line.into()
+}
+
+/// `.bravais-seam-level`: the fold's word, reused as the panel's close action.
+fn seam_level_button<'a>(label: &'a str, ink: Color) -> Element<'a, Message> {
+    button(text(label).size(11).color(soft(ink)))
+        .padding([3.0, 9.0])
+        .on_press(Message::CloseSearch)
+        .style(move |_theme: &Theme, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: hot.then_some(Background::Color(Color { a: 0.16 * ink.a, ..ink })),
+                border: Border {
+                    radius: 12.0.into(),
+                    width: 1.0,
+                    color: if hot { Color { a: 0.26 * ink.a, ..ink } } else { Color::TRANSPARENT },
+                },
+                ..button::Style::default()
+            }
+        })
+        .into()
+}
+
+/// `.bravais-search-form`: a magnifier, the input and × inside one 1px box that turns accent while focused.
+fn search_field<'a>(host: &Host<'a>, ink: Color, query: &'a str) -> Element<'a, Message> {
+    let accent = fade(host.accent, host.opacity);
+    let border = Color { a: 0.24 * ink.a, ..ink };
+    let fill = Color { a: 0.05 * ink.a, ..ink };
+    let input = iced::widget::text_input(super::tr(host, "libraryBravaisHome.searchPlaceholder"), query)
+        .id(super::search_id())
+        .on_input(Message::SearchQuery)
+        .on_submit(Message::SubmitSearch)
+        .size(16)
+        .padding(iced::Padding { top: 12.0, right: 42.0, bottom: 12.0, left: 36.0 })
+        .style(move |_theme: &Theme, status| iced::widget::text_input::Style {
+            background: Background::Color(fill),
+            border: Border {
+                color: if matches!(status, iced::widget::text_input::Status::Focused { .. }) { accent } else { border },
+                width: 1.0,
+                radius: 12.0.into(),
+            },
+            icon: ink,
+            placeholder: soft(ink),
+            value: ink,
+            selection: Color { a: 0.3, ..accent },
+        });
+    let glyph = container(icon(Icon::Search, 16.0, Color { a: 0.7 * ink.a, ..ink }))
+        .height(Length::Fill)
+        .align_y(Alignment::Center)
+        .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 12.0 });
+    let clear = button(container(icon(Icon::X, 16.0, soft(ink))).center(Length::Fill))
+        .width(Length::Fixed(36.0))
+        .height(Length::Fixed(36.0))
+        .padding(0)
+        .on_press(Message::CloseSearch)
+        .style(move |_theme: &Theme, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: hot.then_some(Background::Color(Color { a: 0.16 * ink.a, ..ink })),
+                border: Border { radius: 12.0.into(), ..Border::default() },
+                ..button::Style::default()
+            }
+        });
+    let clear = container(clear)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::End)
+        .align_y(Alignment::Center)
+        .padding(iced::Padding { top: 0.0, right: 6.0, bottom: 0.0, left: 0.0 });
+    stack![input, glyph, clear].into()
+}
+
+fn search_hint<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
+    text(super::tr(host, "libraryBravaisHome.searchHint"))
+        .size(12)
+        .line_height(iced::widget::text::LineHeight::Relative(1.45))
+        .color(soft(ink))
+        .width(Length::Fill)
+        .into()
+}
+
+fn search_submit<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
+    chrome_button_sized(
+        Icon::Search,
+        super::tr(host, "libraryBravaisHome.searchSubmit"),
+        ChromeSize::BASE,
+        true,
+        ink,
+        Some(Message::SubmitSearch),
+    )
 }
 
 /// How far the home head gives way when the column is short (`useBravaisSeamTabsFit`).
@@ -128,6 +381,9 @@ enum Fit {
 }
 
 fn column_body<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
+    if let Some(query) = host.search {
+        return search_column(host, ink, query);
+    }
     if host.layer.is_some() {
         return if host.spine { collection_spine(host, ink) } else { collection_full(host, ink) };
     }
@@ -601,15 +857,10 @@ fn crumbs<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color, panel: bool)
         trail.push_str(" › ");
         trail.push_str(super::tr(host, "libraryBravaisCollection.listCrumb"));
     }
-    let mut line = row![
-        back_button(host, ink),
-        container(text(trail).size(11).color(soft(ink)).wrapping(iced::widget::text::Wrapping::None))
-            .width(Length::Fill)
-            .clip(true)
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .height(Length::Fixed(32.0));
+    let mut line = row![back_button(host, ink), crumb_trail(trail, ink),]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .height(Length::Fixed(32.0));
     if panel {
         // `.bravais-seam-level`: the fold as a word.
         let label = text(super::tr(host, "libraryBravais.seamFold")).size(11).color(soft(ink));
@@ -629,6 +880,14 @@ fn crumbs<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color, panel: bool)
         ));
     }
     line.into()
+}
+
+/// The crumb trail every seam panel shares: 11px soft ink, one clipped line.
+fn crumb_trail<'a>(trail: String, ink: Color) -> Element<'a, Message> {
+    container(text(trail).size(11).color(soft(ink)).wrapping(iced::widget::text::Wrapping::None))
+        .width(Length::Fill)
+        .clip(true)
+        .into()
 }
 
 /// `BravaisSeamFilterField`: a funnel, the input over an underline, then the match count and a clear button.
@@ -852,18 +1111,47 @@ fn chrome_button<'a>(
     ink: Color,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
+    chrome_button_sized(glyph, label, ChromeSize::COMPACT, primary, ink, on_press)
+}
+
+/// A `BravaisChromeButton` size: icon, height, label size and side padding.
+#[derive(Clone, Copy)]
+struct ChromeSize {
+    icon: f32,
+    height: f32,
+    font: f32,
+    pad_x: f32,
+}
+
+impl ChromeSize {
+    /// `.bravais-seam-actions`.
+    const COMPACT: Self = Self { icon: 14.0, height: 36.0, font: 12.0, pad_x: 12.0 };
+    /// `.bravais-chrome-button` in the search panel.
+    const BASE: Self = Self { icon: 18.0, height: 44.0, font: 15.0, pad_x: 16.0 };
+}
+
+/// One `BravaisChromeButton` face at the given icon, height, label size and padding; the seam actions use the compact
+/// size (`.bravais-seam-actions`), the search panel the base one (`.bravais-chrome-button`).
+fn chrome_button_sized<'a>(
+    glyph: Icon,
+    label: &'a str,
+    size: ChromeSize,
+    primary: bool,
+    ink: Color,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
     let enabled = on_press.is_some();
     button(
         container(
-            row![icon(glyph, 14.0, ink), text(label).size(12).font(bold()).color(ink)]
+            row![icon(glyph, size.icon, ink), text(label).size(size.font).font(bold()).color(ink)]
                 .spacing(8)
                 .align_y(Alignment::Center),
         )
         .height(Length::Fill)
         .align_y(Alignment::Center),
     )
-    .height(Length::Fixed(36.0))
-    .padding([0.0, 12.0])
+    .height(Length::Fixed(size.height))
+    .padding([0.0, size.pad_x])
     .on_press_maybe(on_press)
     .style(move |_theme: &Theme, status| {
         let hot = enabled && matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -935,6 +1223,9 @@ fn back_button<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
 }
 
 fn row_body<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
+    if let Some(query) = host.search {
+        return search_row(host, ink, query);
+    }
     let spine = host.spine;
     let gap = if spine { 10.0 } else { 14.0 };
     let pad_x = (host.window_width * 0.024).max(20.0);

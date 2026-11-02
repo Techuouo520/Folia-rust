@@ -96,8 +96,10 @@ pub struct Init {
     pub open_files: Vec<PathBuf>,
 }
 
-/// The home tab and the open collection, whose change turns the seam's content over.
-type SeamKey = (folia_store::HomeTab, Option<String>, bool);
+/// The home tab and the open collection, whose change turns the seam's content over; the last flag is the search panel.
+type SeamKey = (folia_store::HomeTab, Option<String>, bool, bool);
+/// The seam content before a turn: its tab, layer, search query and layout size, plus the key to compare.
+type SeamBefore = (folia_store::HomeTab, Option<home::LayerSeam>, Option<String>, f32, SeamKey);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -273,23 +275,32 @@ impl Shell {
         let before = self.page;
         let settles_page = matches!(message, Message::PageShot(_) | Message::PageShotDone);
         let seam_before = self.seam_before(&message);
+        let opens_search = matches!(&message, Message::Home(home::Message::Search));
         let focus_title = matches!(message, Message::Home(home::Message::TitleToggle { keyboard: true, .. }));
         let task = self.handle(message);
         if self.page != before || self.playback.current().is_none() {
             self.play_navigation.cancel();
         }
         let now = std::time::Instant::now();
-        if let Some((tab, layer, key)) = seam_before
+        if let Some((tab, layer, search, layout, key)) = seam_before
             && key != self.seam_key()
         {
-            self.seam_flip = Some(home::flip::SeamFlip::new(tab, layer, key.2, focus_title, now));
+            let outgoing = home::flip::Outgoing { tab, layer, spine: key.2, search, layout };
+            self.seam_flip = Some(home::flip::SeamFlip::new(outgoing, opens_search, focus_title, now));
         }
         let mut focus = Task::none();
-        if self.seam_flip.as_ref().is_some_and(|flip| !flip.running(now)) {
-            if self.seam_flip.as_ref().is_some_and(|flip| flip.focus_title) {
-                focus = iced::widget::operation::focus(home::title::id());
+        let mut focus_search = false;
+        if let Some(flip) = self.seam_flip.as_mut() {
+            focus_search = flip.take_search_focus(now);
+            if !flip.running(now) {
+                if flip.focus_title {
+                    focus = iced::widget::operation::focus(home::title::id());
+                }
+                self.seam_flip = None;
             }
-            self.seam_flip = None;
+        }
+        if focus_search {
+            focus = Task::batch([focus, iced::widget::operation::focus(home::search_id())]);
         }
         if self.page_fade.as_ref().is_some_and(|fade| !fade.running(now)) {
             self.page_fade = None;
@@ -1045,9 +1056,14 @@ impl Shell {
         }
         let quiet = self.settings.is_none() && !self.login.is_open() && !self.home_menu_open();
         if self.page == Page::Library && quiet {
-            parts.push(iced::event::listen_with(wall_key));
-            if self.library.filter_editing() {
-                parts.push(iced::event::listen_with(filter_escape));
+            if self.home.search_query().is_some() {
+                parts.push(iced::event::listen_with(seam_search_key));
+                parts.push(iced::event::listen_with(seam_search_ime));
+            } else {
+                parts.push(iced::event::listen_with(wall_key));
+                if self.library.filter_editing() {
+                    parts.push(iced::event::listen_with(filter_escape));
+                }
             }
         }
         if self.login.is_open() {
@@ -1131,7 +1147,11 @@ impl Shell {
     fn home_host(&self) -> home::Host<'_> {
         let now = std::time::Instant::now();
         let leaving = self.seam_flip.as_ref().filter(|flip| flip.leaving(now));
-        home::Host {
+        let search = match leaving {
+            Some(flip) => flip.search.as_deref(),
+            None => self.home.search_query(),
+        };
+        let mut host = home::Host {
             i18n: &self.i18n,
             text: folia_visualizer::color(self.theme.primary, 1.0),
             background: folia_visualizer::color(self.theme.background, 1.0),
@@ -1147,8 +1167,7 @@ impl Shell {
             seam: self.library.seam(),
             spine: leaving.map_or(self.home.is_spine(), |flip| flip.spine),
             horizontal: self.home.is_horizontal(),
-            opacity: content_opacity(self.library.seam().width, self.home.goal().max(1.0))
-                * self.seam_flip.as_ref().map_or(1.0, |flip| flip.opacity(now)),
+            opacity: 1.0,
             bottom: if self.home.is_horizontal() {
                 0.0
             } else {
@@ -1173,16 +1192,38 @@ impl Shell {
             poster_ground: self.library.poster_ground(),
             poster_tilted: self.library.poster_tilted(),
             list_hover: self.library.layer.as_ref().and_then(|layer| layer.list_hover),
-        }
+            search,
+        };
+        // The flip turns at the outgoing content's layout width until it swaps, so the old seam does not dim out.
+        let layout = leaving.map_or_else(
+            || {
+                home::content_layout(
+                    host.horizontal,
+                    host.spine,
+                    host.search.is_some(),
+                    host.layer.as_ref(),
+                    host.window_width,
+                )
+            },
+            |flip| flip.layout,
+        );
+        host.opacity = content_opacity(host.seam.width, layout.max(1.0))
+            * self.seam_flip.as_ref().map_or(1.0, |flip| flip.opacity(now));
+        host
     }
 
     /// What the seam shows, to tell when its content changes layer or tab and turns over.
     fn seam_key(&self) -> SeamKey {
-        (self.library.tab, self.library.layer.as_ref().map(|layer| layer.collection.id.clone()), self.home.is_spine())
+        (
+            self.library.tab,
+            self.library.layer.as_ref().map(|layer| layer.collection.id.clone()),
+            self.home.is_spine(),
+            self.home.search_query().is_some(),
+        )
     }
 
-    /// The seam content before a message that can change the layer or the tab, for it to turn away.
-    fn seam_before(&self, message: &Message) -> Option<(folia_store::HomeTab, Option<home::LayerSeam>, SeamKey)> {
+    /// The seam content before a message that can change the layer, tab or search panel, for it to turn away.
+    fn seam_before(&self, message: &Message) -> Option<SeamBefore> {
         let turns = matches!(
             message,
             Message::Library(
@@ -1196,6 +1237,9 @@ impl Shell {
                     | home::Message::ReloadCollection
                     | home::Message::TitleToggle { .. }
                     | home::Message::Expand
+                    | home::Message::Search
+                    | home::Message::CloseSearch
+                    | home::Message::EscapeSearch
             )
         );
         if !turns || self.page != Page::Library {
@@ -1204,7 +1248,15 @@ impl Shell {
         let rows = (self.window_size.height / home::LIST_ROW) as usize;
         let layer =
             self.library.layer_seam(&self.i18n, self.playback.current().map(|track| track.id), rows, self.window_size);
-        Some((self.library.tab, layer, self.seam_key()))
+        let search = self.home.search_query().map(str::to_owned);
+        let layout = home::content_layout(
+            self.home.is_horizontal(),
+            self.home.is_spine(),
+            search.is_some(),
+            layer.as_ref(),
+            self.window_size.width,
+        );
+        Some((self.library.tab, layer, search, layout, self.seam_key()))
     }
 
     /// A change of page to or from the player is held until the page being left is captured, then cross-faded.
@@ -1368,11 +1420,11 @@ impl Shell {
             self.library.dismiss_menu();
         }
         let reopen = matches!(message, home::Message::Tab) && !self.home.is_hidden();
+        let query = self.home.search_query().map(str::to_owned);
         self.home.update(&message);
-        if reopen {
-            self.library.replan(self.home.goal());
-        }
-        match message {
+        let now = std::time::Instant::now();
+        let mut replan = reopen;
+        let task = match message {
             home::Message::TitleFocus { backwards } => {
                 if backwards {
                     iced::widget::operation::focus_previous()
@@ -1381,8 +1433,36 @@ impl Shell {
                 }
             }
             home::Message::Search => {
-                self.page = Page::Search;
+                if self.library.layer.is_some() {
+                    Task::none()
+                } else {
+                    self.home.open_search(now);
+                    replan = true;
+                    Task::none()
+                }
+            }
+            home::Message::SubmitSearch => {
+                let query = query.map(|query| query.trim().to_owned()).filter(|query| !query.is_empty());
+                let Some(query) = query else { return Task::none() };
+                self.home.close_search(now);
+                replan = true;
+                self.search.begin(query);
                 self.search.reveal();
+                self.page = Page::Search;
+                let provider = self.library.online.provider();
+                let (task, _) = self.search.update(search::Message::Submit, self.omni.as_ref(), provider);
+                task.map(Message::Search)
+            }
+            home::Message::SearchQuery(_) => Task::none(),
+            home::Message::EscapeSearch => {
+                if self.home.search_query().is_none() {
+                    replan = true;
+                }
+                Task::none()
+            }
+            home::Message::Composing(_) => Task::none(),
+            home::Message::CloseSearch => {
+                replan = true;
                 Task::none()
             }
             home::Message::Player => {
@@ -1434,7 +1514,11 @@ impl Shell {
             | home::Message::Tools
             | home::Message::BackHover(_)
             | home::Message::Frame => Task::none(),
+        };
+        if replan {
+            self.library.replan(self.home.goal());
         }
+        task
     }
 
     fn library_message(&mut self, message: library::Message) -> Task<Message> {
@@ -1589,7 +1673,40 @@ fn wall_key(event: iced::Event, status: iced::event::Status, _id: iced::window::
     if key == iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab) {
         return Some(Message::Home(home::Message::TitleFocus { backwards: modifiers.shift() }));
     }
+    // `/` (bravaisHomeKeys): the home seam's global search, not a filter character.
+    if let iced::keyboard::Key::Character(character) = &key
+        && character.as_str() == "/"
+        && !repeat
+        && !modifiers.control()
+        && !modifiers.alt()
+        && !modifiers.command()
+    {
+        return Some(Message::Home(home::Message::Search));
+    }
     focus_card::key_of(&key, modifiers, repeat).map(|key| Message::Library(library::Message::Key(key)))
+}
+
+/// Escape shuts the seam's search panel unless the input method is composing; the field keeps the key first.
+fn seam_search_key(event: iced::Event, _status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    match event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            repeat: false,
+            ..
+        }) => Some(Message::Home(home::Message::EscapeSearch)),
+        _ => None,
+    }
+}
+
+/// Tracks an input-method composition so Escape can leave it to the field (`event.nativeEvent.isComposing`).
+fn seam_search_ime(event: iced::Event, _status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    let iced::Event::InputMethod(event) = event else { return None };
+    let composing = match event {
+        iced::advanced::input_method::Event::Opened => true,
+        iced::advanced::input_method::Event::Preedit(text, _) => !text.is_empty(),
+        iced::advanced::input_method::Event::Commit(_) | iced::advanced::input_method::Event::Closed => false,
+    };
+    Some(Message::Home(home::Message::Composing(composing)))
 }
 
 /// Esc in the filter, which its input would otherwise keep for losing focus.

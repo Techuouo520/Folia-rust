@@ -72,7 +72,18 @@ pub enum Message {
     Tab,
     More,
     Tools,
+    /// The magnifier or `/`: opens the seam's online search panel.
     Search,
+    /// The panel's query field changed.
+    SearchQuery(String),
+    /// Enter or 「搜索」: the panel hands `SearchQuery` to the search page.
+    SubmitSearch,
+    /// 「关闭搜索」, × or Escape: only the panel shuts.
+    CloseSearch,
+    /// Escape while the search field has focus; an IME composition keeps it.
+    EscapeSearch,
+    /// The search field's input method opened or closed a composition.
+    Composing(bool),
     Settings,
     Player,
     Import,
@@ -141,6 +152,13 @@ pub struct HomeChrome {
     tab_from: f32,
     tab_goal: f32,
     tab_at: Instant,
+    /// `useBravaisHomeUiStore().searchOpen`: the home seam's online search panel.
+    search_open: bool,
+    search_query: String,
+    /// The level to go back to when the panel closes.
+    search_level: Option<Level>,
+    /// The search field is in an input-method composition; Escape belongs to it.
+    composing: bool,
 }
 
 impl HomeChrome {
@@ -177,6 +195,10 @@ impl HomeChrome {
             tab_from: 0.0,
             tab_goal: 0.0,
             tab_at: now,
+            search_open: false,
+            search_query: String::new(),
+            search_level: None,
+            composing: false,
         }
     }
 
@@ -228,6 +250,14 @@ impl HomeChrome {
                 }
             }
             Message::BackHover(hovered) => self.back_hover.set(if *hovered { 1.0 } else { 0.0 }, now),
+            Message::SearchQuery(query) => self.search_query = query.clone(),
+            Message::CloseSearch => self.close_search(now),
+            Message::EscapeSearch => {
+                if !self.composing {
+                    self.close_search(now);
+                }
+            }
+            Message::Composing(composing) => self.composing = *composing,
             Message::Frame
             | Message::Volume(_)
             | Message::VolumeDone
@@ -239,6 +269,7 @@ impl HomeChrome {
             | Message::CollectionMenu
             | Message::RowHover(_)
             | Message::PosterCover(_)
+            | Message::SubmitSearch
             | Message::FilterSubmit => {}
             Message::TitleFocus { .. } => {}
         }
@@ -298,7 +329,7 @@ impl HomeChrome {
         self.pending_horizontal = None;
         self.horizontal = next;
         self.seam_from = 0.0;
-        self.seam_goal = open_width(self.level, next, self.full);
+        self.seam_goal = self.goal_width();
         self.seam_at = now;
         Some(next)
     }
@@ -317,7 +348,42 @@ impl HomeChrome {
 
     /// The width this level opens to, not the width it has animated to.
     pub fn goal(&self) -> f32 {
-        open_width(self.level, self.horizontal, self.full)
+        self.goal_width()
+    }
+
+    /// Open/close the home seam's online search panel; the level itself comes back after closing.
+    pub fn open_search(&mut self, now: Instant) {
+        if self.search_open {
+            return;
+        }
+        if self.level == Level::Hidden {
+            self.set_level(self.restore, now);
+        }
+        self.search_level = Some(self.level);
+        self.search_open = true;
+        self.search_query.clear();
+        self.composing = false;
+        self.set_level(Level::Full, now);
+        if self.tools_goal > 0.5 {
+            self.retarget_tools(now, 0.0);
+        }
+    }
+
+    pub fn close_search(&mut self, now: Instant) {
+        if !self.search_open {
+            return;
+        }
+        self.search_open = false;
+        self.search_query.clear();
+        self.composing = false;
+        if let Some(level) = self.search_level.take() {
+            self.set_level(level, now);
+        }
+    }
+
+    /// The query while the panel is open; `None` means the home seam shows its tabs and tools.
+    pub fn search_query(&self) -> Option<&str> {
+        self.search_open.then_some(self.search_query.as_str())
     }
 
     pub fn set_back(&mut self, shown: bool, now: Instant) {
@@ -382,7 +448,7 @@ impl HomeChrome {
             return;
         }
         let fallback = default_level(width);
-        if self.level == Level::Hidden {
+        if self.search_open || self.level == Level::Hidden {
             self.restore = fallback;
         } else {
             self.set_level(fallback, now);
@@ -414,7 +480,7 @@ impl HomeChrome {
             return;
         }
         self.seam_from = 0.0;
-        self.seam_goal = open_width(self.level, self.horizontal, self.full);
+        self.seam_goal = self.goal_width();
         self.seam_at = now;
     }
 
@@ -439,8 +505,17 @@ impl HomeChrome {
 
     fn retarget_seam(&mut self, now: Instant) {
         self.seam_from = self.width(now);
-        self.seam_goal = open_width(self.level, self.horizontal, self.full);
+        self.seam_goal = self.goal_width();
         self.seam_at = now;
+    }
+
+    /// A search panel takes the full info-strip width even from the narrow seam or the spine.
+    fn goal_width(&self) -> f32 {
+        if self.search_open && self.level != Level::Hidden {
+            if self.horizontal { ROW_FULL } else { FULL }
+        } else {
+            open_width(self.level, self.horizontal, self.full)
+        }
     }
 
     fn retarget_tools(&mut self, now: Instant, goal: f32) {
@@ -523,6 +598,8 @@ pub struct Host<'a> {
     pub poster_tilted: bool,
     /// The list row under the pointer.
     pub list_hover: Option<usize>,
+    /// The query while the home seam's search panel is open.
+    pub search: Option<&'a str>,
 }
 
 /// The open collection as its seam shows it (`useBravaisCollectionSeam`).
@@ -550,6 +627,22 @@ pub struct LayerSeam {
 /// The collection's filter input, focused when the poster's 「过滤当前页」 opens it (`openBravaisFilter`).
 pub fn filter_id() -> iced::widget::Id {
     iced::widget::Id::new("bravais-collection-filter")
+}
+
+/// The home seam's search field, focused as soon as the panel opens.
+pub fn search_id() -> iced::widget::Id {
+    iced::widget::Id::new("bravais-seam-search")
+}
+
+/// The layout width (vertical) or height (sideways) of the content on screen; the seam flip freezes it at the old value.
+pub(crate) fn content_layout(
+    horizontal: bool,
+    spine: bool,
+    search: bool,
+    layer: Option<&LayerSeam>,
+    window_width: f32,
+) -> f32 {
+    seam::layout_of(horizontal, spine, search, layer, window_width)
 }
 
 /// What the album poster shows (`projectBravaisSeamAlbum`).

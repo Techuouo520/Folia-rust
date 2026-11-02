@@ -20,12 +20,29 @@ pub struct SeamFlip {
     pub tab: HomeTab,
     pub layer: Option<LayerSeam>,
     pub spine: bool,
+    /// The search panel's query while it was the outgoing content.
+    pub search: Option<String>,
+    /// The outgoing content's layout width (vertical) or height (sideways).
+    pub layout: f32,
     pub focus_title: bool,
+    /// A search panel is on its way in: focus its field once the turn has swapped the content.
+    focus_search: bool,
+    search_focused: bool,
+}
+
+/// The seam content turning away: what it showed and the width it was laid out at.
+pub struct Outgoing {
+    pub tab: HomeTab,
+    pub layer: Option<LayerSeam>,
+    pub spine: bool,
+    pub search: Option<String>,
+    pub layout: f32,
 }
 
 impl SeamFlip {
-    pub fn new(tab: HomeTab, layer: Option<LayerSeam>, spine: bool, focus_title: bool, now: Instant) -> Self {
-        Self { at: now, tab, layer, spine, focus_title }
+    pub fn new(outgoing: Outgoing, focus_search: bool, focus_title: bool, now: Instant) -> Self {
+        let Outgoing { tab, layer, spine, search, layout } = outgoing;
+        Self { at: now, tab, layer, spine, search, layout, focus_title, focus_search, search_focused: false }
     }
 
     /// Whether the outgoing content is still turning away.
@@ -35,6 +52,16 @@ impl SeamFlip {
 
     pub fn running(&self, now: Instant) -> bool {
         self.elapsed(now) < OUT_MS + IN_MS
+    }
+
+    /// Hands out the search field's focus once, as the new content appears at 90°.
+    pub fn take_search_focus(&mut self, now: Instant) -> bool {
+        if self.focus_search && !self.search_focused && self.elapsed(now) >= OUT_MS {
+            self.search_focused = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// The content's opacity: the cosine of how far it has turned.
