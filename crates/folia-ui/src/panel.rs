@@ -15,8 +15,8 @@ use lucide_static_svg::Icon;
 use crate::icons::icon;
 use crate::mode_picker;
 use crate::motion::{CSS_TRANSITION, Tween};
+use crate::panel_queue::{self, QueueList};
 use crate::playback;
-use crate::queue_island::{self, QueueList};
 use crate::settings_kit::{self, Tokens};
 
 const OPEN_MS: f64 = 300.0;
@@ -51,13 +51,15 @@ pub enum Tab {
 #[derive(Debug, Clone)]
 pub enum Message {
     Toggle,
+    /// Escape: the open panel closes and stays on the player page.
+    Close,
     Choose(Tab),
     Frame,
     HandleHover(bool),
     PillHover(bool),
     /// Sets the lyric timeline offset, in milliseconds.
     Offset(i64),
-    Queue(queue_island::Message),
+    Queue(panel_queue::Message),
     Volume(f32),
     VolumeDone,
     Mute,
@@ -128,6 +130,10 @@ impl PlayerPanel {
         self.pill_hover
     }
 
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     /// Shows or hides the handle with the playing-page chrome.
     pub fn set_chrome(&mut self, visible: bool, now: Instant) {
         self.chrome = visible;
@@ -160,6 +166,10 @@ impl PlayerPanel {
                 }
                 Effect::None
             }
+            Message::Close => {
+                self.set_open(false, now);
+                Effect::None
+            }
             Message::Choose(tab) => {
                 if *tab == Tab::Queue && self.tab != Tab::Queue {
                     self.queue.opened();
@@ -170,15 +180,12 @@ impl PlayerPanel {
                 Effect::None
             }
             Message::Queue(message) => {
-                let (task, change) = self.queue.update(message.clone(), room.queue, list_h);
+                let (task, change) = self.queue.update(message.clone(), room.queue);
                 let effect = match change {
-                    Some(queue_island::Change::Jump(index)) => Effect::Playback(playback::Message::Jump(index)),
-                    Some(queue_island::Change::MoveNext(index)) => Effect::Playback(playback::Message::MoveNext(index)),
-                    Some(queue_island::Change::MoveEnd(index)) => Effect::Playback(playback::Message::MoveEnd(index)),
-                    Some(queue_island::Change::Remove(index)) => Effect::Playback(playback::Message::Remove(index)),
-                    Some(queue_island::Change::Reorder(from, to)) => {
-                        Effect::Playback(playback::Message::Reorder(from, to))
-                    }
+                    Some(panel_queue::Change::Jump(index)) => Effect::Playback(playback::Message::Jump(index)),
+                    Some(panel_queue::Change::MoveNext(index)) => Effect::Playback(playback::Message::MoveNext(index)),
+                    Some(panel_queue::Change::MoveEnd(index)) => Effect::Playback(playback::Message::MoveEnd(index)),
+                    Some(panel_queue::Change::Remove(index)) => Effect::Playback(playback::Message::Remove(index)),
                     None => Effect::None,
                 };
                 return (effect, task.map(Message::Queue));
@@ -650,7 +657,7 @@ fn tab_body<'a>(view: View<'a>, tokens: Tokens, tab: Tab, ink: Color, rows: Rows
     match tab {
         Tab::Cover => space().into(),
         Tab::Controls => controls(view, tokens, ink, rows),
-        Tab::Queue => queue_tab(rows.0, view, tokens, ink, rows.1),
+        Tab::Queue => queue_tab(rows.0, view, tokens, ink),
         Tab::Source => source_tab(view, tokens),
         Tab::Quality => quality_tab(view, tokens, ink),
     }
@@ -763,13 +770,7 @@ fn controls<'a>(view: View<'a>, tokens: Tokens, ink: Color, rows: Rows<'a>) -> E
     column.push(background).push(transparent).push(hairline(tokens)).push(sources).push(name_row).into()
 }
 
-fn queue_tab<'a>(
-    panel: &'a PlayerPanel,
-    view: View<'a>,
-    tokens: Tokens,
-    ink: Color,
-    now: Instant,
-) -> Element<'a, Message> {
+fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Tokens, ink: Color) -> Element<'a, Message> {
     if view.queue.is_empty() {
         return text(view.i18n.t("queue.empty")).size(13).color(Color { a: ink.a, ..tokens.t2 }).into();
     }
@@ -795,8 +796,8 @@ fn queue_tab<'a>(
     .align_y(Alignment::Center)
     .height(Length::Fixed(36.0));
     let list_h = queue_list_h(view.width, view.height, view.bottom, panel.chrome, view.queue.len());
-    let look = queue_island::Look { i18n: view.i18n, tokens, ink, daylight: view.daylight };
-    let list = panel.queue.view(look, view.queue, view.index, list_h, now).map(Message::Queue);
+    let look = panel_queue::Look { i18n: view.i18n, tokens, ink };
+    let list = panel.queue.view(look, view.queue, view.index, list_h).map(Message::Queue);
     column![head, list].spacing(0).into()
 }
 
@@ -1246,7 +1247,7 @@ fn measure(tab: Tab, queue_len: usize, inner: f32, max_h: f32) -> (f32, f32, f32
     }
     let body = match tab {
         Tab::Controls => 460.0,
-        Tab::Queue => 36.0 + queue_island::list_height(queue_len),
+        Tab::Queue => 36.0 + panel_queue::list_height(queue_len),
         Tab::Source => 210.0,
         Tab::Quality => 110.0,
         Tab::Cover => 0.0,
@@ -1263,11 +1264,9 @@ fn queue_list_h(width: f32, height: f32, bottom: f32, chrome: bool, len: usize) 
     let inner = (panel_w - 24.0).max(96.0);
     let max_h = (height - under - bottom - TOP_MARGIN).max(220.0);
     let (_, body, _) = measure(Tab::Queue, len, inner, max_h);
-    (body - 21.0 - 36.0).max(ROW_MIN)
+    let floor = (len as f32 * panel_queue::ROW).clamp(panel_queue::ROW, panel_queue::MIN_LIST);
+    (body - 21.0 - 36.0).max(floor)
 }
-
-/// The list never folds under one row.
-const ROW_MIN: f32 = queue_island::ROW;
 
 fn tokens_of(view: &View<'_>) -> Tokens {
     let mut tokens = Tokens::new(view.theme, view.daylight);

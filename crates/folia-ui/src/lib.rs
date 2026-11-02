@@ -19,6 +19,7 @@ mod online;
 mod overlay;
 mod page_fade;
 mod panel;
+mod panel_queue;
 mod platform_highlight;
 mod platform_icon;
 mod platform_rows;
@@ -149,6 +150,10 @@ pub enum Message {
     Panel(panel::Message),
     Art(i64, Option<folia_library::Cover>),
     Login(login::Message),
+    /// Escape on the player page: leave fullscreen, close the panel, or go back to the wall.
+    PlayerEscape,
+    /// An input method is composing on the player page; Escape belongs to it.
+    PlayerComposing(bool),
 }
 
 /// Settings id of the random lyric style choice, as in the original app.
@@ -202,6 +207,8 @@ pub struct Shell {
     player: folia_store::PlayerSettings,
     positioning: Option<positioner::Positioning>,
     login: login::Login,
+    /// An input method is composing in a field on the player page.
+    composing: bool,
 }
 
 impl Shell {
@@ -216,6 +223,8 @@ impl Shell {
             omni.clone(),
             init.general.online_provider.as_deref(),
         );
+        let mut home = home::HomeChrome::new(INITIAL_WINDOW.width);
+        home.restore_queue_island(init.general.wall_tools_queue_island_open);
         let shell = Self {
             store: init.store,
             general: init.general,
@@ -246,7 +255,7 @@ impl Shell {
             drag_armed: false,
             drag_from: None,
             splash: splash::Splash::new(),
-            home: home::HomeChrome::new(INITIAL_WINDOW.width),
+            home,
             panel: panel::PlayerPanel::new(std::time::Instant::now()),
             art: folia_library::CoverCache::new(ART_BYTES),
             art_pending: None,
@@ -254,6 +263,7 @@ impl Shell {
             player: init.player,
             positioning: None,
             login: login::Login::new(std::time::Instant::now()),
+            composing: false,
         };
         let open = if init.open_files.is_empty() { Task::none() } else { open_files(init.open_files) };
         let window = iced::window::oldest().map(Message::WindowReady);
@@ -280,6 +290,9 @@ impl Shell {
         let task = self.handle(message);
         if self.page != before || self.playback.current().is_none() {
             self.play_navigation.cancel();
+        }
+        if self.page != before {
+            self.composing = false;
         }
         let now = std::time::Instant::now();
         if let Some((tab, layer, search, layout, key)) = seam_before
@@ -312,6 +325,12 @@ impl Shell {
         }
         self.bar.set_home(self.page == Page::Library);
         self.home.sync(self.window_size.width, self.window_size.height, self.playback.current().is_some(), now);
+        self.home.sync_queue(
+            self.playback.queue.items(),
+            self.playback.queue.current_index(),
+            self.playback.is_fm(),
+            now,
+        );
         if let Some(horizontal) = self.home.take_flip(now) {
             self.library.set_horizontal(horizontal);
             self.library.replan(self.home.goal());
@@ -392,12 +411,23 @@ impl Shell {
                     &message,
                     library::Message::Online(online::Message::Restored(_) | online::Message::Account(..))
                 );
+                let frames = matches!(message, library::Message::Frame);
+                let queue_task = if frames {
+                    let queue = self.playback.queue.items();
+                    let list_h = queue_island::list_height(queue.len());
+                    let now = std::time::Instant::now();
+                    self.home
+                        .queue_frame(queue, self.playback.queue.current_index(), list_h, now)
+                        .map(|message| Message::Home(home::Message::ToolsQueue(message)))
+                } else {
+                    Task::none()
+                };
                 let (task, effect) = self.library.update(message, &self.i18n);
                 if refresh_rows {
                     self.login.refresh_rows(&self.library.online);
                 }
                 let task = task.map(Message::Library);
-                Task::batch([task, self.library_effect(effect)])
+                Task::batch([queue_task, task, self.library_effect(effect)])
             }
             Message::Search(message) => {
                 if matches!(message, search::Message::Close) {
@@ -569,6 +599,22 @@ impl Shell {
                 None => self.chrome(chrome::Message::Left),
             },
             Message::Pointer(..) => Task::none(),
+            // `resolvePlayerEscapeAction`: fullscreen leaves the key to the system, then the panel closes,
+            // and only with neither does the player go back.
+            Message::PlayerEscape if self.composing => Task::none(),
+            Message::PlayerEscape => {
+                if self.fullscreen {
+                    self.toggle_fullscreen()
+                } else if self.panel.is_open() {
+                    self.panel(panel::Message::Close)
+                } else {
+                    self.handle(Message::Navigate(Page::Library))
+                }
+            }
+            Message::PlayerComposing(composing) => {
+                self.composing = composing;
+                Task::none()
+            }
             Message::Login(message) => {
                 let (task, effect) = self.login.update(
                     message,
@@ -1045,6 +1091,14 @@ impl Shell {
             }
             parts.push(iced::event::listen_with(chrome_pointer));
         }
+        let player_keys = self.page == Page::NowPlaying
+            && self.settings.is_none()
+            && !self.login.is_open()
+            && self.positioning.is_none();
+        if player_keys {
+            parts.push(iced::event::listen_with(player_key));
+            parts.push(iced::event::listen_with(player_ime));
+        }
         if let Some(window) = &self.settings {
             parts.push(iced::event::listen_with(settings_key));
             if window.animating() {
@@ -1162,6 +1216,10 @@ impl Shell {
             explore_refresh: self.library.explore_refresh(),
             volume: self.playback.settings.volume,
             muted: self.playback.muted,
+            tokens: settings_kit::Tokens::new(&self.theme, self.appearance.theme == ThemeMode::Light),
+            queue: self.playback.queue.items(),
+            queue_index: self.playback.queue.current_index(),
+            fm: self.playback.is_fm(),
             window_width: self.window_size.width,
             window_height: self.window_size.height,
             seam: self.library.seam(),
@@ -1421,8 +1479,14 @@ impl Shell {
         }
         let reopen = matches!(message, home::Message::Tab) && !self.home.is_hidden();
         let query = self.home.search_query().map(str::to_owned);
+        let queue_open = self.home.queue_island_open();
         self.home.update(&message);
         let now = std::time::Instant::now();
+        let mut extra = Task::none();
+        if self.home.queue_island_open() != queue_open {
+            self.general.wall_tools_queue_island_open = self.home.queue_island_open();
+            extra = save(&self.store, &self.general);
+        }
         let mut replan = reopen;
         let task = match message {
             home::Message::TitleFocus { backwards } => {
@@ -1465,6 +1529,37 @@ impl Shell {
                 replan = true;
                 Task::none()
             }
+            home::Message::ToolsQueue(message) => {
+                let queue = self.playback.queue.items();
+                let list_h = queue_island::list_height(queue.len());
+                let (task, change) = self.home.queue_update(message, queue, list_h);
+                let effect = match change {
+                    Some(queue_island::Change::Jump(index)) => {
+                        self.playback.update(playback::Message::Jump(index), &self.store).map(Message::Playback)
+                    }
+                    Some(queue_island::Change::MoveNext(index)) => {
+                        self.playback.update(playback::Message::MoveNext(index), &self.store).map(Message::Playback)
+                    }
+                    Some(queue_island::Change::MoveEnd(index)) => {
+                        self.playback.update(playback::Message::MoveEnd(index), &self.store).map(Message::Playback)
+                    }
+                    Some(queue_island::Change::Remove(index)) => {
+                        self.playback.update(playback::Message::Remove(index), &self.store).map(Message::Playback)
+                    }
+                    Some(queue_island::Change::Reorder(from, to)) => {
+                        self.playback.update(playback::Message::Reorder(from, to), &self.store).map(Message::Playback)
+                    }
+                    None => Task::none(),
+                };
+                Task::batch([task.map(|message| Message::Home(home::Message::ToolsQueue(message))), effect])
+            }
+            home::Message::ToolsQueueClear => {
+                let (clear, task) = self.home.press_queue_clear(now);
+                if clear {
+                    self.playback.clear_queue();
+                }
+                task.map(Message::Home)
+            }
             home::Message::Player => {
                 if self.playback.current().is_some() {
                     self.page = Page::NowPlaying;
@@ -1506,19 +1601,23 @@ impl Shell {
                 self.playback.update(playback::Message::ToggleMute, &self.store).map(Message::Playback)
             }
             home::Message::Dismiss
+            | home::Message::Escape
             | home::Message::Fold
             | home::Message::Expand
             | home::Message::TitleToggle { .. }
             | home::Message::Tab
             | home::Message::More
             | home::Message::Tools
+            | home::Message::ToolsQueueToggle
+            | home::Message::ToolsQueueClearTimeout(_)
+            | home::Message::ToolsHelp
             | home::Message::BackHover(_)
             | home::Message::Frame => Task::none(),
         };
         if replan {
             self.library.replan(self.home.goal());
         }
-        task
+        Task::batch([task, extra])
     }
 
     fn library_message(&mut self, message: library::Message) -> Task<Message> {
@@ -1624,7 +1723,7 @@ fn home_dismiss(event: iced::Event, status: iced::event::Status, _id: iced::wind
         iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
             key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
             ..
-        }) => Some(Message::Home(home::Message::Dismiss)),
+        }) => Some(Message::Home(home::Message::Escape)),
         iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_)) => Some(Message::Home(home::Message::Dismiss)),
         _ => None,
     }
@@ -1659,6 +1758,33 @@ fn iced_theme(theme: &Theme) -> iced::Theme {
         ..iced::theme::Palette::DARK
     };
     iced::Theme::custom(theme.name.clone(), palette)
+}
+
+/// Escape on the player page, after the dialogs and the settings window have had their own listeners.
+fn player_key(event: iced::Event, status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    if status == iced::event::Status::Captured {
+        return None;
+    }
+    match event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            repeat: false,
+            ..
+        }) => Some(Message::PlayerEscape),
+        _ => None,
+    }
+}
+
+/// Tracks the player page's input-method composition (`event.nativeEvent.isComposing`): only a preedit counts.
+fn player_ime(event: iced::Event, _status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    let iced::Event::InputMethod(event) = event else { return None };
+    let composing = match event {
+        iced::advanced::input_method::Event::Preedit(text, _) => !text.is_empty(),
+        iced::advanced::input_method::Event::Opened
+        | iced::advanced::input_method::Event::Commit(_)
+        | iced::advanced::input_method::Event::Closed => false,
+    };
+    Some(Message::PlayerComposing(composing))
 }
 
 /// Escape closes the sign-in window (Sheet's own Escape).

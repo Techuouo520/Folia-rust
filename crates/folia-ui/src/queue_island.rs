@@ -51,9 +51,13 @@ pub enum Message {
     Release,
     Cancel,
     Hover(Option<usize>),
+    /// The pointer left row `usize`; another row may already have claimed the hover.
+    HoverLeave(usize),
     HandleHover(Option<usize>),
+    HandleHoverLeave(usize),
     /// The row action under the pointer: the row and which of its three.
     ActionHover(Option<(usize, u8)>),
+    ActionHoverLeave((usize, u8)),
     Jump(usize),
     MoveNext(usize),
     MoveEnd(usize),
@@ -235,12 +239,30 @@ impl QueueList {
                 self.hover = index;
                 (Task::none(), None)
             }
+            Message::HoverLeave(index) => {
+                if self.hover == Some(index) {
+                    self.hover = None;
+                }
+                (Task::none(), None)
+            }
             Message::HandleHover(index) => {
                 self.handle_hover = index;
                 (Task::none(), None)
             }
+            Message::HandleHoverLeave(index) => {
+                if self.handle_hover == Some(index) {
+                    self.handle_hover = None;
+                }
+                (Task::none(), None)
+            }
             Message::ActionHover(action) => {
                 self.action_hover = action;
+                (Task::none(), None)
+            }
+            Message::ActionHoverLeave(action) => {
+                if self.action_hover == Some(action) {
+                    self.action_hover = None;
+                }
                 (Task::none(), None)
             }
             Message::Jump(index) => (Task::none(), Some(Change::Jump(index))),
@@ -361,7 +383,7 @@ fn queue_row<'a>(
             .center_y(Length::Fixed(32.0)),
     )
     .on_enter(Message::HandleHover(Some(index)))
-    .on_exit(Message::HandleHover(None));
+    .on_exit(Message::HandleHoverLeave(index));
     let marker =
         container(space()).width(Length::Fixed(3.0)).height(Length::Fixed(18.0)).style(move |_| container::Style {
             background: active.then_some(Background::Color(look.tokens.accent)),
@@ -390,8 +412,11 @@ fn queue_row<'a>(
             border: Border { radius: 8.0.into(), ..Border::default() },
             ..button::Style::default()
         });
-    let mut face = row![handle, song].align_y(Alignment::Center);
-    if hot {
+    let base = row![handle, song].align_y(Alignment::Center).width(Length::Fill);
+    // The actions float over the right end: the song button fills the row, so a plain Row would let it take
+    // the press first and open the song instead of the action. A Stack updates its last child first. The
+    // stack stays in place when the row is not hot (an empty layer), so iced never keeps a stale action row.
+    let actions = if hot {
         // The playing row has no 「下一首播放」 and no 「移除」.
         let mut actions = row![].align_y(Alignment::Center);
         let lit = |which: u8| list.action_hover == Some((index, which));
@@ -411,8 +436,13 @@ fn queue_row<'a>(
             actions =
                 actions.push(action(look, Icon::Trash, "queue.remove", Message::Remove(index), (index, 2), lit(2)));
         }
-        face = face.push(actions);
-    }
+        actions
+    } else {
+        row![]
+    };
+    let layer =
+        container(actions).width(Length::Fill).height(Length::Fill).align_x(Alignment::End).align_y(Alignment::Center);
+    let face: Element<'a, Message> = stack![base, layer].width(Length::Fill).height(Length::Fill).into();
     let fill = if active {
         Some(if look.daylight { Color::from_rgba(0.0, 0.0, 0.0, 0.07) } else { Color::from_rgba(1.0, 1.0, 1.0, 0.10) })
     } else if hot {
@@ -431,7 +461,7 @@ fn queue_row<'a>(
             border: Border { radius: 10.0.into(), ..Border::default() },
             ..container::Style::default()
         });
-    mouse_area(body).on_enter(Message::Hover(Some(index))).on_exit(Message::Hover(None)).into()
+    mouse_area(body).on_enter(Message::Hover(Some(index))).on_exit(Message::HoverLeave(index)).into()
 }
 
 /// `.lattice-tools-island-row-action`: 26px, radius 7, the glyph at 70% that comes up to 100% on hover.
@@ -454,7 +484,7 @@ fn action<'a>(
             ..button::Style::default()
         }
     });
-    let press = mouse_area(press).on_enter(Message::ActionHover(Some(key))).on_exit(Message::ActionHover(None));
+    let press = mouse_area(press).on_enter(Message::ActionHover(Some(key))).on_exit(Message::ActionHoverLeave(key));
     tooltip(press, text(look.i18n.t(label).to_owned()).size(12), tooltip::Position::Top)
         .style(container::rounded_box)
         .into()

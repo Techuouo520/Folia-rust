@@ -125,6 +125,11 @@ impl Playback {
         self.status.state == PlayerState::Playing
     }
 
+    /// Personal FM has no editable queue (`isFmMode`).
+    pub fn is_fm(&self) -> bool {
+        self.fm.is_some()
+    }
+
     /// The position to show: the slider's value while it is being dragged.
     pub fn position(&self) -> f64 {
         self.seeking.unwrap_or(self.status.position)
@@ -170,6 +175,15 @@ impl Playback {
     /// Adds `tracks` to the end of the queue (`enqueueAll`), keeping what plays; returns how many were added.
     pub fn enqueue(&mut self, tracks: Vec<Track>) -> usize {
         self.queue.append(tracks, |a, b| a.id == b.id)
+    }
+
+    /// `clearQueue`: every queued item except the playing one leaves; the player keeps running.
+    pub fn clear_queue(&mut self) -> bool {
+        let cleared = self.queue.clear_except_current();
+        if cleared {
+            self.failures = 0;
+        }
+        cleared
     }
 
     /// Empties the queue and stops, as signing out of the active platform does (`resetForProviderSwitch`).

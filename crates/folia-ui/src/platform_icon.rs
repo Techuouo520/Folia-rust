@@ -10,11 +10,12 @@ use iced::{Background, Border, Color, Element, Length, Theme};
 
 const SIDE: u32 = 128;
 
-const ICONS: [(&str, &[u8]); 5] = [
+const ICONS: [(&str, &[u8]); 6] = [
     ("netease", include_bytes!("../../../assets/platforms/netease.png")),
     ("kugou", include_bytes!("../../../assets/platforms/kugou.png")),
     ("qq", include_bytes!("../../../assets/platforms/qq.png")),
     ("bodian", include_bytes!("../../../assets/platforms/bodian.png")),
+    ("spotify", include_bytes!("../../../assets/platforms/spotify.png")),
     ("qishui", include_bytes!("../../../assets/platforms/qishui.png")),
 ];
 

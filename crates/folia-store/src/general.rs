@@ -13,6 +13,9 @@ pub struct GeneralSettings {
     pub home_tab: HomeTab,
     /// The online platform last used (`activeProviderId`); never a credential.
     pub online_provider: Option<String>,
+    /// `wall_tools_queue_island_open` (the original's localStorage key): the wall panel's queue island
+    /// stays open across panel openings. Interface state only; not an appearance setting.
+    pub wall_tools_queue_island_open: bool,
 }
 
 /// The home page's first-level tabs; the original starts on the playlists.

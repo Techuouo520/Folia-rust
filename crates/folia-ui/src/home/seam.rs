@@ -88,9 +88,9 @@ fn clip_body<'a>(host: &Host<'a>, body: Element<'a, Message>) -> Element<'a, Mes
 
 /// `Length::Fixed` is clamped by the parent's maximum, so a clipped seam would reflow its panel while it opens.
 /// This wrapper keeps the layout at the content's design size; the container around it still clips the overhang.
-struct SeamLayout<'a, Message> {
-    content: Element<'a, Message>,
-    size: Size,
+pub(crate) struct SeamLayout<'a, Message> {
+    pub(crate) content: Element<'a, Message>,
+    pub(crate) size: Size,
 }
 
 impl<Message> Widget<Message, Theme, iced::Renderer> for SeamLayout<'_, Message> {

@@ -5,17 +5,19 @@ mod seam;
 pub mod title;
 mod tools;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use folia_core::Track;
 use folia_i18n::I18n;
 use folia_visualizer::Ease;
 
 use folia_store::HomeTab;
 
 use crate::motion::Tween;
+use crate::queue_island::{self, QueueList};
 use crate::wall::Seam;
 use iced::widget::{mouse_area, space};
-use iced::{Color, Element, Length};
+use iced::{Color, Element, Length, Task};
 
 /// Seam width tween from `useBravaisSeam`: 0.36s, `cubic-bezier(0.65, 0, 0.35, 1)`.
 const SEAM_EASE: Ease = Ease::new(0.65, 0.0, 0.35, 1.0);
@@ -23,6 +25,20 @@ const SEAM_MS: f64 = 360.0;
 /// Panel open from `WallToolsButton`: 0.2s ease-out.
 const PANEL_EASE: Ease = Ease::new(0.0, 0.0, 0.2, 1.0);
 const PANEL_MS: f64 = 200.0;
+/// Queue island from `WallToolsQueueIsland`: 0.18s ease-out, trailing the panel by 0.09s when both open.
+const ISLAND_EASE: Ease = Ease::new(0.0, 0.0, 0.2, 1.0);
+const ISLAND_MS: f64 = 180.0;
+const ISLAND_TRAIL_MS: u64 = 90;
+/// The help list from `WallToolsSurface`: 0.18s ease-out.
+const HELP_MS: f64 = 180.0;
+/// `CLEAR_CONFIRM_MS` and `CLEAR_CONFIRM_GUARD_MS` on the queue header's clear button.
+const CLEAR_CONFIRM_MS: u64 = 3000;
+const CLEAR_GUARD_MS: u64 = 400;
+/// The help list's rows: their height and the list's padding (`li` 30px, `ul` 7px 12px).
+pub const HELP_ROW_H: f32 = 30.0;
+pub const HELP_PAD: f32 = 14.0;
+/// The help rows this build actually has keys for, in the original's order.
+pub const HELP_ROWS: usize = 6;
 /// Concealed back button: 200ms CSS `ease`.
 const BACK_EASE: Ease = Ease::new(0.25, 0.1, 0.25, 1.0);
 const BACK_MS: f64 = 200.0;
@@ -72,6 +88,18 @@ pub enum Message {
     Tab,
     More,
     Tools,
+    /// The panel's queue cell: shows or hides the queue island above it.
+    ToolsQueueToggle,
+    /// A message from the queue island's list (drag, scroll, row actions).
+    ToolsQueue(queue_island::Message),
+    /// The queue header's clear button: the first press arms, the second clears.
+    ToolsQueueClear,
+    /// The armed clear button timed out after `CLEAR_CONFIRM_MS`.
+    ToolsQueueClearTimeout(u64),
+    /// The help button under the panel's appearance rows.
+    ToolsHelp,
+    /// Escape: cancels the armed clear first, then closes the panel.
+    Escape,
     /// The magnifier or `/`: opens the seam's online search panel.
     Search,
     /// The panel's query field changed.
@@ -134,6 +162,20 @@ pub struct HomeChrome {
     tools_goal: f32,
     tools_from: f32,
     tools_at: Instant,
+    /// `wallToolsQueueIslandOpen`: remembered across panel openings (`wall_tools_queue_island_open`).
+    queue_open: bool,
+    island_from: f32,
+    island_goal: f32,
+    island_at: Instant,
+    /// Personal FM hides the island but keeps the preference, as the original does.
+    island_fm: bool,
+    queue: QueueList,
+    /// The clear button is armed; `None` after the 3s window or a successful clear.
+    queue_clear: Option<Instant>,
+    clear_serial: u64,
+    help_from: f32,
+    help_goal: f32,
+    help_at: Instant,
     seam_goal: f32,
     seam_from: f32,
     seam_at: Instant,
@@ -178,6 +220,17 @@ impl HomeChrome {
             tools_goal: 0.0,
             tools_from: 0.0,
             tools_at: now,
+            queue_open: false,
+            island_from: 0.0,
+            island_goal: 0.0,
+            island_at: now,
+            island_fm: false,
+            queue: QueueList::default(),
+            queue_clear: None,
+            clear_serial: 0,
+            help_from: 0.0,
+            help_goal: 0.0,
+            help_at: now,
             seam_goal: open,
             seam_from: open,
             seam_at: now,
@@ -202,6 +255,95 @@ impl HomeChrome {
         }
     }
 
+    /// `wallToolsQueueIslandOpen`, read from the settings file at startup.
+    pub fn restore_queue_island(&mut self, open: bool) {
+        self.queue_open = open;
+    }
+
+    pub fn queue_island_open(&self) -> bool {
+        self.queue_open
+    }
+
+    /// The playing song and Personal FM state, from the shell on every update: the list follows the song, and
+    /// FM hides the island without touching the preference.
+    pub fn sync_queue(&mut self, queue: &[Track], current: Option<usize>, fm: bool, now: Instant) {
+        if fm != self.island_fm {
+            self.island_fm = fm;
+            self.set_island(!fm && self.queue_open && self.tools_goal > 0.5, now, None);
+        }
+        if queue.is_empty() {
+            self.queue_clear = None;
+        }
+        if self.island_shown(now) {
+            let list_h = queue_island::list_height(queue.len());
+            self.queue.follow(queue, current, list_h, now);
+        }
+    }
+
+    pub fn queue_update(
+        &mut self,
+        message: queue_island::Message,
+        queue: &[Track],
+        list_h: f32,
+    ) -> (Task<queue_island::Message>, Option<queue_island::Change>) {
+        self.queue.update(message, queue, list_h)
+    }
+
+    pub fn queue_frame(
+        &mut self,
+        queue: &[Track],
+        current: Option<usize>,
+        list_h: f32,
+        now: Instant,
+    ) -> Task<queue_island::Message> {
+        if self.island_shown(now) { self.queue.frame(queue, current, list_h, now) } else { Task::none() }
+    }
+
+    /// The clear button: arms for three seconds, then clears on the second press (outside the 400ms guard).
+    pub fn press_queue_clear(&mut self, now: Instant) -> (bool, Task<Message>) {
+        if let Some(at) = self.queue_clear {
+            if now.saturating_duration_since(at).as_millis() < u128::from(CLEAR_GUARD_MS) {
+                return (false, Task::none());
+            }
+            self.queue_clear = None;
+            return (true, Task::none());
+        }
+        self.queue_clear = Some(now);
+        self.clear_serial = self.clear_serial.wrapping_add(1);
+        let serial = self.clear_serial;
+        let wait = crate::background::blocking(|| std::thread::sleep(Duration::from_millis(CLEAR_CONFIRM_MS)));
+        (false, Task::perform(wait, move |_| Message::ToolsQueueClearTimeout(serial)))
+    }
+
+    pub fn queue_clear_armed(&self) -> bool {
+        self.queue_clear.is_some()
+    }
+
+    fn set_island(&mut self, open: bool, now: Instant, trail_ms: Option<u64>) {
+        let current = self.island_goal > 0.5;
+        if open == current && trail_ms.is_none() {
+            return;
+        }
+        self.island_from = self.island(now);
+        self.island_goal = if open { 1.0 } else { 0.0 };
+        self.island_at = now + Duration::from_millis(trail_ms.unwrap_or(0));
+        if open && !current {
+            self.queue.opened();
+        }
+        if !open {
+            self.queue_clear = None;
+        }
+    }
+
+    fn set_help(&mut self, open: bool, now: Instant) {
+        if open == (self.help_goal > 0.5) {
+            return;
+        }
+        self.help_from = self.help(now);
+        self.help_goal = if open { 1.0 } else { 0.0 };
+        self.help_at = now;
+    }
+
     pub fn update(&mut self, message: &Message) {
         let now = Instant::now();
         match message {
@@ -222,7 +364,34 @@ impl HomeChrome {
                     self.set_menu(now, !self.more);
                 }
             }
-            Message::Tools => self.retarget_tools(now, if self.tools_goal > 0.5 { 0.0 } else { 1.0 }),
+            Message::Tools => {
+                let opening = self.tools_goal <= 0.5;
+                self.retarget_tools(now, if opening { 1.0 } else { 0.0 });
+                if opening {
+                    let trail = if self.queue_open { Some(ISLAND_TRAIL_MS) } else { None };
+                    self.set_island(self.queue_open && !self.island_fm, now, trail);
+                }
+            }
+            Message::ToolsQueueToggle => {
+                self.queue_open = !self.queue_open;
+                let open = self.queue_open && self.tools_goal > 0.5 && !self.island_fm;
+                self.set_island(open, now, None);
+            }
+            Message::ToolsHelp => self.set_help(self.help_goal <= 0.5, now),
+            Message::ToolsQueueClearTimeout(serial) => {
+                if *serial == self.clear_serial {
+                    self.queue_clear = None;
+                }
+            }
+            Message::ToolsQueueClear | Message::ToolsQueue(_) => {}
+            Message::Escape => {
+                if self.queue_clear.take().is_none() {
+                    self.set_menu(now, false);
+                    if self.tools_goal > 0.5 {
+                        self.retarget_tools(now, 0.0);
+                    }
+                }
+            }
             Message::Dismiss => {
                 self.set_menu(now, false);
                 if self.tools_goal > 0.5 {
@@ -402,6 +571,9 @@ impl HomeChrome {
 
     pub fn animating(&self, now: Instant) -> bool {
         self.busy(self.tools_from, self.tools_goal, self.tools_at, now, PANEL_MS)
+            || self.busy(self.island_from, self.island_goal, self.island_at, now, ISLAND_MS)
+            || self.busy(self.help_from, self.help_goal, self.help_at, now, HELP_MS)
+            || self.queue.animating(now)
             || self.busy(self.seam_from, self.seam_goal, self.seam_at, now, SEAM_MS)
             || self.busy(self.back_from, self.back_goal, self.back_at, now, BACK_MS)
             || self.busy(self.menu_from, self.menu_goal, self.menu_at, now, self.menu_ms)
@@ -417,6 +589,23 @@ impl HomeChrome {
 
     pub fn tools(&self, now: Instant) -> f32 {
         mix(self.tools_from, self.tools_goal, self.tools_at, now, PANEL_MS, PANEL_EASE)
+    }
+
+    pub fn island(&self, now: Instant) -> f32 {
+        mix(self.island_from, self.island_goal, self.island_at, now, ISLAND_MS, ISLAND_EASE)
+    }
+
+    /// Kept in the layout while it fades out, as `AnimatePresence` does.
+    pub fn island_shown(&self, now: Instant) -> bool {
+        self.island_goal > 0.5 || self.island(now) > 0.005
+    }
+
+    pub fn help(&self, now: Instant) -> f32 {
+        mix(self.help_from, self.help_goal, self.help_at, now, HELP_MS, ISLAND_EASE)
+    }
+
+    pub fn help_shown(&self, now: Instant) -> bool {
+        self.help_goal > 0.5 || self.help(now) > 0.005
     }
 
     pub fn back(&self, now: Instant) -> f32 {
@@ -524,6 +713,9 @@ impl HomeChrome {
         self.tools_at = now;
         if goal > 0.5 {
             self.set_menu(now, false);
+        } else {
+            self.set_island(false, now, None);
+            self.set_help(false, now);
         }
     }
 
@@ -574,6 +766,11 @@ pub struct Host<'a> {
     pub explore_refresh: Option<bool>,
     pub volume: f32,
     pub muted: bool,
+    /// The queue island's colours (settings tokens faded by the island's own animation).
+    pub tokens: crate::settings_kit::Tokens,
+    pub queue: &'a [Track],
+    pub queue_index: Option<usize>,
+    pub fm: bool,
     pub window_width: f32,
     pub window_height: f32,
     pub seam: Seam,

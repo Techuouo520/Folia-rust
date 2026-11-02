@@ -128,6 +128,26 @@ impl<T> Queue<T> {
         Some(item)
     }
 
+    /// `clearQueue` while the playing item keeps playing: every other item leaves and the current one moves to
+    /// the head. Returns whether anything left. An empty queue or a lone current item is unchanged.
+    pub fn clear_except_current(&mut self) -> bool {
+        let Some(current) = self.current.filter(|&index| index < self.items.len()) else {
+            let had = !self.items.is_empty();
+            self.items.clear();
+            self.origin = None;
+            return had;
+        };
+        if self.items.len() <= 1 {
+            return false;
+        }
+        let current = self.items.remove(current);
+        self.items.clear();
+        self.items.push(current);
+        self.current = Some(0);
+        self.origin = None;
+        true
+    }
+
     /// Places `index` immediately after the current item. The current item stays current.
     pub fn move_after_current(&mut self, index: usize) -> bool {
         let Some(current) = self.current else { return false };
