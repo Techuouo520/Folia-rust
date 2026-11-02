@@ -144,21 +144,24 @@ pub struct HomeChrome {
 }
 
 impl HomeChrome {
-    pub fn new() -> Self {
+    /// Seeds the level from the window folia-app opens, so the first resize after a restore is a real change.
+    pub fn new(width: f32) -> Self {
         let now = Instant::now();
+        let level = default_level(width);
+        let open = open_width(level, false, (NARROW, ROW_NARROW));
         Self {
-            level: Level::Full,
+            level,
             full: (NARROW, ROW_NARROW),
-            restore: Level::Full,
+            restore: level,
             horizontal: false,
             pending_horizontal: None,
-            seen_width: 0.0,
+            seen_width: width,
             more: false,
             tools_goal: 0.0,
             tools_from: 0.0,
             tools_at: now,
-            seam_goal: NARROW,
-            seam_from: NARROW,
+            seam_goal: open,
+            seam_from: open,
             seam_at: now,
             back_goal: 0.0,
             back_from: 0.0,
@@ -243,7 +246,7 @@ impl HomeChrome {
 
     /// Viewport width picks the default level; a portrait window (`height ≥ width × 1.1`) turns the seam sideways.
     pub fn sync(&mut self, width: f32, height: f32, has_track: bool, now: Instant) {
-        if width > 0.0 {
+        if width > 0.0 && height > 0.0 {
             self.sync_width(width, now);
             self.sync_axis(height >= width * 1.1, now);
         }
@@ -373,17 +376,6 @@ impl HomeChrome {
     }
 
     fn sync_width(&mut self, width: f32, now: Instant) {
-        if self.seen_width == 0.0 {
-            let level = default_level(width);
-            self.level = level;
-            self.restore = level;
-            self.seen_width = width;
-            let open = open_width(level, self.horizontal, self.full);
-            self.seam_from = open;
-            self.seam_goal = open;
-            self.seam_at = now;
-            return;
-        }
         let crossed = (self.seen_width < NARROW_VW) != (width < NARROW_VW);
         self.seen_width = width;
         if !crossed {

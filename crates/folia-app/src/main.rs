@@ -10,7 +10,6 @@ use tracing_subscriber::EnvFilter;
 const APP_DIR: &str = if cfg!(debug_assertions) { "Folia-rust-dev" } else { "Folia-rust" };
 const DEFAULT_LOG: &str =
     if cfg!(debug_assertions) { "debug,wgpu=warn,naga=warn,iced=info,cosmic_text=warn" } else { "info" };
-const WINDOW_SIZE: iced::Size = iced::Size::new(1200.0, 800.0);
 
 fn window_settings() -> anyhow::Result<iced::window::Settings> {
     let image =
@@ -19,8 +18,8 @@ fn window_settings() -> anyhow::Result<iced::window::Settings> {
     let (width, height) = image.dimensions();
     let icon = iced::window::icon::from_rgba(image.into_raw(), width, height)?;
     Ok(iced::window::Settings {
-        size: WINDOW_SIZE,
-        min_size: Some(iced::Size::new(350.0, 100.0)),
+        size: folia_ui::INITIAL_WINDOW,
+        min_size: Some(folia_ui::MIN_WINDOW_SIZE),
         icon: Some(icon),
         decorations: false,
         platform_specific: platform_window(),

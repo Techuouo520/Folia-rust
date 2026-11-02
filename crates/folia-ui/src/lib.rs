@@ -72,6 +72,11 @@ use crate::library::LibraryPage;
 use crate::playback::Playback;
 use crate::search::SearchPage;
 
+/// The window folia-app opens; the shell lays out before the first resize event arrives.
+pub const INITIAL_WINDOW: Size = Size::new(1200.0, 800.0);
+/// The smallest window folia-app allows; anything reported below it is a minimized window.
+pub const MIN_WINDOW_SIZE: Size = Size::new(350.0, 100.0);
+
 /// Everything the app reads before the window opens.
 #[derive(Clone)]
 pub struct Init {
@@ -232,12 +237,12 @@ impl Shell {
             started: std::time::Instant::now(),
             clock: ChromeClock::shown(0),
             bar: player_bar::PlayerBar::new(std::time::Instant::now()),
-            window_size: Size::new(1200.0, 800.0),
+            window_size: INITIAL_WINDOW,
             pointer_held: false,
             drag_armed: false,
             drag_from: None,
             splash: splash::Splash::new(),
-            home: home::HomeChrome::new(),
+            home: home::HomeChrome::new(INITIAL_WINDOW.width),
             panel: panel::PlayerPanel::new(std::time::Instant::now()),
             art: folia_library::CoverCache::new(ART_BYTES),
             art_pending: None,
@@ -447,6 +452,10 @@ impl Shell {
                 Task::none()
             }
             Message::WindowResized(size) => {
+                // A minimized window reports a size below the minimum (Windows: 160×28); keep the last real viewport.
+                if size.width < MIN_WINDOW_SIZE.width || size.height < MIN_WINDOW_SIZE.height {
+                    return Task::none();
+                }
                 self.window_size = size;
                 match self.window {
                     Some(id) => iced::window::is_maximized(id).map(Message::Maximized),

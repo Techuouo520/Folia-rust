@@ -1,6 +1,6 @@
 // The home seam: a 120px strip, a 64px spine, or an edge tab, from `bravaisHome.css`.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use folia_render::Plate;
 use iced::widget::{button, column, container, mouse_area, row, shader, space, stack, text};
@@ -11,6 +11,8 @@ use super::{AccountSlot, HomeChrome, Host, Message};
 use crate::icons::icon;
 
 const SHADOW: f32 = 64.0;
+/// Native `title` reveals after about half a second.
+const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 const LAYOUT_NARROW: f32 = 120.0;
 const LAYOUT_SPINE: f32 = 64.0;
 /// `BRAVAIS_SEAM_FULL_WIDTH`.
@@ -236,7 +238,8 @@ fn tab_column<'a>(host: &Host<'a>, ink: Color, fit: Fit) -> Element<'a, Message>
         let shown = if fit == Fit::Short { short } else { label.to_owned() };
         let active = tab == host.current;
         let face = tracked_col(&shown, size, track, if active { ink } else { soft(ink) });
-        home_tab(face, pad, active, ink, Message::SelectTab(tab), label)
+        let hint = (fit == Fit::Short).then_some(label);
+        home_tab(face, pad, active, ink, Message::SelectTab(tab), hint)
     });
     column(tabs).spacing(if fit == Fit::Short { 2 } else { 4 }).align_x(Alignment::Center).into()
 }
@@ -247,7 +250,7 @@ fn home_tab<'a>(
     active: bool,
     ink: Color,
     on_press: Message,
-    label: &str,
+    hint: Option<&str>,
 ) -> Element<'a, Message> {
     let tab = button(face).padding([pad.0, pad.1]).on_press(on_press).style(move |_theme: &Theme, status| {
         let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -268,7 +271,10 @@ fn home_tab<'a>(
             ..button::Style::default()
         }
     });
-    iced::widget::Tooltip::new(tab, text(label.to_owned()).size(12), iced::widget::tooltip::Position::Right).into()
+    match hint {
+        Some(label) => tip(tab.into(), label, iced::widget::tooltip::Position::Right),
+        None => tab.into(),
+    }
 }
 
 /// The account entry: a 32px picture over the name, or a 36px icon button on the spine.
@@ -310,7 +316,7 @@ fn account_entry<'a>(slot: &AccountSlot<'a>, ink: Color, spine: bool) -> Element
                 ..button::Style::default()
             }
         });
-    iced::widget::Tooltip::new(entry, text(slot.tip.clone()).size(12), iced::widget::tooltip::Position::Right).into()
+    if spine { tip(entry.into(), &slot.tip, iced::widget::tooltip::Position::Right) } else { entry.into() }
 }
 
 /// `BravaisProviderAvatar`: the picture, the platform's icon or letter on its colour, or a plug on a pale disc for a
@@ -429,12 +435,7 @@ fn collection_title<'a>(
     };
     let title = super::title::Title::new(face, &seam.title, ink, host.accent, spine, horizontal).quotes(quoted);
     let key = if spine { "libraryBravais.seamRestore" } else { "libraryBravais.seamCollapseStrip" };
-    iced::widget::Tooltip::new(
-        title,
-        text(super::tr(host, key).to_owned()).size(12),
-        iced::widget::tooltip::Position::Right,
-    )
-    .into()
+    tip(title.into(), super::tr(host, key), iced::widget::tooltip::Position::Right)
 }
 
 /// `BravaisSeamFullRow`: crumbs keep their full row, followed by the horizontal title, metadata and actions.
@@ -668,9 +669,9 @@ fn filter_field<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Ele
                 border: Border { radius: 8.0.into(), ..Border::default() },
                 ..button::Style::default()
             });
-        line = line.push(iced::widget::Tooltip::new(
-            clear,
-            text(super::tr(host, "libraryBravaisCollection.clearFilter")).size(12),
+        line = line.push(tip(
+            clear.into(),
+            super::tr(host, "libraryBravaisCollection.clearFilter"),
             iced::widget::tooltip::Position::Bottom,
         ));
     }
@@ -839,7 +840,7 @@ fn star<'a>(saved: bool, pending: bool, title: String, accent: Color, ink: Color
             },
             ..button::Style::default()
         });
-    iced::widget::Tooltip::new(face, text(title).size(12), iced::widget::tooltip::Position::Top).into()
+    tip(face.into(), &title, iced::widget::tooltip::Position::Top)
 }
 
 /// `.bravais-seam-actions .bravais-chrome-button`: 36px high, 12px bold with a 14px icon; the primary one on a 16%
@@ -930,12 +931,7 @@ fn back_button<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
                 ..button::Style::default()
             },
         );
-    iced::widget::Tooltip::new(
-        back,
-        text(super::tr(host, "libraryBravais.seamBack")).size(12),
-        iced::widget::tooltip::Position::Bottom,
-    )
-    .into()
+    tip(back.into(), super::tr(host, "libraryBravais.seamBack"), iced::widget::tooltip::Position::Bottom)
 }
 
 fn row_body<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
@@ -974,7 +970,7 @@ fn row_body<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
         let tabs = host.tabs.iter().map(|&(tab, label)| {
             let active = tab == host.current;
             let face = tracked_row(label, tab_size, tab_track, 0.0, if active { ink } else { soft(ink) });
-            home_tab(face, tab_pad, active, ink, Message::SelectTab(tab), label)
+            home_tab(face, tab_pad, active, ink, Message::SelectTab(tab), None)
         });
         items.push(row(tabs).spacing(4).align_y(Alignment::Center).into());
         if let Some(status) = &host.status {
@@ -1070,11 +1066,11 @@ fn tab_button<'a>(host: &Host<'a>) -> Element<'a, Message> {
         },
         ..container::Style::default()
     });
-    let tip =
+    let hint =
         super::tr(host, if host.tab_hidden { "libraryBravais.seamRestore" } else { "libraryBravais.seamReopenHere" });
-    let button = iced::widget::Tooltip::new(
-        button(face).padding(0).on_press(Message::Tab).style(button::text),
-        text(tip).size(12),
+    let button = tip(
+        button(face).padding(0).on_press(Message::Tab).style(button::text).into(),
+        hint,
         iced::widget::tooltip::Position::Right,
     );
     let travel = 28.0 * (1.0 - host.tab);
@@ -1237,6 +1233,14 @@ fn extra_bold() -> iced::Font {
 
 fn bold() -> iced::Font {
     crate::typeface::font(iced::font::Weight::Bold)
+}
+
+fn tip<'a>(
+    content: Element<'a, Message>,
+    label: &str,
+    position: iced::widget::tooltip::Position,
+) -> Element<'a, Message> {
+    iced::widget::Tooltip::new(content, text(label.to_owned()).size(12), position).delay(TOOLTIP_DELAY).into()
 }
 
 fn fade(color: Color, opacity: f32) -> Color {
