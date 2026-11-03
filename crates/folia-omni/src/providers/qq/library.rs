@@ -246,7 +246,7 @@ pub async fn account(client: &Client) -> Result<Option<Account>, OmniError> {
         .or_else(|| text(info, &["nickname", "nick", "name", "userName"]))
         .unwrap_or_default();
     let avatar_url = text(&data, &["avatarUrl"]).or_else(|| text(info, &["logo", "avatarUrl"]));
-    Ok(Some(Account { id: credential.musicid, nickname, avatar_url }))
+    Ok(Some(Account { id: credential.musicid, nickname, avatar_url, vip: false }))
 }
 
 /// `getPlaylists`: the account's own playlists, then the saved ones page by page.

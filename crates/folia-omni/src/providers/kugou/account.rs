@@ -109,5 +109,12 @@ pub async fn account(client: &Client) -> Result<Option<Account>, OmniError> {
     // The bridge answers the session's user id in place of the profile's.
     let id =
         session.userid.clone().or_else(|| text_of(profile, &["userid", "user_id", "id", "uid"])).unwrap_or_default();
-    Ok(Some(Account { id, nickname, avatar_url }))
+    let vip =
+        ["vip_type", "vipType", "is_vip"].iter().find_map(|key| profile.get(*key)).is_some_and(|value| match value {
+            Value::Bool(flag) => *flag,
+            Value::Number(number) => number.as_i64().unwrap_or(0) > 0,
+            Value::String(text) => text.parse::<i64>().unwrap_or(0) > 0,
+            _ => false,
+        });
+    Ok(Some(Account { id, nickname, avatar_url, vip }))
 }

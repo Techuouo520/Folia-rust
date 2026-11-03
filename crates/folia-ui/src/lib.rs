@@ -666,7 +666,28 @@ impl Shell {
             .find(|platform| platform.available)
             .filter(|platform| matches!(online.account_for(platform.id), online::AccountState::SignedIn(_)))
             .map(|platform| platform.id);
-        self.login.open(provider, online, self.omni.as_ref()).map(Message::Login)
+        self.open_login_on(provider)
+    }
+
+    /// The sign-in window on `provider`, from the home page when the player's account tab asks for it.
+    fn open_login_on(&mut self, provider: Option<&'static str>) -> Task<Message> {
+        self.page = Page::Library;
+        self.login.open(provider, &self.library.online, self.omni.as_ref()).map(Message::Login)
+    }
+
+    /// The platform the playing song belongs to, else the one in use.
+    fn playing_provider(&self) -> &'static str {
+        let Some(id) =
+            self.playback.current().and_then(|track| track.online.as_ref()).map(|online| online.provider.as_str())
+        else {
+            return self.library.online.provider();
+        };
+        self.library
+            .online
+            .platforms()
+            .into_iter()
+            .find(|platform| platform.id == id)
+            .map_or_else(|| self.library.online.provider(), |platform| platform.id)
     }
 
     /// Another platform takes over: the player empties, as a sign-out does, since its songs belong to the old one.
@@ -953,6 +974,12 @@ impl Shell {
             frame = frame.push(positioner::view(look).map(Message::Positioner));
         }
         if playing {
+            let provider = self.playing_provider();
+            let platform = self.library.online.platforms().into_iter().find(|platform| platform.id == provider);
+            let account = match self.library.online.account_for(provider) {
+                online::AccountState::SignedIn(account) => Some(account),
+                _ => None,
+            };
             let panel_view = panel::View {
                 i18n: &self.i18n,
                 theme: &self.theme,
@@ -974,6 +1001,10 @@ impl Shell {
                 origin: self.playback.queue.origin().map(|origin| origin.name.as_str()),
                 art: self.playback.current().and_then(|track| self.art.peek(&track.id)).and_then(Option::as_ref),
                 pill_hover: self.panel.pill_hover(),
+                platform,
+                account,
+                account_avatar: self.library.online.avatar_for(provider),
+                syncing: self.library.online.syncing(provider),
             };
             frame = frame.push(self.panel.view(panel_view, std::time::Instant::now()).map(Message::Panel));
         }
@@ -1021,6 +1052,22 @@ impl Shell {
         {
             frame =
                 frame.push(status_toast::view(&self.i18n, platform, daylight, self.window_size.width, opacity, shift));
+        }
+        if let Some((provider, ok, signed_out, opacity, shift)) = self.library.online.sync_notice(now)
+            && let Some(platform) = self
+                .omni
+                .as_ref()
+                .and_then(|omni| omni.platforms().into_iter().find(|platform| platform.id == provider))
+        {
+            frame = frame.push(status_toast::sync_view(
+                &self.i18n,
+                platform,
+                status_toast::SyncOutcome { ok, signed_out },
+                daylight,
+                self.window_size.width,
+                opacity,
+                shift,
+            ));
         }
         // `z-[9999]`: the title bar sits above every page and dialog.
         let look = chrome::TitlebarLook {
@@ -1132,6 +1179,11 @@ impl Shell {
         let now = std::time::Instant::now();
         if self.playback.notice_animating(now) {
             parts.push(iced::window::frames().map(|_| Message::Playback(playback::Message::NoticeFrame)));
+        }
+        if self.library.online.sync_notice_animating(now) {
+            parts.push(
+                iced::window::frames().map(|_| Message::Library(library::Message::Online(online::Message::SyncFrame))),
+            );
         }
         if self.page != Page::Search && self.bar.animating(now) {
             parts.push(iced::window::frames().map(|_| Message::Bar(player_bar::Message::Frame)));
@@ -1468,6 +1520,21 @@ impl Shell {
             panel::Effect::Visualizer(style) => {
                 self.appearance.visualizer = style.map_or(RANDOM_STYLE, Style::id).to_owned();
                 save(&self.store, &self.appearance)
+            }
+            panel::Effect::Login => {
+                let provider = self.playing_provider();
+                self.open_login_on(Some(provider))
+            }
+            panel::Effect::Sync => {
+                let provider = self.playing_provider();
+                self.library.online.sync(provider).map(|message| Message::Library(library::Message::Online(message)))
+            }
+            panel::Effect::SignOut => {
+                let provider = self.playing_provider();
+                let clear =
+                    if provider == self.library.online.provider() { self.leave_provider() } else { Task::none() };
+                let sign_out = self.library.sign_out(provider, &self.i18n).map(Message::Library);
+                Task::batch([clear, sign_out])
             }
         };
         Task::batch([task, scroll])

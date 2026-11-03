@@ -136,7 +136,12 @@ async fn read_user(client: &Client, credential: &Credential) -> Result<Account, 
     let id = id.ok_or_else(|| OmniError::Response("Qishui did not identify the account".to_owned()))?;
     let avatar =
         user.get("medium_avatar_url").or_else(|| user.get("avatar_url")).or_else(|| user.get("thumb_avatar_url"));
-    Ok(Account { id, nickname: text(user, "nickname").unwrap_or_default(), avatar_url: image(avatar) })
+    let vip = user.get("is_vip").is_some_and(|value| match value {
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_i64().unwrap_or(0) != 0,
+        _ => false,
+    });
+    Ok(Account { id, nickname: text(user, "nickname").unwrap_or_default(), avatar_url: image(avatar), vip })
 }
 
 /// `status` (`renew`): a ticket within an hour of running out is renewed, then the account is read again.

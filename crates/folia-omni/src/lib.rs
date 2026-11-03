@@ -84,17 +84,20 @@ pub struct Platform {
     pub color: u32,
     /// The provider is compiled into this build.
     pub available: bool,
+    /// The platform's own sign-in words (`getLoginTexts`), as i18n keys.
+    pub login_title: &'static str,
+    pub login_note: &'static str,
 }
 
-/// The original's providers in registration order (`providerRegistry.ts`), with the marks they declare.
-const PLATFORMS: [(&str, &str, &str, char, u32); 7] = [
-    ("netease", "NetEase Cloud Music", "网易云", '云', 0xdc2626),
-    ("kugou", "KuGou Music", "酷狗", 'K', 0x2563eb),
-    ("qq", "QQ Music", "QQ音乐", 'Q', 0x16a34a),
-    ("bodian", "波点音乐", "波点", '波', 0x0d9488),
-    ("ytm", "YouTube Music", "YT Music", 'Y', 0xe11d48),
-    ("spotify", "Spotify", "Spotify", 'S', 0x22c55e),
-    ("qishui", "汽水音乐", "汽水", '汽', 0x19a58c),
+/// The original's providers in registration order (`providerRegistry.ts`), with the marks and sign-in words they declare.
+const PLATFORMS: [(&str, &str, &str, char, u32, &str, &str); 7] = [
+    ("netease", "NetEase Cloud Music", "网易云", '云', 0xdc2626, "home.loginTitle", "home.loginNote"),
+    ("kugou", "KuGou Music", "酷狗", 'K', 0x2563eb, "home.loginTitleKugou", "home.loginNoteKugou"),
+    ("qq", "QQ Music", "QQ音乐", 'Q', 0x16a34a, "home.loginTitleQq", "home.loginNoteQq"),
+    ("bodian", "波点音乐", "波点", '波', 0x0d9488, "home.loginTitleBodian", "home.loginNoteBodian"),
+    ("ytm", "YouTube Music", "YT Music", 'Y', 0xe11d48, "home.loginTitleYtm", "home.loginNoteYtmBrowser"),
+    ("spotify", "Spotify", "Spotify", 'S', 0x22c55e, "home.loginTitleSpotify", "home.loginNoteSpotify"),
+    ("qishui", "汽水音乐", "汽水", '汽', 0x19a58c, "home.loginTitleQishui", "home.loginNoteQishui"),
 ];
 
 /// A QR sign-in session: `key` is what the platform is asked about, `content` what the phone scans.
@@ -133,6 +136,8 @@ pub struct Account {
     pub id: String,
     pub nickname: String,
     pub avatar_url: Option<String>,
+    /// The account is a paying member (`vipType` above zero), where the platform says so.
+    pub vip: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -292,13 +297,15 @@ impl Omni {
         PLATFORMS
             .iter()
             .filter(|&&(id, ..)| self.providers.iter().any(|provider| provider.id() == id))
-            .map(|&(id, display_name, short_name, letter, color)| Platform {
+            .map(|&(id, display_name, short_name, letter, color, login_title, login_note)| Platform {
                 id,
                 display_name,
                 short_name,
                 letter,
                 color,
                 available: true,
+                login_title,
+                login_note,
             })
             .collect()
     }
@@ -327,6 +334,14 @@ impl Omni {
 
     pub async fn account(&self, provider: &str) -> Result<Option<Account>, OmniError> {
         self.provider(provider)?.account().await
+    }
+
+    /// The sync button's read (`readAccount`): who is signed in and the playlists kept with the account.
+    pub async fn sync_account(&self, provider: &str) -> Result<Option<(Account, Vec<Collection>)>, OmniError> {
+        let target = self.provider(provider)?;
+        let Some(account) = target.account().await? else { return Ok(None) };
+        let playlists = target.user_playlists(&account.id).await?;
+        Ok(Some((account, playlists)))
     }
 
     pub async fn logout(&self, provider: &str) -> Result<(), OmniError> {

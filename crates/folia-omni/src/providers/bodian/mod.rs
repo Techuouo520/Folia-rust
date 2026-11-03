@@ -84,6 +84,7 @@ impl Provider for Bodian {
                 id: session.uid.unwrap_or_default(),
                 nickname: session.nickname.unwrap_or_default(),
                 avatar_url: session.avatar_url,
+                vip: false,
             }))
         })
     }

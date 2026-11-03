@@ -78,7 +78,8 @@ pub async fn account(client: &Client) -> Result<Option<Account>, OmniError> {
         profile.get("avatarUrl").and_then(Value::as_str).filter(|url| !url.is_empty()).map(|url| {
             url.strip_prefix("http://").map(|rest| format!("https://{rest}")).unwrap_or_else(|| url.to_owned())
         });
-    Ok(Some(Account { id: id.to_string(), nickname, avatar_url }))
+    let vip = profile.get("vipType").and_then(Value::as_i64).is_some_and(|kind| kind > 0);
+    Ok(Some(Account { id: id.to_string(), nickname, avatar_url, vip }))
 }
 
 /// `logout`: the request carries the session as it is, then the session goes whatever NetEase answers.

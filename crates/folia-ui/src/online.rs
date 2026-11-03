@@ -1,6 +1,7 @@
 // The online account and the home tabs' online data, all through the `Omni` facade and off the UI thread.
 
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use folia_omni::{Account, Collection, ExploreSection, Omni, RadioFeed};
 use iced::Task;
@@ -61,8 +62,26 @@ pub enum Message {
     /// The answer to 「换一批」.
     ExploreRefreshed(String, Result<Vec<ExploreSection>, String>),
     Avatar(&'static str, String, Option<folia_library::Cover>),
+    /// The sync button's read came back: the account and the playlists kept with it.
+    Synced(&'static str, Result<Option<(Account, Vec<Collection>)>, String>),
+    SyncLeaving(u64),
+    SyncGone(u64),
+    SyncFrame,
     Forgotten,
 }
+
+/// `StatusToast` after the sync button: what it read, and whether the sign-in had run out.
+#[derive(Debug, Clone, Copy)]
+struct SyncNotice {
+    provider: &'static str,
+    ok: bool,
+    signed_out: bool,
+    started: Instant,
+}
+
+/// `runStatusMessageTime` and the toast's exit.
+const SYNC_NOTICE_MS: u64 = 4000;
+const SYNC_LEAVE_MS: u64 = 220;
 
 /// The account picture is decoded at twice the 32px it is drawn at.
 const AVATAR_PX: u32 = 64;
@@ -83,6 +102,10 @@ pub struct Online {
     /// 「换一批」 is on its way; the page on screen stays until it arrives.
     pub explore_refreshing: bool,
     pub avatar: Option<iced::widget::image::Handle>,
+    /// The platform whose sync button is reading.
+    syncing: Option<&'static str>,
+    sync_notice: Option<SyncNotice>,
+    sync_serial: u64,
 }
 
 impl Online {
@@ -122,6 +145,9 @@ impl Online {
             explore: Feed::Idle,
             explore_refreshing: false,
             avatar: None,
+            syncing: None,
+            sync_notice: None,
+            sync_serial: 0,
         };
         (online, task)
     }
@@ -278,6 +304,57 @@ impl Online {
                 }
                 (Task::none(), false)
             }
+            Message::Synced(provider, result) => {
+                if self.syncing == Some(provider) {
+                    self.syncing = None;
+                }
+                if !self.kept.contains(provider) && !matches!(self.account_for(provider), AccountState::SignedIn(_)) {
+                    return (Task::none(), false);
+                }
+                match result {
+                    Ok(Some((account, playlists))) => {
+                        self.kept.insert(provider);
+                        self.accounts.insert(provider, AccountState::SignedIn(account.clone()));
+                        let avatar = self.load_avatar(provider, &account);
+                        if provider != self.provider {
+                            let notice = self.show_sync_notice(provider, true, false);
+                            return (Task::batch([avatar, notice]), false);
+                        }
+                        self.account = AccountState::SignedIn(account);
+                        self.playlists = Feed::Ready(playlists);
+                        let notice = self.show_sync_notice(provider, true, false);
+                        (Task::batch([avatar, notice]), true)
+                    }
+                    Ok(None) => {
+                        self.kept.remove(provider);
+                        let state = AccountState::Guest { ran_out: true };
+                        self.accounts.insert(provider, state.clone());
+                        self.avatars.remove(provider);
+                        if provider == self.provider {
+                            self.account = state;
+                            self.reset_feeds();
+                        }
+                        let notice = self.show_sync_notice(provider, false, true);
+                        (Task::batch([self.forget(provider), notice]), provider == self.provider)
+                    }
+                    Err(err) => {
+                        tracing::warn!(provider, error = %err, "online account sync failed");
+                        (self.show_sync_notice(provider, false, false), false)
+                    }
+                }
+            }
+            Message::SyncLeaving(serial) if serial == self.sync_serial => {
+                let leaving =
+                    Task::perform(blocking(|| std::thread::sleep(Duration::from_millis(SYNC_LEAVE_MS))), move |_| {
+                        Message::SyncGone(serial)
+                    });
+                (leaving, false)
+            }
+            Message::SyncGone(serial) if serial == self.sync_serial => {
+                self.sync_notice = None;
+                (Task::none(), false)
+            }
+            Message::SyncLeaving(_) | Message::SyncGone(_) | Message::SyncFrame => (Task::none(), false),
             Message::Forgotten => (Task::none(), false),
         }
     }
@@ -323,9 +400,62 @@ impl Online {
         Task::batch([keep, self.read_account(provider)])
     }
 
+    /// The panel's sync button: reads the account and its playlists again (`readAccount` with the `sync` reason).
+    pub fn sync(&mut self, provider: &'static str) -> Task<Message> {
+        let Some(omni) = self.omni.clone() else { return Task::none() };
+        if self.syncing.is_some() {
+            return Task::none();
+        }
+        self.syncing = Some(provider);
+        Task::perform(
+            async move { omni.sync_account(provider).await.map_err(|err| error_chain(&err)) },
+            move |result| Message::Synced(provider, result),
+        )
+    }
+
+    pub fn syncing(&self, provider: &str) -> bool {
+        self.syncing == Some(provider)
+    }
+
+    /// `holdStatusMessage` while the sync toast is entering or leaving.
+    pub fn sync_notice_animating(&self, now: Instant) -> bool {
+        self.sync_notice.is_some_and(|notice| {
+            let ms = now.saturating_duration_since(notice.started).as_millis() as u64;
+            ms < 320 || (SYNC_NOTICE_MS..SYNC_NOTICE_MS + SYNC_LEAVE_MS).contains(&ms)
+        })
+    }
+
+    /// The sync toast's platform, outcome and `StatusToast` motion.
+    pub fn sync_notice(&self, now: Instant) -> Option<(&'static str, bool, bool, f32, f32)> {
+        let notice = self.sync_notice?;
+        let ms = now.saturating_duration_since(notice.started).as_secs_f64() * 1000.0;
+        let entered = folia_visualizer::Ease::new(0.2, 0.8, 0.2, 1.0).at((ms / 320.0).clamp(0.0, 1.0)) as f32;
+        let left = folia_visualizer::Ease::new(0.4, 0.0, 1.0, 1.0)
+            .at(((ms - SYNC_NOTICE_MS as f64) / SYNC_LEAVE_MS as f64).clamp(0.0, 1.0)) as f32;
+        Some((
+            notice.provider,
+            notice.ok,
+            notice.signed_out,
+            entered * (1.0 - left),
+            -18.0 * (1.0 - entered) - 10.0 * left,
+        ))
+    }
+
+    fn show_sync_notice(&mut self, provider: &'static str, ok: bool, signed_out: bool) -> Task<Message> {
+        self.sync_serial = self.sync_serial.wrapping_add(1);
+        let serial = self.sync_serial;
+        self.sync_notice = Some(SyncNotice { provider, ok, signed_out, started: Instant::now() });
+        Task::perform(blocking(|| std::thread::sleep(Duration::from_millis(SYNC_NOTICE_MS))), move |_| {
+            Message::SyncLeaving(serial)
+        })
+    }
+
     /// `logout`: tells the platform, drops the kept session, and shows the guest wall.
     pub fn sign_out(&mut self, provider: &'static str) -> Task<Message> {
         let Some(omni) = self.omni.clone() else { return Task::none() };
+        if self.syncing == Some(provider) {
+            self.syncing = None;
+        }
         if provider == self.provider {
             self.account = AccountState::Guest { ran_out: false };
         }

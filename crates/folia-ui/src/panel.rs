@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use folia_core::{Repeat, Theme, Track};
 use folia_i18n::I18n;
+use folia_omni::{Account, Platform};
 use folia_render::Plate;
 use folia_store::ThemeMode;
 use folia_visualizer::{Ease, Style};
@@ -16,6 +17,7 @@ use crate::icons::icon;
 use crate::mode_picker;
 use crate::motion::{CSS_TRANSITION, Tween};
 use crate::panel_queue::{self, QueueList};
+use crate::platform_icon::mark_faded;
 use crate::playback;
 use crate::settings_kit::{self, Tokens};
 
@@ -70,6 +72,12 @@ pub enum Message {
     Theme(ThemeMode),
     Picker(mode_picker::Message),
     Intensity,
+    /// 「去主页登录」: opens the sign-in window on the track's platform.
+    Login,
+    /// 「同步数据」.
+    Sync,
+    /// The account card's sign-out.
+    SignOut,
 }
 
 pub enum Effect {
@@ -81,6 +89,9 @@ pub enum Effect {
     Intensity,
     Theme(ThemeMode),
     Visualizer(Option<Style>),
+    Login,
+    Sync,
+    SignOut,
 }
 
 pub struct PlayerPanel {
@@ -225,6 +236,15 @@ impl PlayerPanel {
                 }
             },
             Message::Intensity => Effect::Intensity,
+            Message::Login => {
+                self.set_open(false, now);
+                Effect::Login
+            }
+            Message::Sync => Effect::Sync,
+            Message::SignOut => {
+                self.set_open(false, now);
+                Effect::SignOut
+            }
             Message::Frame => {
                 if self.open && self.tab == Tab::Queue {
                     let task = self.queue.frame(room.queue, room.index, list_h, now);
@@ -318,6 +338,11 @@ pub struct View<'a> {
     pub origin: Option<&'a str>,
     pub art: Option<&'a iced::widget::image::Handle>,
     pub pill_hover: bool,
+    /// The track's platform, and that platform's cached account.
+    pub platform: Option<Platform>,
+    pub account: Option<&'a Account>,
+    pub account_avatar: Option<&'a iced::widget::image::Handle>,
+    pub syncing: bool,
 }
 
 fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) -> Element<'a, Message> {
@@ -935,21 +960,125 @@ fn segment<'a>(tokens: Tokens, label: &'a str, chosen: bool, disabled: bool) -> 
 }
 
 fn quality_tab<'a>(view: View<'a>, tokens: Tokens, ink: Color) -> Element<'a, Message> {
-    column![
-        labeled(
+    let account = match (view.platform, view.account) {
+        (Some(platform), Some(account)) => account_card(view, platform, account, tokens, ink),
+        _ => labeled(
             ink,
             view.i18n.t("account.guestMode"),
-            text_btn(view.i18n.t("account.loginOnHome"), Color { a: 0.4 * ink.a, ..ink }, None),
+            text_btn(view.i18n.t("account.loginOnHome"), ink, Some(Message::Login)),
         ),
+    };
+    let sync: Element<'a, Message> = if view.account.is_some() {
+        let label = if view.syncing { view.i18n.t("account.syncing") } else { view.i18n.t("account.syncData") };
+        let button = action_button(tokens, Icon::RefreshCw, label, (!view.syncing).then_some(Message::Sync));
+        container(button).padding(pad(4.0, 4.0, 4.0, 4.0)).into()
+    } else {
+        space().height(0).into()
+    };
+    column![
+        account,
         hairline(tokens),
         labeled(
             ink,
             view.i18n.t("account.audioQuality"),
             text(view.i18n.t("account.qualityStandard")).size(13).color(Color { a: 0.4 * ink.a, ..tokens.t2 }).into(),
         ),
+        sync,
     ]
     .spacing(4)
     .into()
+}
+
+/// `AccountTab`'s signed-in card: a 40px face with the platform's mark on its corner, the name and the member crown,
+/// `provider · ID: …`, and the sign-out on the right.
+fn account_card<'a>(
+    view: View<'a>,
+    platform: Platform,
+    account: &'a Account,
+    tokens: Tokens,
+    ink: Color,
+) -> Element<'a, Message> {
+    let face: Element<'a, Message> = match view.account_avatar {
+        Some(handle) => image(handle.clone())
+            .width(Length::Fixed(40.0))
+            .height(Length::Fixed(40.0))
+            .border_radius(20.0)
+            .opacity(ink.a)
+            .into(),
+        None => container(icon(Icon::User, 18.0, Color { a: 0.42 * ink.a, ..tokens.t3 }))
+            .center(Length::Fixed(40.0))
+            .style(move |_theme: &IcedTheme| container::Style {
+                background: Some(tokens.fill.into()),
+                border: Border { radius: 20.0.into(), ..Border::default() },
+                ..container::Style::default()
+            })
+            .into(),
+    };
+    let ring =
+        container(mark_faded(platform, 16.0, ink.a)).padding(2.0).style(move |_theme: &IcedTheme| container::Style {
+            background: Some(tokens.win.into()),
+            border: Border { radius: 10.0.into(), ..Border::default() },
+            ..container::Style::default()
+        });
+    let picture = stack![
+        container(face)
+            .width(Length::Fixed(46.0))
+            .height(Length::Fixed(46.0))
+            .align_x(Alignment::Start)
+            .align_y(Alignment::Start),
+        container(ring)
+            .width(Length::Fixed(46.0))
+            .height(Length::Fixed(46.0))
+            .align_x(Alignment::End)
+            .align_y(Alignment::End),
+    ];
+    let warn = if view.daylight { Color::from_rgb8(0xb9, 0x7a, 0x10) } else { Color::from_rgb8(0xe3, 0xa9, 0x49) };
+    let mut name = row![
+        text(account.nickname.clone())
+            .size(14)
+            .font(settings_kit::SEMIBOLD)
+            .line_height(LineHeight::Absolute(20.0.into()))
+            .color(ink)
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    if account.vip {
+        name = name.push(icon(Icon::Crown, 14.0, Color { a: ink.a, ..warn }));
+    }
+    let words = column![
+        name,
+        text(format!("{} · ID: {}", platform.short_name, account.id))
+            .size(12)
+            .line_height(LineHeight::Absolute(18.0.into()))
+            .color(tokens.t2),
+    ];
+    let logout =
+        icon_btn(Icon::LogOut, 17.0, 32.0, ink, None, view.i18n.t("account.logout").to_owned(), Some(Message::SignOut));
+    container(row![picture, words, space().width(Length::Fill), logout].spacing(12).align_y(Alignment::Center))
+        .height(Length::Fixed(56.0))
+        .padding(pad(4.0, 4.0, 4.0, 4.0))
+        .into()
+}
+
+/// `PanelButton`: 32px, `rounded-lg`, `--st-fill`, a 14px icon and 13px text.
+fn action_button<'a>(tokens: Tokens, lucide: Icon, label: &'a str, on_press: Option<Message>) -> Element<'a, Message> {
+    let enabled = on_press.is_some();
+    let ink = if enabled { tokens.t1 } else { fade(tokens.t1, 0.4) };
+    let body = row![icon(lucide, 14.0, ink), text(label).size(13).color(ink)].spacing(6).align_y(Alignment::Center);
+    button(container(body).center_y(Length::Fixed(32.0)).center_x(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::Fixed(32.0))
+        .padding(pad(0.0, 12.0, 0.0, 12.0))
+        .on_press_maybe(on_press)
+        .style(move |_theme: &IcedTheme, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some((if hot { tokens.fill2 } else { tokens.fill }).into()),
+                border: Border { radius: 8.0.into(), ..Border::default() },
+                ..button::Style::default()
+            }
+        })
+        .into()
 }
 
 /// Where the handle is in its transitions, each 0..1.
@@ -1249,7 +1378,7 @@ fn measure(tab: Tab, queue_len: usize, inner: f32, max_h: f32) -> (f32, f32, f32
         Tab::Controls => 460.0,
         Tab::Queue => 36.0 + panel_queue::list_height(queue_len),
         Tab::Source => 210.0,
-        Tab::Quality => 110.0,
+        Tab::Quality => 164.0,
         Tab::Cover => 0.0,
     };
     let chrome = 24.0 + 48.0 + body + 12.0 + 36.0;

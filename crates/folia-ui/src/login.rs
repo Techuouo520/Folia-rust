@@ -1272,13 +1272,12 @@ impl Login {
             }
             (Phase::Scanned, Some(_)) => i18n.t("home.qrScanned").to_owned(),
             (Phase::Reading, Some(_)) => i18n.t("login.readingAccount").to_owned(),
-            (Phase::Code, Some(_)) if self.qr.as_ref().is_some_and(|qr| qr.browser.is_some()) => {
-                actions.push((i18n.t("login.openBrowser").to_owned(), true, Message::OpenBrowser));
-                i18n.format("home.loginToProvider", &[("provider", label)])
-            }
-            (Phase::Code | Phase::Preparing | Phase::Idle, Some(_)) => {
-                note = Some(i18n.t("home.loginNote").to_owned());
-                i18n.t("home.loginTitle").to_owned()
+            (Phase::Code | Phase::Preparing | Phase::Idle, Some(platform)) => {
+                note = Some(i18n.t(platform.login_note).to_owned());
+                if self.phase == Phase::Code && self.qr.as_ref().is_some_and(|qr| qr.browser.is_some()) {
+                    actions.push((i18n.t("login.openBrowser").to_owned(), true, Message::OpenBrowser));
+                }
+                i18n.t(platform.login_title).to_owned()
             }
         };
         let mut words = column![

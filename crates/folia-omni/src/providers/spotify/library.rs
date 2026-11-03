@@ -109,7 +109,12 @@ pub async fn account(client: &Client) -> Result<Option<Account>, OmniError> {
         kept.user = user.clone();
         client.set_session(Some(kept));
     }
-    Ok(Some(Account { id: user.id, nickname: user.nickname, avatar_url: user.avatar_url }))
+    Ok(Some(Account {
+        id: user.id,
+        nickname: user.nickname,
+        avatar_url: user.avatar_url,
+        vip: user.premium == Some(true),
+    }))
 }
 
 /// `color-lyrics`: line-synced lyrics as LRC; Spotify's unsynced lyrics have no times to show them by.

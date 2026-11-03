@@ -1,4 +1,4 @@
-// Subscription failures use the original StatusToast's single-line plate and six-second lifetime.
+// Subscription failures and sync results use the original StatusToast's single-line plate and lifetime.
 
 use folia_i18n::I18n;
 use folia_omni::Platform;
@@ -15,10 +15,48 @@ pub fn view<'a, M: 'a>(
     opacity: f32,
     shift: f32,
 ) -> Element<'a, M> {
+    let title = i18n.format("status.songSubscriptionRequired", &[("provider", platform.short_name)]);
+    plate(mark_faded(platform, 20.0, opacity), title, daylight, width, opacity, shift)
+}
+
+/// What the sync button's read did, as the toast says it.
+#[derive(Debug, Clone, Copy)]
+pub struct SyncOutcome {
+    pub ok: bool,
+    pub signed_out: bool,
+}
+
+/// The sync button's `StatusToast`: the platform's mark, then what the read did.
+pub fn sync_view<'a, M: 'a>(
+    i18n: &I18n,
+    platform: Platform,
+    outcome: SyncOutcome,
+    daylight: bool,
+    width: f32,
+    opacity: f32,
+    shift: f32,
+) -> Element<'a, M> {
+    let key = if outcome.signed_out {
+        "status.loginExpired"
+    } else if outcome.ok {
+        "status.dataSynced"
+    } else {
+        "status.syncFailed"
+    };
+    let title = i18n.t(key).to_owned();
+    plate(mark_faded(platform, 20.0, opacity), title, daylight, width, opacity, shift)
+}
+
+fn plate<'a, M: 'a>(
+    mark: Element<'a, M>,
+    title: String,
+    daylight: bool,
+    width: f32,
+    opacity: f32,
+    shift: f32,
+) -> Element<'a, M> {
     let ink = if daylight { Color::from_rgb8(0x27, 0x27, 0x2a) } else { Color::WHITE };
     let ink = Color { a: opacity, ..ink };
-    let mark = mark_faded(platform, 20.0, opacity);
-    let title = i18n.format("status.songSubscriptionRequired", &[("provider", platform.short_name)]);
     let content = row![
         mark,
         text(title)
