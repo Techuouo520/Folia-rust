@@ -5,7 +5,7 @@ mod audio;
 mod library;
 mod signin;
 
-use folia_core::{Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
 use serde_json::Value;
 
 use crate::{
@@ -56,20 +56,33 @@ impl Provider for Spotify {
     }
 
     /// Spotify's files are encrypted on its CDN: they come whole from `audio_file`.
-    fn audio_source<'a>(&'a self, _song: &'a OnlineId) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
+    fn audio_source<'a>(
+        &'a self,
+        _song: &'a OnlineId,
+        _quality: AudioQuality,
+    ) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
         Box::pin(async { Err(OmniError::Unsupported("a direct audio address")) })
     }
 
+    /// Spotify tells only 160 and 320 kbit/s apart; anything above `high` is asked for as `high`.
+    fn audio_quality_levels(&self) -> &'static [AudioQuality] {
+        &[AudioQuality::Standard, AudioQuality::High]
+    }
+
     /// `audio`: for Premium accounts only, as Spotify allows every player but its own.
-    fn audio_file<'a>(&'a self, song: &'a OnlineId) -> Option<BoxFuture<'a, Result<AudioFile, OmniError>>> {
+    fn audio_file<'a>(
+        &'a self,
+        song: &'a OnlineId,
+        quality: AudioQuality,
+    ) -> Option<BoxFuture<'a, Result<AudioFile, OmniError>>> {
         Some(Box::pin(async move {
             let session = self.client.session().ok_or(OmniError::SignedOut)?;
             if session.user.premium == Some(false) {
                 return Err(OmniError::SubscriptionRequired);
             }
             let token = self.client.access_token(false).await?;
-            let bytes = self.player.file(&token, &song.id).await?;
-            Ok(AudioFile { bytes, extension: "ogg".to_owned() })
+            let (bytes, level) = self.player.file(&token, &song.id, quality).await?;
+            Ok(AudioFile { bytes, extension: "ogg".to_owned(), level })
         }))
     }
 

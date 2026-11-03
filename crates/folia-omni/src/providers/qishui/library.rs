@@ -4,7 +4,7 @@ use std::sync::{Mutex, PoisonError};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use folia_core::{Lyrics, Track};
+use folia_core::{AudioQuality, Lyrics, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
@@ -18,9 +18,8 @@ use crate::{
 const RECENT_ID: &str = "recent-played";
 const SCENE_PREFIX: &str = "scene-";
 const MAX_PAGES: usize = 500;
-/// Plaintext quality names and their rank; `high` is asked for.
+/// Plaintext quality names and their rank; `medium` is standard and `higher`/`highest` are high.
 const LEVELS: [(&str, u8); 5] = [("medium", 0), ("higher", 1), ("highest", 1), ("lossless", 2), ("hi_res", 3)];
-const WANTED_RANK: u8 = 1;
 
 /// `qrParams`: the car client's Douyin OAuth identity.
 fn qr_params() -> Vec<(&'static str, String)> {
@@ -255,10 +254,12 @@ async fn track_entity(client: &Client, id: &str) -> Result<Value, OmniError> {
         .ok_or(OmniError::Unavailable)
 }
 
-/// `resolveAudio`: only plaintext resources, the full song first, then the preview clip.
-pub async fn audio_source(client: &Client, id: &str) -> Result<AudioSource, OmniError> {
+/// `resolveAudio`: only plaintext resources, the full song first, then the preview clip, at the best quality no
+/// higher than the requested one.
+pub async fn audio_source(client: &Client, id: &str, quality: AudioQuality) -> Result<AudioSource, OmniError> {
     let entity = track_entity(client, id).await?;
     let player = entity.get("player_info").ok_or(OmniError::Unavailable)?;
+    let wanted = wanted_rank(quality);
     for variant in ["full", "preview"] {
         let Some(info) = player.pointer(&format!("/{variant}/video_model_info")) else { continue };
         let mut candidates: Vec<(String, u8, f64, Option<String>)> = Vec::new();
@@ -305,19 +306,39 @@ pub async fn audio_source(client: &Client, id: &str) -> Result<AudioSource, Omni
         if candidates.is_empty() {
             continue;
         }
-        let allowed: Vec<_> = candidates.iter().filter(|c| c.1 <= WANTED_RANK).cloned().collect();
+        let allowed: Vec<_> = candidates.iter().filter(|c| c.1 <= wanted).cloned().collect();
         let mut pool = if allowed.is_empty() { candidates } else { allowed };
         pool.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.total_cmp(&a.2)));
-        let Some((url, _, _, format)) = pool.into_iter().next() else { continue };
-        tracing::info!(preview = variant == "preview", "qishui plaintext audio issued");
+        let Some((url, rank, _, format)) = pool.into_iter().next() else { continue };
+        let level = level_of(rank);
+        tracing::info!(preview = variant == "preview", level = level.id(), "qishui plaintext audio issued");
         let extension = format.filter(|f| !f.is_empty()).unwrap_or_else(|| extension_of(&url));
-        return Ok(AudioSource { url, extension, preview: variant == "preview" });
+        return Ok(AudioSource { url, extension, preview: variant == "preview", level });
     }
     Err(OmniError::Unsupported("protected audio; decryption is disabled"))
 }
 
 fn rank(quality: &str) -> u8 {
     LEVELS.iter().find(|(name, _)| *name == quality).map_or(0, |(_, rank)| *rank)
+}
+
+/// The highest plaintext rank the requested level allows: `standard` takes `medium`, `high` takes `higher`/`highest`.
+fn wanted_rank(quality: AudioQuality) -> u8 {
+    match quality {
+        AudioQuality::Standard => 0,
+        AudioQuality::High | AudioQuality::Ultra => 1,
+        AudioQuality::Lossless => 2,
+        AudioQuality::Hires => 3,
+    }
+}
+
+fn level_of(rank: u8) -> AudioQuality {
+    match rank {
+        0 => AudioQuality::Standard,
+        1 => AudioQuality::High,
+        2 => AudioQuality::Lossless,
+        _ => AudioQuality::Hires,
+    }
 }
 
 /// `encrypted`: any sign of a protected resource.

@@ -3,6 +3,7 @@
 
 use std::io::Read;
 
+use folia_core::AudioQuality;
 use librespot_audio::{AudioDecrypt, AudioFile};
 use librespot_core::authentication::Credentials;
 use librespot_core::{Session, SessionConfig, SpotifyId, SpotifyUri};
@@ -13,8 +14,16 @@ use crate::OmniError;
 
 /// `OGG_LEAD_BYTES`: Spotify's header before the Ogg stream.
 const OGG_LEAD: usize = 0xa7;
-/// `BITRATES.high`: 320 kbit/s, then 160.
-const FORMATS: [AudioFileFormat; 2] = [AudioFileFormat::OGG_VORBIS_320, AudioFileFormat::OGG_VORBIS_160];
+/// `BITRATES`: `standard` is 160 kbit/s; `high` asks for 320 and falls back to 160.
+const STANDARD: [AudioFileFormat; 1] = [AudioFileFormat::OGG_VORBIS_160];
+const HIGH: [AudioFileFormat; 2] = [AudioFileFormat::OGG_VORBIS_320, AudioFileFormat::OGG_VORBIS_160];
+
+fn formats(quality: AudioQuality) -> &'static [AudioFileFormat] {
+    match quality {
+        AudioQuality::Standard => &STANDARD,
+        _ => &HIGH,
+    }
+}
 
 /// One connected session, kept while its token is the one it was opened with.
 pub struct Player {
@@ -35,18 +44,27 @@ impl Player {
         }
     }
 
-    /// The whole decrypted file of the track `id` (base62).
-    pub async fn file(&self, token: &str, id: &str) -> Result<Vec<u8>, OmniError> {
+    /// The whole decrypted file of the track `id` (base62), at `quality` or the nearest file Spotify has.
+    pub async fn file(
+        &self,
+        token: &str,
+        id: &str,
+        quality: AudioQuality,
+    ) -> Result<(Vec<u8>, AudioQuality), OmniError> {
         let session = self.connect(token).await?;
         let track_id =
             SpotifyId::from_base62(id).map_err(|err| OmniError::Response(format!("not a Spotify track: {err}")))?;
         let track = Track::get(&session, &SpotifyUri::Track { id: track_id }).await.map_err(spotify_error)?;
-        let (format, file_id) = FORMATS
+        let (format, file_id) = formats(quality)
             .iter()
             .find_map(|format| track.files.get(format).map(|file| (*format, *file)))
             .ok_or(OmniError::Unavailable)?;
         let key = session.audio_key().request(track_id, file_id).await.map_err(spotify_error)?;
-        let bitrate = if format == AudioFileFormat::OGG_VORBIS_320 { 320 } else { 160 };
+        let (bitrate, level) = if format == AudioFileFormat::OGG_VORBIS_320 {
+            (320, AudioQuality::High)
+        } else {
+            (160, AudioQuality::Standard)
+        };
         let encrypted = AudioFile::open(&session, file_id, bitrate * 1024 / 8).await.map_err(spotify_error)?;
         let bytes = tokio::task::spawn_blocking(move || {
             let mut decrypted = AudioDecrypt::new(Some(key), encrypted);
@@ -61,8 +79,8 @@ impl Player {
         } else {
             bytes.windows(4).position(|w| w == b"OggS").unwrap_or(0)
         };
-        tracing::info!(bitrate, bytes = bytes.len(), "spotify audio decrypted");
-        Ok(bytes[start..].to_vec())
+        tracing::info!(bitrate, level = level.id(), bytes = bytes.len(), "spotify audio decrypted");
+        Ok((bytes[start..].to_vec(), level))
     }
 
     /// A session connected with `token`, reused while the token stands.

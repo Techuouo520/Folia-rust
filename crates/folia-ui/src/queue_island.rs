@@ -1,4 +1,4 @@
-// The player panel's queue list (`WallToolsQueueIsland`, `WallToolsQueueRow`): virtual rows, scrolling and drag reorder.
+// The queue list shared by the wall tools island and the player panel: virtual rows, scrolling and drag reorder.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -335,6 +335,9 @@ impl QueueList {
             .on_scroll(Message::Scrolled)
             .width(Length::Fill)
             .height(Length::Fixed(list_h));
+        if !look.reorder {
+            return list.into();
+        }
         let mut face = stack![list].width(Length::Fill).height(Length::Fixed(list_h));
         if let Some(drag) = dragging {
             let y = (drag.pointer - drag.grab).clamp(-ROW / 2.0, list_h - ROW / 2.0);
@@ -355,6 +358,10 @@ pub struct Look<'a> {
     pub tokens: Tokens,
     pub ink: Color,
     pub daylight: bool,
+    /// The panel's queue keeps all three actions on the playing row; the island leaves the song where it is.
+    pub actions_on_current: bool,
+    /// The wall tools island drags its rows by a handle; the player panel's queue only scrolls.
+    pub reorder: bool,
 }
 
 /// `WallToolsQueueRow`: handle, the song (marker, title over artist), and on hover the row's actions.
@@ -368,22 +375,27 @@ fn queue_row<'a>(
 ) -> Element<'a, Message> {
     let ink = look.ink;
     let hot = !dragging && list.hover == Some(index);
-    let grip = if dragging {
-        0.0
-    } else if list.handle_hover == Some(index) {
-        0.9
-    } else if hot {
-        0.5
+    let handle: Element<'a, Message> = if look.reorder {
+        let grip = if dragging {
+            0.0
+        } else if list.handle_hover == Some(index) {
+            0.9
+        } else if hot {
+            0.5
+        } else {
+            0.0
+        };
+        mouse_area(
+            container(icon(Icon::GripVertical, 13.0, Color { a: ink.a * grip, ..ink }))
+                .center_x(Length::Fixed(HANDLE_W))
+                .center_y(Length::Fixed(32.0)),
+        )
+        .on_enter(Message::HandleHover(Some(index)))
+        .on_exit(Message::HandleHoverLeave(index))
+        .into()
     } else {
-        0.0
+        space().width(Length::Fixed(0.0)).into()
     };
-    let handle = mouse_area(
-        container(icon(Icon::GripVertical, 13.0, Color { a: ink.a * grip, ..ink }))
-            .center_x(Length::Fixed(HANDLE_W))
-            .center_y(Length::Fixed(32.0)),
-    )
-    .on_enter(Message::HandleHover(Some(index)))
-    .on_exit(Message::HandleHoverLeave(index));
     let marker =
         container(space()).width(Length::Fixed(3.0)).height(Length::Fixed(18.0)).style(move |_| container::Style {
             background: active.then_some(Background::Color(look.tokens.accent)),
@@ -417,10 +429,11 @@ fn queue_row<'a>(
     // the press first and open the song instead of the action. A Stack updates its last child first. The
     // stack stays in place when the row is not hot (an empty layer), so iced never keeps a stale action row.
     let actions = if hot {
-        // The playing row has no 「下一首播放」 and no 「移除」.
+        // The island leaves the playing row alone; the panel's queue offers every action there too.
+        let current_actions = !active || look.actions_on_current;
         let mut actions = row![].align_y(Alignment::Center);
         let lit = |which: u8| list.action_hover == Some((index, which));
-        if !active {
+        if current_actions {
             actions = actions.push(action(
                 look,
                 Icon::ListPlus,
@@ -432,7 +445,7 @@ fn queue_row<'a>(
         }
         actions =
             actions.push(action(look, Icon::ListEnd, "queue.moveToEnd", Message::MoveEnd(index), (index, 1), lit(1)));
-        if !active {
+        if current_actions {
             actions =
                 actions.push(action(look, Icon::Trash, "queue.remove", Message::Remove(index), (index, 2), lit(2)));
         }

@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use folia_core::{Repeat, Theme, Track};
+use folia_core::{AudioQuality, Repeat, Theme, Track};
 use folia_i18n::I18n;
 use folia_omni::{Account, Platform};
 use folia_render::Plate;
@@ -16,9 +16,10 @@ use lucide_static_svg::Icon;
 use crate::icons::icon;
 use crate::mode_picker;
 use crate::motion::{CSS_TRANSITION, Tween};
-use crate::panel_queue::{self, QueueList};
 use crate::platform_icon::mark_faded;
 use crate::playback;
+use crate::quality_select;
+use crate::queue_island::{self, QueueList};
 use crate::settings_kit::{self, Tokens};
 
 const OPEN_MS: f64 = 300.0;
@@ -57,11 +58,13 @@ pub enum Message {
     Close,
     Choose(Tab),
     Frame,
+    /// A click on the panel's face away from its controls.
+    FacePress,
     HandleHover(bool),
     PillHover(bool),
     /// Sets the lyric timeline offset, in milliseconds.
     Offset(i64),
-    Queue(panel_queue::Message),
+    Queue(queue_island::Message),
     Volume(f32),
     VolumeDone,
     Mute,
@@ -78,6 +81,7 @@ pub enum Message {
     Sync,
     /// The account card's sign-out.
     SignOut,
+    QualitySelect(quality_select::Message),
 }
 
 pub enum Effect {
@@ -92,6 +96,7 @@ pub enum Effect {
     Login,
     Sync,
     SignOut,
+    Quality(AudioQuality),
 }
 
 pub struct PlayerPanel {
@@ -113,6 +118,7 @@ pub struct PlayerPanel {
     /// The last tab other than the cover, whose body the panel grows to.
     body_tab: Tab,
     pickers: mode_picker::Pickers,
+    quality: quality_select::Select,
 }
 
 impl PlayerPanel {
@@ -134,6 +140,7 @@ impl PlayerPanel {
             ],
             body_tab: Tab::Controls,
             pickers: mode_picker::Pickers::new(now),
+            quality: quality_select::Select::new(now),
         }
     }
 
@@ -157,6 +164,7 @@ impl PlayerPanel {
             .chain(&self.fold)
             .any(|tween| tween.running(now))
             || (self.open && self.pickers.animating(now))
+            || self.quality.animating(now)
             || (self.open && self.tab == Tab::Queue && self.queue.animating(now))
     }
 
@@ -178,7 +186,11 @@ impl PlayerPanel {
                 Effect::None
             }
             Message::Close => {
-                self.set_open(false, now);
+                if self.quality.is_open() {
+                    self.quality.update(quality_select::Message::Close, room.quality_levels, room.quality, now);
+                } else {
+                    self.set_open(false, now);
+                }
                 Effect::None
             }
             Message::Choose(tab) => {
@@ -188,15 +200,19 @@ impl PlayerPanel {
                 self.tab = *tab;
                 self.fold_to(*tab, now);
                 self.pickers.set_open(None, now);
+                self.quality.dismiss(now);
                 Effect::None
             }
             Message::Queue(message) => {
-                let (task, change) = self.queue.update(message.clone(), room.queue);
+                let (task, change) = self.queue.update(message.clone(), room.queue, list_h);
                 let effect = match change {
-                    Some(panel_queue::Change::Jump(index)) => Effect::Playback(playback::Message::Jump(index)),
-                    Some(panel_queue::Change::MoveNext(index)) => Effect::Playback(playback::Message::MoveNext(index)),
-                    Some(panel_queue::Change::MoveEnd(index)) => Effect::Playback(playback::Message::MoveEnd(index)),
-                    Some(panel_queue::Change::Remove(index)) => Effect::Playback(playback::Message::Remove(index)),
+                    Some(queue_island::Change::Jump(index)) => Effect::Playback(playback::Message::Jump(index)),
+                    Some(queue_island::Change::MoveNext(index)) => Effect::Playback(playback::Message::MoveNext(index)),
+                    Some(queue_island::Change::MoveEnd(index)) => Effect::Playback(playback::Message::MoveEnd(index)),
+                    Some(queue_island::Change::Remove(index)) => Effect::Playback(playback::Message::Remove(index)),
+                    Some(queue_island::Change::Reorder(from, to)) => {
+                        Effect::Playback(playback::Message::Reorder(from, to))
+                    }
                     None => Effect::None,
                 };
                 return (effect, task.map(Message::Queue));
@@ -245,10 +261,22 @@ impl PlayerPanel {
                 self.set_open(false, now);
                 Effect::SignOut
             }
+            Message::QualitySelect(message) => {
+                match self.quality.update(*message, room.quality_levels, room.quality, now) {
+                    Some(level) => Effect::Quality(level),
+                    None => Effect::None,
+                }
+            }
             Message::Frame => {
                 if self.open && self.tab == Tab::Queue {
                     let task = self.queue.frame(room.queue, room.index, list_h, now);
                     return (Effect::None, task.map(Message::Queue));
+                }
+                Effect::None
+            }
+            Message::FacePress => {
+                if self.quality.is_open() {
+                    self.quality.update(quality_select::Message::Close, room.quality_levels, room.quality, now);
                 }
                 Effect::None
             }
@@ -270,7 +298,19 @@ impl PlayerPanel {
         // Always the same two layers: the handle coming and going must not rebuild the surface's widget state
         // (the queue list's scroll position).
         match surface {
-            Some(surface) => stack![surface, handle.unwrap_or_else(|| space().into())].into(),
+            Some(surface) => {
+                let mut layers = stack![];
+                if self.quality.is_open() {
+                    // A click outside the panel closes the quality menu, as the original's document listener.
+                    // It closes on release without capturing, so the same click still reaches the window buttons
+                    // and the page tabs under it.
+                    let catcher = mouse_area(container(space()).width(Length::Fill).height(Length::Fill))
+                        .on_release(Message::QualitySelect(quality_select::Message::Close));
+                    layers = layers.push(catcher);
+                }
+                layers = layers.push(surface).push(handle.unwrap_or_else(|| space().into()));
+                layers.into()
+            }
             None => handle.unwrap_or_else(|| space().into()),
         }
     }
@@ -298,6 +338,7 @@ impl PlayerPanel {
         self.handle_tone.set(goal, now);
         if !open {
             self.pickers.dismiss(now);
+            self.quality.dismiss(now);
         }
     }
 }
@@ -310,6 +351,9 @@ pub struct Room<'a> {
     pub bottom: f32,
     pub queue: &'a [Track],
     pub index: Option<usize>,
+    /// The playing platform's levels, lowest first, and the stored preference resolved for it.
+    pub quality_levels: &'static [AudioQuality],
+    pub quality: AudioQuality,
 }
 
 #[derive(Clone, Copy)]
@@ -343,6 +387,9 @@ pub struct View<'a> {
     pub account: Option<&'a Account>,
     pub account_avatar: Option<&'a iced::widget::image::Handle>,
     pub syncing: bool,
+    /// The playing platform's levels, lowest first, and the stored preference resolved for it.
+    pub quality_levels: &'static [AudioQuality],
+    pub quality: AudioQuality,
 }
 
 fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) -> Element<'a, Message> {
@@ -358,8 +405,8 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     let inner = (panel_w - 24.0).max(96.0);
     let max_h = (view.height - under - view.bottom - TOP_MARGIN).max(220.0);
     // The header and body heights move with the fold, between the cover tab and the last other tab.
-    let (big_h, _, cover_px) = measure(Tab::Cover, view.queue.len(), inner, max_h);
-    let (_, full_body, _) = measure(panel.body_tab, view.queue.len(), inner, max_h);
+    let (big_h, _, cover_px) = measure(Tab::Cover, view.queue.len(), view.account.is_some(), inner, max_h);
+    let (_, full_body, _) = measure(panel.body_tab, view.queue.len(), view.account.is_some(), inner, max_h);
     let fold =
         Fold { shape: panel.fold[0].value(now), folded: panel.fold[1].value(now), under: panel.fold[2].value(now) };
     let header_h = big_h + (FOLDED - big_h) * fold.shape;
@@ -399,7 +446,7 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     .height(Length::Fixed(y1 - y0));
     let column = Column { tab, width: panel_w, header_h, body_h, cover_px, open, fold };
     let face = mouse_area(face_column(view, tokens, column, (panel, now)))
-        .on_press(Message::Frame)
+        .on_press(Message::FacePress)
         .interaction(iced::mouse::Interaction::Idle);
     let face = container(face).width(Length::Fixed(panel_w)).height(Length::Fixed(visual_h));
     let mut picker = None;
@@ -416,12 +463,39 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
         place.origin = (visual_left - x0, visual_top - y0);
         picker = panel.pickers.picker(look, place, now);
     }
+    let mut quality = None;
+    if tab == Tab::Quality {
+        // The account block (56 signed in, 44 for a guest row), the hairline and the 44px quality row, whose
+        // trigger is 6px inside it. The menu is drawn over the face, as the mode pickers are.
+        let account_h = if view.account.is_some() { 56.0 } else { 44.0 };
+        let trigger_top = header_h + account_h + 56.0;
+        let place = quality_select::Place {
+            window_height: view.height,
+            window_top: visual_top,
+            trigger_top,
+            trigger_bottom: trigger_top + 32.0,
+            trigger_right: panel_w - 16.0,
+            origin: (visual_left - x0, visual_top - y0),
+        };
+        let look = quality_select::Look {
+            i18n: view.i18n,
+            tokens,
+            daylight: view.daylight,
+            levels: view.quality_levels,
+            value: view.quality,
+            now,
+        };
+        quality = panel.quality.menu(look, place);
+    }
     let face = container(face).padding(pad(visual_top - y0, 0.0, 0.0, visual_left - x0));
-    let patch: Element<'a, Message> = stack![plate, face]
-        .push(picker.unwrap_or_else(|| space().into()))
-        .width(Length::Fixed(x1 - x0))
-        .height(Length::Fixed(y1 - y0))
-        .into();
+    let mut layers = stack![plate, face];
+    if let Some(picker) = picker {
+        layers = layers.push(picker);
+    }
+    if let Some(quality) = quality {
+        layers = layers.push(quality);
+    }
+    let patch: Element<'a, Message> = layers.width(Length::Fixed(x1 - x0)).height(Length::Fixed(y1 - y0)).into();
     // `transformOrigin`: the handle's centre, 24px in from the surface's right and `under - 24` below it.
     let scale = 0.92 + 0.08 * open;
     let origin = iced::Vector::new(visual_right - 24.0, visual_bottom + under - 24.0);
@@ -684,7 +758,7 @@ fn tab_body<'a>(view: View<'a>, tokens: Tokens, tab: Tab, ink: Color, rows: Rows
         Tab::Controls => controls(view, tokens, ink, rows),
         Tab::Queue => queue_tab(rows.0, view, tokens, ink),
         Tab::Source => source_tab(view, tokens),
-        Tab::Quality => quality_tab(view, tokens, ink),
+        Tab::Quality => quality_tab(view, tokens, ink, &rows.0.quality, rows.1),
     }
 }
 
@@ -821,8 +895,15 @@ fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Tokens, ink: Co
     .align_y(Alignment::Center)
     .height(Length::Fixed(36.0));
     let list_h = queue_list_h(view.width, view.height, view.bottom, panel.chrome, view.queue.len());
-    let look = panel_queue::Look { i18n: view.i18n, tokens, ink };
-    let list = panel.queue.view(look, view.queue, view.index, list_h).map(Message::Queue);
+    let look = queue_island::Look {
+        i18n: view.i18n,
+        tokens,
+        ink,
+        daylight: view.daylight,
+        actions_on_current: true,
+        reorder: false,
+    };
+    let list = panel.queue.view(look, view.queue, view.index, list_h, Instant::now()).map(Message::Queue);
     column![head, list].spacing(0).into()
 }
 
@@ -959,7 +1040,13 @@ fn segment<'a>(tokens: Tokens, label: &'a str, chosen: bool, disabled: bool) -> 
         .into()
 }
 
-fn quality_tab<'a>(view: View<'a>, tokens: Tokens, ink: Color) -> Element<'a, Message> {
+fn quality_tab<'a>(
+    view: View<'a>,
+    tokens: Tokens,
+    ink: Color,
+    select: &'a quality_select::Select,
+    now: Instant,
+) -> Element<'a, Message> {
     let account = match (view.platform, view.account) {
         (Some(platform), Some(account)) => account_card(view, platform, account, tokens, ink),
         _ => labeled(
@@ -971,21 +1058,18 @@ fn quality_tab<'a>(view: View<'a>, tokens: Tokens, ink: Color) -> Element<'a, Me
     let sync: Element<'a, Message> = if view.account.is_some() {
         let label = if view.syncing { view.i18n.t("account.syncing") } else { view.i18n.t("account.syncData") };
         let button = action_button(tokens, Icon::RefreshCw, label, (!view.syncing).then_some(Message::Sync));
-        container(button).padding(pad(4.0, 4.0, 4.0, 4.0)).into()
+        container(button).padding(pad(8.0, 4.0, 8.0, 4.0)).into()
     } else {
         space().height(0).into()
     };
+    let line = container(hairline(tokens)).padding(pad(8.0, 4.0, 8.0, 4.0));
     column![
         account,
-        hairline(tokens),
-        labeled(
-            ink,
-            view.i18n.t("account.audioQuality"),
-            text(view.i18n.t("account.qualityStandard")).size(13).color(Color { a: 0.4 * ink.a, ..tokens.t2 }).into(),
-        ),
+        line,
+        labeled(ink, view.i18n.t("account.audioQuality"), select.trigger(view.i18n, tokens, ink, view.quality, now)),
         sync,
     ]
-    .spacing(4)
+    .spacing(0)
     .into()
 }
 
@@ -1056,7 +1140,7 @@ fn account_card<'a>(
         icon_btn(Icon::LogOut, 17.0, 32.0, ink, None, view.i18n.t("account.logout").to_owned(), Some(Message::SignOut));
     container(row![picture, words, space().width(Length::Fill), logout].spacing(12).align_y(Alignment::Center))
         .height(Length::Fixed(56.0))
-        .padding(pad(4.0, 4.0, 4.0, 4.0))
+        .padding(pad(4.0, 0.0, 4.0, 4.0))
         .into()
 }
 
@@ -1367,7 +1451,7 @@ fn shown_tab(tab: Tab, local: bool, online: bool) -> Tab {
     if tab == Tab::Source && !local && !online { Tab::Cover } else { tab }
 }
 
-fn measure(tab: Tab, queue_len: usize, inner: f32, max_h: f32) -> (f32, f32, f32) {
+fn measure(tab: Tab, queue_len: usize, signed: bool, inner: f32, max_h: f32) -> (f32, f32, f32) {
     let under = 14.0 + 26.0 + 20.0 + 18.0 + 14.0 + 32.0;
     let room = (max_h - 24.0 - 12.0 - 36.0).max(under + 96.0);
     let cover_px = (room - under).clamp(96.0, inner);
@@ -1376,14 +1460,22 @@ fn measure(tab: Tab, queue_len: usize, inner: f32, max_h: f32) -> (f32, f32, f32
     }
     let body = match tab {
         Tab::Controls => 460.0,
-        Tab::Queue => 36.0 + panel_queue::list_height(queue_len),
+        Tab::Queue => 36.0 + queue_island::list_height(queue_len),
         Tab::Source => 210.0,
-        Tab::Quality => 164.0,
+        Tab::Quality => quality_body(signed),
         Tab::Cover => 0.0,
     };
     let chrome = 24.0 + 48.0 + body + 12.0 + 36.0;
     let body = if chrome > max_h { (body - (chrome - max_h)).max(48.0) } else { body };
     (48.0, 12.0 + 1.0 + 8.0 + body, cover_px)
+}
+
+/// `AccountTab`: the account block, the group line's 8px above and below, the 44px quality row and the
+/// 48px sync row.
+fn quality_body(signed: bool) -> f32 {
+    let account = if signed { 56.0 } else { 44.0 };
+    let sync = if signed { 48.0 } else { 0.0 };
+    account + 17.0 + 44.0 + sync
 }
 
 /// The queue list's height: what `measure` leaves the queue tab under its 36px head.
@@ -1392,9 +1484,8 @@ fn queue_list_h(width: f32, height: f32, bottom: f32, chrome: bool, len: usize) 
     let panel_w = (width - 32.0).clamp(200.0, 360.0);
     let inner = (panel_w - 24.0).max(96.0);
     let max_h = (height - under - bottom - TOP_MARGIN).max(220.0);
-    let (_, body, _) = measure(Tab::Queue, len, inner, max_h);
-    let floor = (len as f32 * panel_queue::ROW).clamp(panel_queue::ROW, panel_queue::MIN_LIST);
-    (body - 21.0 - 36.0).max(floor)
+    let (_, body, _) = measure(Tab::Queue, len, false, inner, max_h);
+    queue_island::list_height(len).min((body - 21.0 - 36.0).max(0.0))
 }
 
 fn tokens_of(view: &View<'_>) -> Tokens {

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use folia_core::{Lyrics, Queue, Repeat, Track};
+use folia_core::{AudioQuality, Lyrics, Queue, Repeat, Track};
 use folia_omni::{Collection, Omni};
 use folia_player::{Player, PlayerState, Status};
 use folia_store::{PlaybackSettings, Store};
@@ -54,6 +54,8 @@ pub enum Message {
     LyricOffset(f64),
     VolumeDone,
     CycleRepeat,
+    /// Sets the default quality for later loads; the current song keeps playing.
+    Quality(AudioQuality),
     /// Plays the queue item at `index`.
     Jump(usize),
     /// Removes the queue item at `index`. Removing the current item starts whatever takes its place.
@@ -252,6 +254,10 @@ impl Playback {
                 }
                 save(store, &self.settings)
             }
+            Message::Quality(quality) => {
+                self.settings.audio_quality = quality;
+                save(store, &self.settings)
+            }
             Message::Jump(index) => {
                 if self.queue.select(index).is_some() {
                     self.start_current()
@@ -437,7 +443,8 @@ impl Playback {
                 }),
             )
         });
-        let audio = Task::perform(async move { omni.fetch_audio(&online).await }, move |result| {
+        let quality = self.settings.audio_quality;
+        let audio = Task::perform(async move { omni.fetch_audio(&online, quality).await }, move |result| {
             Message::AudioReady(
                 request,
                 id,

@@ -3,7 +3,7 @@
 mod api;
 mod library;
 
-use folia_core::{Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
 use serde_json::Value;
 
 use crate::{
@@ -41,8 +41,12 @@ impl Provider for Bodian {
         Box::pin(library::search(&self.client, query, limit, offset))
     }
 
-    fn audio_source<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
-        Box::pin(library::audio_source(&self.client, &song.id))
+    fn audio_source<'a>(
+        &'a self,
+        song: &'a OnlineId,
+        quality: AudioQuality,
+    ) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
+        Box::pin(library::audio_source(&self.client, &song.id, quality))
     }
 
     fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>> {

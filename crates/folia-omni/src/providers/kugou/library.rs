@@ -1,6 +1,6 @@
 // KuGou's catalogue and the signed-in account's library: search, song URLs, lists, albums and the radio cards.
 
-use folia_core::Track;
+use folia_core::{AudioQuality, Track};
 use serde_json::{Value, json};
 
 use super::gateway::{self, ANDROID_SALT, Body, Client, Request};
@@ -25,8 +25,28 @@ const CARDS: [(u32, &str); 6] = [
     (3005, "潮流尝鲜"),
 ];
 const CARD_PREFIX: &str = "card-";
-/// `qualityValue` for `high` and its fallbacks.
-const QUALITIES: [&str; 2] = ["320", "128"];
+/// `qualityValue` and the level a file of that quality actually is.
+type Quality = (&'static str, AudioQuality);
+const STANDARD: [Quality; 1] = [("128", AudioQuality::Standard)];
+const HIGH: [Quality; 2] = [("320", AudioQuality::High), ("128", AudioQuality::Standard)];
+const LOSSLESS: [Quality; 3] =
+    [("flac", AudioQuality::Lossless), ("320", AudioQuality::High), ("128", AudioQuality::Standard)];
+const HIRES: [Quality; 4] = [
+    ("high", AudioQuality::Hires),
+    ("flac", AudioQuality::Lossless),
+    ("320", AudioQuality::High),
+    ("128", AudioQuality::Standard),
+];
+
+/// `QUALITY_FALLBACKS`, lowest last. KuGou is never asked at `ultra`; `high` stands in for it.
+fn fallbacks(quality: AudioQuality) -> &'static [Quality] {
+    match quality {
+        AudioQuality::Standard => &STANDARD,
+        AudioQuality::High | AudioQuality::Ultra => &HIGH,
+        AudioQuality::Lossless => &LOSSLESS,
+        AudioQuality::Hires => &HIRES,
+    }
+}
 
 type Remembered = std::sync::Mutex<std::collections::VecDeque<String>>;
 
@@ -138,25 +158,25 @@ fn total_of(answer: &Value) -> Option<u64> {
 }
 
 /// `getAudioSource`: each quality, by the song's album ids and then by hash alone, then the old mobile endpoint.
-pub async fn audio_source(client: &Client, key: SongKey) -> Result<AudioSource, OmniError> {
+pub async fn audio_source(client: &Client, key: SongKey, quality: AudioQuality) -> Result<AudioSource, OmniError> {
     let mut first_failure = None;
     let has_ids = !key.album_id.is_empty() || !key.album_audio_id.is_empty();
-    'qualities: for quality in QUALITIES {
+    'qualities: for &(value, level) in fallbacks(quality) {
         let variants: &[bool] = if has_ids { &[true, false] } else { &[false] };
         for &with_ids in variants {
             let (album_id, album_audio_id) =
                 if with_ids { (key.album_id.as_str(), key.album_audio_id.as_str()) } else { ("", "") };
-            match client.call(|| song_url(&key.hash, quality, album_id, album_audio_id)).await {
+            match client.call(|| song_url(&key.hash, value, album_id, album_audio_id)).await {
                 Ok(answer) => {
                     let data = data_of(&answer);
                     let payload = data.as_array().and_then(|rows| rows.first()).unwrap_or(data);
                     let url = ["play_url", "playUrl", "url"].iter().find_map(|name| audio_url(payload.get(*name)?));
                     if let Some(url) = url {
-                        tracing::info!(quality, with_ids, "kugou song url resolved");
+                        tracing::info!(quality = value, level = level.id(), with_ids, "kugou song url resolved");
                         let extension = extension_of(&url, payload);
-                        return Ok(AudioSource { url, extension, preview: false });
+                        return Ok(AudioSource { url, extension, preview: false, level });
                     }
-                    tracing::warn!(quality, with_ids, status = ?payload.get("status"), "kugou answered no url");
+                    tracing::warn!(quality = value, with_ids, status = ?payload.get("status"), "kugou answered no url");
                 }
                 Err(OmniError::SignedOut) => return Err(OmniError::SignedOut),
                 Err(OmniError::Http(err)) if err.is_timeout() => {
@@ -164,7 +184,12 @@ pub async fn audio_source(client: &Client, key: SongKey) -> Result<AudioSource, 
                     break 'qualities;
                 }
                 Err(err) => {
-                    tracing::warn!(quality, with_ids, error = &err as &dyn std::error::Error, "kugou song url failed");
+                    tracing::warn!(
+                        quality = value,
+                        with_ids,
+                        error = &err as &dyn std::error::Error,
+                        "kugou song url failed"
+                    );
                     first_failure.get_or_insert(err);
                 }
             }
@@ -174,7 +199,7 @@ pub async fn audio_source(client: &Client, key: SongKey) -> Result<AudioSource, 
         Ok(Some(url)) => {
             tracing::info!("kugou song url resolved by the legacy endpoint");
             let extension = extension_of(&url, &Value::Null);
-            return Ok(AudioSource { url, extension, preview: false });
+            return Ok(AudioSource { url, extension, preview: false, level: AudioQuality::Standard });
         }
         Ok(None) => {}
         Err(err) => {

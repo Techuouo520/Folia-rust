@@ -5,7 +5,7 @@ mod login;
 mod musicu;
 mod qrc;
 
-use folia_core::{Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
 use serde_json::Value;
 
 use crate::{
@@ -56,8 +56,12 @@ impl Provider for Qq {
         Box::pin(library::search(&self.client, &self.anonymous, query, limit, offset))
     }
 
-    fn audio_source<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
-        Box::pin(library::audio_source(&self.client, SongKey::parse(&song.id)))
+    fn audio_source<'a>(
+        &'a self,
+        song: &'a OnlineId,
+        quality: AudioQuality,
+    ) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
+        Box::pin(library::audio_source(&self.client, SongKey::parse(&song.id), quality))
     }
 
     fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>> {

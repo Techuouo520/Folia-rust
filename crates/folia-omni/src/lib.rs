@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use folia_core::{Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, Lyrics, OnlineId, Track, UNLISTED_AUDIO_QUALITY_LEVELS};
 
 pub use qr::LoginQr;
 
@@ -63,6 +63,8 @@ pub struct AudioSource {
     pub extension: String,
     /// The platform only gave a preview clip, not the whole song.
     pub preview: bool,
+    /// The level the platform actually gave, which is lower than the one asked for when it fell back.
+    pub level: AudioQuality,
 }
 
 /// A song's whole file as the platform hands it out, decrypted.
@@ -71,6 +73,8 @@ pub struct AudioFile {
     pub bytes: Vec<u8>,
     /// File extension, such as `ogg`.
     pub extension: String,
+    /// The level the platform actually gave.
+    pub level: AudioQuality,
 }
 
 /// One platform the original lists in its sign-in window, with its mark: a letter on a colour.
@@ -227,10 +231,22 @@ pub trait Provider: Send + Sync {
         limit: u32,
         offset: u32,
     ) -> BoxFuture<'a, Result<Page<Track>, OmniError>>;
-    fn audio_source<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<AudioSource, OmniError>>;
+    /// The levels this platform tells apart, lowest first; without one it is `UNLISTED_AUDIO_QUALITY_LEVELS`.
+    fn audio_quality_levels(&self) -> &'static [AudioQuality] {
+        &UNLISTED_AUDIO_QUALITY_LEVELS
+    }
+    fn audio_source<'a>(
+        &'a self,
+        song: &'a OnlineId,
+        quality: AudioQuality,
+    ) -> BoxFuture<'a, Result<AudioSource, OmniError>>;
     /// The song's file when the platform hands it out itself (decrypted) instead of at an address; `None` for
     /// platforms whose `audio_source` is downloaded.
-    fn audio_file<'a>(&'a self, _song: &'a OnlineId) -> Option<BoxFuture<'a, Result<AudioFile, OmniError>>> {
+    fn audio_file<'a>(
+        &'a self,
+        _song: &'a OnlineId,
+        _quality: AudioQuality,
+    ) -> Option<BoxFuture<'a, Result<AudioFile, OmniError>>> {
         None
     }
     fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>>;
@@ -397,32 +413,53 @@ impl Omni {
         self.provider(provider).is_ok_and(|found| found.has_daily_songs())
     }
 
+    /// The levels `provider` tells apart, lowest first; empty when it is not compiled in.
+    pub fn audio_quality_levels(&self, provider: &str) -> &'static [AudioQuality] {
+        self.provider(provider).map_or(&[], |found| found.audio_quality_levels())
+    }
+
+    /// The level `preference` means to `provider` (`audioQualityFor`): the nearest level it lists at or below, or its
+    /// lowest where it lists none below.
+    pub fn resolve_audio_quality(&self, provider: &str, preference: AudioQuality) -> AudioQuality {
+        resolve_quality(self.audio_quality_levels(provider), preference)
+    }
+
     pub async fn explore(&self, provider: &str) -> Result<Vec<ExploreSection>, OmniError> {
         self.provider(provider)?.explore().await
     }
 
-    /// Downloads the song once into the cache and returns the file to play.
-    pub async fn fetch_audio(&self, song: &OnlineId) -> Result<PathBuf, OmniError> {
+    /// Downloads the song once into the cache at the resolved level and returns the file to play. Cached files are
+    /// kept under the level asked for, so a platform that falls back to a lower one is found again next time; a file
+    /// from before levels were recorded plays for any preference, and a preview is never reused.
+    pub async fn fetch_audio(&self, song: &OnlineId, preference: AudioQuality) -> Result<PathBuf, OmniError> {
+        let provider = self.provider(&song.provider)?;
+        let level = resolve_quality(provider.audio_quality_levels(), preference);
         let dir = self.cache_dir.join("audio");
         let stem = format!("{}-{}", song.provider, song.id);
-        if let Some(cached) = cached_file(&dir, &stem) {
+        let cache_stem = format!("{stem}-{}", level.id());
+        if let Some(cached) = cached_file(&dir, &cache_stem) {
             return Ok(cached);
         }
+        if let Some(legacy) = cached_file(&dir, &stem) {
+            tracing::info!(song = %stem, "audio cached before levels is reused");
+            return Ok(legacy);
+        }
 
-        let provider = self.provider(&song.provider)?;
-        if let Some(file) = provider.audio_file(song) {
-            let AudioFile { bytes, extension } = file.await?;
-            let path = dir.join(format!("{stem}.{extension}"));
+        if let Some(file) = provider.audio_file(song, level) {
+            let AudioFile { bytes, extension, level: delivered } = file.await?;
+            let path = dir.join(format!("{cache_stem}.{extension}"));
             let io_err = |source| OmniError::Io { path: path.clone(), source };
             std::fs::create_dir_all(&dir).map_err(io_err)?;
             let partial = path.with_extension("part");
             std::fs::write(&partial, &bytes).map_err(io_err)?;
             std::fs::rename(&partial, &path).map_err(io_err)?;
-            tracing::info!(song = %stem, bytes = bytes.len(), "audio cached from the platform");
+            tracing::info!(song = %stem, level = delivered.id(), bytes = bytes.len(), "audio cached from the platform");
             return Ok(path);
         }
-        let source = provider.audio_source(song).await?;
-        let path = dir.join(format!("{stem}.{}", source.extension));
+        let source = provider.audio_source(song, level).await?;
+        // A preview would stand in for the whole song once the account may play it, so it gets a name never looked up.
+        let name = if source.preview { format!("{cache_stem}-preview") } else { cache_stem };
+        let path = dir.join(format!("{name}.{}", source.extension));
         let io_err = |source| OmniError::Io { path: path.clone(), source };
         std::fs::create_dir_all(&dir).map_err(io_err)?;
         let mut response = self.http.get(&source.url).send().await?.error_for_status()?;
@@ -433,7 +470,13 @@ impl Omni {
         }
         std::fs::write(&partial, &bytes).map_err(io_err)?;
         std::fs::rename(&partial, &path).map_err(io_err)?;
-        tracing::info!(song = %stem, bytes = bytes.len(), preview = source.preview, "audio cached");
+        tracing::info!(
+            song = %stem,
+            level = source.level.id(),
+            bytes = bytes.len(),
+            preview = source.preview,
+            "audio cached"
+        );
         Ok(path)
     }
 
@@ -480,6 +523,17 @@ pub fn cover_cache_key(url: &str) -> String {
 
 fn https(url: &str) -> String {
     url.strip_prefix("http://").map(|rest| format!("https://{rest}")).unwrap_or_else(|| url.to_owned())
+}
+
+/// The nearest level a provider lists at or below `preference`, or its lowest.
+fn resolve_quality(levels: &[AudioQuality], preference: AudioQuality) -> AudioQuality {
+    levels
+        .iter()
+        .rev()
+        .copied()
+        .find(|level| *level <= preference)
+        .or_else(|| levels.first().copied())
+        .unwrap_or(AudioQuality::Standard)
 }
 
 /// A finished download of `stem` in any format.

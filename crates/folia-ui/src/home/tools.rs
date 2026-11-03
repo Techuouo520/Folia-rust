@@ -250,8 +250,14 @@ fn island_face<'a>(home: &'a HomeChrome, host: &Host<'a>, geo: &Geometry, now: I
             .align_y(Alignment::Center)
             .into()
     } else {
-        let look =
-            queue_island::Look { i18n: host.i18n, tokens: host.tokens.faded(alpha), ink, daylight: host.daylight };
+        let look = queue_island::Look {
+            i18n: host.i18n,
+            tokens: host.tokens.faded(alpha),
+            ink,
+            daylight: host.daylight,
+            actions_on_current: false,
+            reorder: true,
+        };
         home.queue.view(look, host.queue, host.queue_index, geo.list_h, now).map(Message::ToolsQueue)
     };
     let body = column![island_header(home, host, alpha, count), list].width(Length::Fill).height(Length::Fill);

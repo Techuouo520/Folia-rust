@@ -2,7 +2,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use folia_core::{Lyrics, Track};
+use folia_core::{AudioQuality, Lyrics, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
@@ -17,8 +17,30 @@ use crate::{
 const MAX_KEYWORD: usize = 60;
 const MAX_PAGE: u32 = 20;
 const ANONYMOUS_KEPT: usize = 100;
-/// `QQ_QUALITY_FALLBACKS.high`: the file prefix and extension of each tier.
-const TIERS: [(&str, &str); 2] = [("M800", "mp3"), ("M500", "mp3")];
+/// `QQ_QUALITY_FALLBACKS`: the file prefix, extension and level of each tier, best first.
+type Tier = (&'static str, &'static str, AudioQuality);
+const STANDARD_TIERS: [Tier; 1] = [("M500", "mp3", AudioQuality::Standard)];
+const HIGH_TIERS: [Tier; 2] = [("M800", "mp3", AudioQuality::High), ("M500", "mp3", AudioQuality::Standard)];
+const LOSSLESS_TIERS: [Tier; 3] = [
+    ("F000", "flac", AudioQuality::Lossless),
+    ("M800", "mp3", AudioQuality::High),
+    ("M500", "mp3", AudioQuality::Standard),
+];
+const HIRES_TIERS: [Tier; 3] = [
+    ("F000", "flac", AudioQuality::Lossless),
+    ("M800", "mp3", AudioQuality::High),
+    ("M500", "mp3", AudioQuality::Standard),
+];
+
+/// `QQ_QUALITY_FALLBACKS`; `ultra` is never asked of QQ (`high` stands in for it).
+fn tiers(quality: AudioQuality) -> &'static [Tier] {
+    match quality {
+        AudioQuality::Standard => &STANDARD_TIERS,
+        AudioQuality::High | AudioQuality::Ultra => &HIGH_TIERS,
+        AudioQuality::Lossless => &LOSSLESS_TIERS,
+        AudioQuality::Hires => &HIRES_TIERS,
+    }
+}
 const FAVORITE_LIMIT: u64 = 1000;
 const FAVORITE_PAGE: u64 = 100;
 const SONG_LIST_PAGE: u64 = 1000;
@@ -113,15 +135,15 @@ fn search_page(data: &Value) -> Page<Track> {
     Page { items: tracks(data.pointer("/body/item_song")), total }
 }
 
-/// `getAudioSource`: 320 then 128; signed in through `UrlGetVkey`, as a guest through the web's `CgiGetVkey`.
-pub async fn audio_source(client: &Client, key: SongKey) -> Result<AudioSource, OmniError> {
+/// `getAudioSource`: each tier in turn; signed in through `UrlGetVkey`, as a guest through the web's `CgiGetVkey`.
+pub async fn audio_source(client: &Client, key: SongKey, quality: AudioQuality) -> Result<AudioSource, OmniError> {
     if key.mid.is_empty() {
         return Err(OmniError::Response("QQ song has no songmid".to_owned()));
     }
     let media = if key.media_mid.is_empty() { key.mid.clone() } else { key.media_mid.clone() };
     let signed_in = client.credential().is_some();
     let mut failure = None;
-    for (prefix, extension) in TIERS {
+    for (prefix, extension, level) in tiers(quality) {
         let filename = format!("{prefix}{}{media}.{extension}", key.mid);
         let answer = if signed_in {
             signed_vkey(client, &filename, &key.mid).await
@@ -141,8 +163,8 @@ pub async fn audio_source(client: &Client, key: SongKey) -> Result<AudioSource, 
                     .and_then(|row| text(row, &["purl"]));
                 if let Some(purl) = purl {
                     let url = format!("{}{purl}", stream_domain(&data));
-                    tracing::info!(prefix, signed_in, "qq play link resolved");
-                    return Ok(AudioSource { url, extension: extension.to_owned(), preview: false });
+                    tracing::info!(prefix, level = level.id(), signed_in, "qq play link resolved");
+                    return Ok(AudioSource { url, extension: (*extension).to_owned(), preview: false, level: *level });
                 }
                 tracing::warn!(prefix, "qq gave an empty play link");
             }

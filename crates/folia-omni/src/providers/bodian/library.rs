@@ -2,7 +2,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use folia_core::{Lyrics, Track};
+use folia_core::{AudioQuality, Lyrics, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
@@ -41,8 +41,9 @@ pub async fn search(client: &Client, query: &str, limit: u32, offset: u32) -> Re
     Ok(Page { items: tracks(Some(rows)), total: data.get("total").and_then(Value::as_u64) })
 }
 
-/// `audio`: `checkRight`, then the 320k `audioUrl`; a preview (`status` 3) plays its audition clip.
-pub async fn audio_source(client: &Client, id: &str) -> Result<AudioSource, OmniError> {
+/// `audio`: `checkRight`, then the requested quality's `audioUrl`; a preview (`status` 3) plays its audition clip at
+/// the standard level.
+pub async fn audio_source(client: &Client, id: &str, quality: AudioQuality) -> Result<AudioSource, OmniError> {
     let music_id: u64 = id.parse().map_err(|_| OmniError::Response(format!("not a Bodian id: {id}")))?;
     let body = json!({ "musicId": music_id, "freeSign": "" });
     let call = Call {
@@ -57,20 +58,21 @@ pub async fn audio_source(client: &Client, id: &str) -> Result<AudioSource, Omni
         Some(3) => {
             let preview = right.get("audition").unwrap_or(&Value::Null);
             let url = text(preview, &["https", "url"]).ok_or(OmniError::Unavailable)?;
-            return Ok(AudioSource { url, extension: "mp3".to_owned(), preview: true });
+            return Ok(AudioSource { url, extension: "mp3".to_owned(), preview: true, level: AudioQuality::Standard });
         }
         Some(7) | None if client.session().signed_in() => return Err(OmniError::Unavailable),
         Some(7) | None => return Err(OmniError::SignedOut),
         Some(_) => {}
     }
+    let (format, br, level) = quality_format(quality);
     let device = client.session().device_id;
-    let body = json!({ "devId": device, "musicId": music_id, "format": "mp3", "br": "320kmp3", "freeSign": "" });
+    let body = json!({ "devId": device, "musicId": music_id, "format": format, "br": br, "freeSign": "" });
     let call = Call {
         params: vec![
             ("devId", device),
             ("musicId", id.to_owned()),
-            ("format", "mp3".to_owned()),
-            ("br", "320kmp3".to_owned()),
+            ("format", format.to_owned()),
+            ("br", br.to_owned()),
             ("freeSign", String::new()),
         ],
         body: Some(body),
@@ -82,7 +84,18 @@ pub async fn audio_source(client: &Client, id: &str) -> Result<AudioSource, Omni
     let url = text(data, &["audioHttpsUrl", "audioUrl"])
         .filter(|url| url.starts_with("https://") || url.starts_with("http://"));
     let url = url.ok_or_else(|| OmniError::Response("Bodian returned an invalid audio URL".to_owned()))?;
-    Ok(AudioSource { url, extension: "mp3".to_owned(), preview: false })
+    Ok(AudioSource { url, extension: format.to_owned(), preview: false, level })
+}
+
+/// The package's `QUALITIES`: `format`, `br` and the level the file really is; Hi-Res is served as lossless.
+fn quality_format(quality: AudioQuality) -> (&'static str, &'static str, AudioQuality) {
+    match quality {
+        AudioQuality::Standard => ("mp3", "128kmp3", AudioQuality::Standard),
+        AudioQuality::High => ("mp3", "320kmp3", AudioQuality::High),
+        AudioQuality::Ultra | AudioQuality::Lossless | AudioQuality::Hires => {
+            ("flac", "2000kflac", AudioQuality::Lossless)
+        }
+    }
 }
 
 /// `lyrics` with `parseBodianLyrics`: the word timing decoded and read as KRC, else the plain LRC.

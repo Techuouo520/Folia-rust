@@ -5,7 +5,7 @@ mod eapi;
 mod explore;
 mod library;
 
-use folia_core::{Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
 use folia_lyrics::Format;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -17,8 +17,6 @@ use crate::{
 };
 
 const ID: &str = "netease";
-/// `getSongUrl`'s default level: VIP songs get a signed URL only at `exhigh` or above.
-const LEVEL: &str = "exhigh";
 
 pub struct Netease {
     client: eapi::Client,
@@ -131,10 +129,14 @@ impl Provider for Netease {
         })
     }
 
-    fn audio_source<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
+    fn audio_source<'a>(
+        &'a self,
+        song: &'a OnlineId,
+        quality: AudioQuality,
+    ) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
         Box::pin(async move {
             // `song_url_v1`, as `getSongUrl` asks for it.
-            let params = json!({ "ids": format!("[{}]", song.id), "level": LEVEL, "encodeType": "flac" });
+            let params = json!({ "ids": format!("[{}]", song.id), "level": level(quality), "encodeType": "flac" });
             let response: UrlResponse = self.post("/api/song/enhance/player/url/v1", params).await?;
             let entry = response.data.into_iter().next().ok_or(OmniError::Unavailable)?;
             let failure = if entry.code == Some(-110) && entry.fee == Some(1) {
@@ -144,7 +146,12 @@ impl Provider for Netease {
             };
             let url = entry.url.filter(|url| !url.is_empty()).ok_or(failure)?;
             let extension = entry.kind.map(|kind| kind.to_ascii_lowercase()).unwrap_or_else(|| "mp3".to_owned());
-            Ok(AudioSource { url, extension, preview: entry.free_trial.is_some_and(|info| !info.is_null()) })
+            Ok(AudioSource {
+                url,
+                extension,
+                preview: entry.free_trial.is_some_and(|info| !info.is_null()),
+                level: quality,
+            })
         })
     }
 
@@ -300,4 +307,13 @@ fn collection(row: &Value, kind: CollectionKind) -> Option<Collection> {
 
 fn https(url: String) -> String {
     url.strip_prefix("http://").map(|rest| format!("https://{rest}")).unwrap_or(url)
+}
+
+/// `getSongUrl`'s `level` for each quality (`mapQuality`).
+fn level(quality: AudioQuality) -> &'static str {
+    match quality {
+        AudioQuality::Standard => "standard",
+        AudioQuality::High => "exhigh",
+        other => other.id(),
+    }
 }

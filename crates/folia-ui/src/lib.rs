@@ -19,7 +19,6 @@ mod online;
 mod overlay;
 mod page_fade;
 mod panel;
-mod panel_queue;
 mod platform_highlight;
 mod platform_icon;
 mod platform_rows;
@@ -29,6 +28,7 @@ mod player_bar;
 mod positioner;
 mod poster;
 mod poster_motion;
+mod quality_select;
 mod queue_island;
 mod search;
 mod settings;
@@ -59,7 +59,7 @@ pub use wall_shift::{Kind as ShiftKind, Pose as ShiftPose, Shift as WallShift};
 
 use std::path::PathBuf;
 
-use folia_core::{Language, LanguagePreference, Lyrics, Theme, Track};
+use folia_core::{AudioQuality, Language, LanguagePreference, Lyrics, Theme, Track};
 use folia_i18n::I18n;
 use folia_omni::Omni;
 use folia_store::{AppearanceSettings, FrameRate, GeneralSettings, PlaybackSettings, Store, ThemeMode};
@@ -77,6 +77,8 @@ use crate::search::SearchPage;
 pub const INITIAL_WINDOW: Size = Size::new(1200.0, 800.0);
 /// The smallest window folia-app allows; anything reported below it is a minimized window.
 pub const MIN_WINDOW_SIZE: Size = Size::new(350.0, 100.0);
+/// Shown when there is no online platform, or one that was never built in.
+const STANDARD_ONLY: &[AudioQuality] = &[AudioQuality::Standard];
 
 /// Everything the app reads before the window opens.
 #[derive(Clone)]
@@ -348,12 +350,15 @@ impl Shell {
         self.bar.set_forced(self.positioning.is_some());
         self.bar.sync(&self.playback, self.window_size.width, now);
         self.bar.set_shown(self.chrome_visible(), now);
+        let (quality_levels, quality) = self.audio_quality();
         let room = panel::Room {
             width: self.window_size.width,
             height: self.window_size.height,
             bottom: self.bar_offset(),
             queue: self.playback.queue.items(),
             index: self.playback.queue.current_index(),
+            quality_levels,
+            quality,
         };
         self.panel.follow(room);
         // The focus card stays above the player bar's safe area (`getBottomInset`) and knows what is playing.
@@ -697,6 +702,17 @@ impl Shell {
             .map_or_else(|| self.library.online.provider(), |platform| platform.id)
     }
 
+    /// The playing platform's levels and the stored preference resolved for it; `standard` alone without a platform.
+    fn audio_quality(&self) -> (&'static [AudioQuality], AudioQuality) {
+        let provider = self.playing_provider();
+        let Some(omni) = &self.omni else { return (STANDARD_ONLY, AudioQuality::Standard) };
+        let levels = omni.audio_quality_levels(provider);
+        if levels.is_empty() {
+            return (STANDARD_ONLY, AudioQuality::Standard);
+        }
+        (levels, omni.resolve_audio_quality(provider, self.playback.settings.audio_quality))
+    }
+
     /// Another platform takes over: the player empties, as a sign-out does, since its songs belong to the old one.
     fn leave_provider(&mut self) -> Task<Message> {
         self.playback.clear();
@@ -816,6 +832,18 @@ impl Shell {
         let Some(id) = self.window else {
             return iced::window::oldest().map(Message::WindowReady);
         };
+        // The title bar sits above the panel, so its presses never reach the panel's outside-click layer.
+        if matches!(
+            &message,
+            chrome::Message::DragArm
+                | chrome::Message::Resize(_)
+                | chrome::Message::Minimize
+                | chrome::Message::ToggleMaximize
+                | chrome::Message::ToggleFullscreen
+                | chrome::Message::Close
+        ) {
+            let _ = self.panel(panel::Message::QualitySelect(quality_select::Message::Close));
+        }
         match message {
             chrome::Message::Drag => iced::window::drag(id),
             chrome::Message::DragArm => {
@@ -992,6 +1020,7 @@ impl Shell {
                 online::AccountState::SignedIn(account) => Some(account),
                 _ => None,
             };
+            let (quality_levels, quality) = self.audio_quality();
             let panel_view = panel::View {
                 i18n: &self.i18n,
                 theme: &self.theme,
@@ -1017,6 +1046,8 @@ impl Shell {
                 account,
                 account_avatar: self.library.online.avatar_for(provider),
                 syncing: self.library.online.syncing(provider),
+                quality_levels,
+                quality,
             };
             frame = frame.push(self.panel.view(panel_view, std::time::Instant::now()).map(Message::Panel));
         }
@@ -1485,12 +1516,15 @@ impl Shell {
 
     fn panel(&mut self, message: panel::Message) -> Task<Message> {
         let style = self.appearance.visualizer.clone();
+        let (quality_levels, quality) = self.audio_quality();
         let room = panel::Room {
             width: self.window_size.width,
             height: self.window_size.height,
             bottom: self.bar_offset(),
             queue: self.playback.queue.items(),
             index: self.playback.queue.current_index(),
+            quality_levels,
+            quality,
         };
         let (effect, scroll) = self.panel.update(&message, &style, room);
         let scroll = scroll.map(Message::Panel);
@@ -1547,6 +1581,10 @@ impl Shell {
                     if provider == self.library.online.provider() { self.leave_provider() } else { Task::none() };
                 let sign_out = self.library.sign_out(provider, &self.i18n).map(Message::Library);
                 Task::batch([clear, sign_out])
+            }
+            panel::Effect::Quality(level) if level == quality => Task::none(),
+            panel::Effect::Quality(level) => {
+                self.playback.update(playback::Message::Quality(level), &self.store).map(Message::Playback)
             }
         };
         Task::batch([task, scroll])

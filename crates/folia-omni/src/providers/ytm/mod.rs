@@ -3,7 +3,7 @@
 
 mod innertube;
 
-use folia_core::{Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
@@ -56,12 +56,22 @@ impl Provider for Ytm {
     }
 
     /// YouTube's audio servers want a proof-of-origin token that only Google's BotGuard script makes.
-    fn audio_source<'a>(&'a self, _song: &'a OnlineId) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
+    fn audio_source<'a>(
+        &'a self,
+        _song: &'a OnlineId,
+        _quality: AudioQuality,
+    ) -> BoxFuture<'a, Result<AudioSource, OmniError>> {
         Box::pin(async {
             Err(OmniError::Unsupported(
                 "playback: YouTube audio needs a BotGuard token, which needs Google's JavaScript",
             ))
         })
+    }
+
+    /// The original lists `standard` and `high` to everyone; `ultra` is a member's level, and playback does not exist
+    /// here yet.
+    fn audio_quality_levels(&self) -> &'static [AudioQuality] {
+        &[AudioQuality::Standard, AudioQuality::High]
     }
 
     /// `lyrics`: the watch page names the lyrics page; the mobile app's copy of it carries the line times.
