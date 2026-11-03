@@ -135,6 +135,8 @@ pub enum Message {
     Maximized(bool),
     ChromeTick,
     PointerHeld(bool),
+    /// The window lost focus; any press outside it will not report its release here.
+    WindowUnfocused,
     RevealChrome,
     Bar(player_bar::Message),
     /// The bottom offset from settings, while its slider moves.
@@ -528,6 +530,11 @@ impl Shell {
                 }
                 Task::none()
             }
+            Message::WindowUnfocused => {
+                self.drag_armed = false;
+                self.drag_from = None;
+                Task::none()
+            }
             Message::RevealChrome => {
                 if self.page == Page::NowPlaying {
                     self.reveal_chrome();
@@ -767,6 +774,11 @@ impl Shell {
     /// Starts a window drag once the pointer has moved 4px from where the press was first seen.
     fn drag_move(&mut self, id: iced::window::Id, x: f32, y: f32) -> Task<Message> {
         if !self.drag_armed {
+            return Task::none();
+        }
+        if !self.pointer_held {
+            self.drag_armed = false;
+            self.drag_from = None;
             return Task::none();
         }
         let Some((origin_x, origin_y)) = self.drag_from else {
@@ -1128,15 +1140,15 @@ impl Shell {
 
     /// Ticks only while music plays: every frame on the visualizer page, a few times a second elsewhere.
     pub fn subscription(&self) -> Subscription<Message> {
-        let mut parts = Vec::new();
-        parts.push(iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)));
-        parts.push(iced::event::listen_with(fullscreen_key));
-        parts.push(iced::event::listen_with(window_pointer));
-        if self.page == Page::NowPlaying {
-            if self.clock.until_ms.is_some() {
-                parts.push(iced::time::every(std::time::Duration::from_millis(200)).map(|_| Message::ChromeTick));
-            }
-            parts.push(iced::event::listen_with(chrome_pointer));
+        let mut parts = vec![
+            iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)),
+            iced::event::listen_with(fullscreen_key),
+            iced::event::listen_with(window_pointer),
+            // The release must reach every page, or a press that ends off the drag strip leaves the drag armed.
+            iced::event::listen_with(chrome_pointer),
+        ];
+        if self.page == Page::NowPlaying && self.clock.until_ms.is_some() {
+            parts.push(iced::time::every(std::time::Duration::from_millis(200)).map(|_| Message::ChromeTick));
         }
         let player_keys = self.page == Page::NowPlaying
             && self.settings.is_none()
@@ -1804,6 +1816,7 @@ fn window_pointer(event: iced::Event, _status: iced::event::Status, window: iced
             Some(Message::Pointer(window, Some(position)))
         }
         iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::Pointer(window, None)),
+        iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WindowUnfocused),
         _ => None,
     }
 }
