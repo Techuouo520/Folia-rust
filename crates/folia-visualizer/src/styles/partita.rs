@@ -16,8 +16,6 @@ const ROW_BASE_HEIGHT: f32 = 100.0;
 const WORD_GAP: f32 = 12.8;
 const PAD_X: f32 = 8.0;
 const PAD_Y: f32 = 3.2;
-const STAGGER_MIN: f64 = 20.0;
-const STAGGER_MAX: f64 = 100.0;
 
 /// One staggered row: its words and where it rests.
 struct Row {
@@ -34,6 +32,7 @@ struct Row {
     guide_left: bool,
     start: f64,
     last_word: (f64, f64),
+    guides: bool,
 }
 
 pub struct PartitaLayout {
@@ -43,11 +42,20 @@ pub struct PartitaLayout {
 
 pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<PartitaLayout>, frame: &mut Frame, size: Size) {
     let theme = scene.theme;
+    let manifest = manifest();
+    let guides = scene.tuning.flag(manifest, "showGuideLines");
+    let semantic = scene.tuning.flag(manifest, "useSemanticLayout");
+    let stagger_min = f64::from(scene.tuning.number(manifest, "staggerMin"));
+    let stagger_max = f64::from(scene.tuning.number(manifest, "staggerMax"));
+    let (stagger_min, stagger_max) = (stagger_min.min(stagger_max), stagger_min.max(stagger_max));
     let center = Point::new(size.width / 2.0, size.height / 2.0);
     let (breath_y, breath_scale) = glow::breathing(scene.time, theme.intensity, 1.0);
+    let salt = scene.tuning.fingerprint();
 
     glow::visible_lines(&scene.lyrics.lines, scene.time, |line, opacity, scale, _active| {
-        let layout = cache.get_or_insert(line, size, scene.font_scale, || build(line, scene, size));
+        let layout = cache.get_or_insert(line, size, scene.font_scale, salt, || {
+            build(line, scene, size, semantic, stagger_min, stagger_max, guides)
+        });
         let hints = RenderHints::of(line);
         frame.with_save(|frame| {
             glow::scale_around(frame, center, scale * breath_scale, breath_y);
@@ -92,7 +100,9 @@ fn draw_row(
         frame.translate(Vector::new(row.center.x + x as f32, row.center.y + row.y as f32));
         frame.rotate(Radians(row.rotate.to_radians() as f32));
         frame.scale(scale as f32);
-        draw_guides(frame, row, guide, Color { a: guide_color.a * (opacity * line_opacity) as f32, ..guide_color });
+        if row.guides {
+            draw_guides(frame, row, guide, Color { a: guide_color.a * (opacity * line_opacity) as f32, ..guide_color });
+        }
         for ((word, config), offset) in row.words.iter().zip(&row.configs).zip(&row.offsets) {
             let pose = glow::word_pose(config, word.start, word.end, hints, theme.intensity, true, time);
             glow::draw_word(frame, theme, &word.text, Point::new(*offset, 0.0), &pose, opacity * line_opacity, font_px);
@@ -117,9 +127,17 @@ fn draw_guides(frame: &mut Frame, row: &Row, progress: f64, color: Color) {
     frame.stroke(&horizontal, stroke);
 }
 
-fn build(line: &Line, scene: &Scene<'_>, size: Size) -> Rc<PartitaLayout> {
+fn build(
+    line: &Line,
+    scene: &Scene<'_>,
+    size: Size,
+    semantic: bool,
+    stagger_min: f64,
+    stagger_max: f64,
+    guides: bool,
+) -> Rc<PartitaLayout> {
     let intensity = scene.theme.intensity;
-    let units = layout_units(line, true);
+    let units = layout_units(line, semantic);
     let graphemes = line.text.chars().filter(|c| !c.is_whitespace()).count().max(line.words.len()).max(1);
     let density = if graphemes > 40 { 0.8 } else { 1.0 };
     let scale = density * scene.font_scale;
@@ -144,7 +162,7 @@ fn build(line: &Line, scene: &Scene<'_>, size: Size) -> Rc<PartitaLayout> {
             let first = chunk.first()?;
             let last_word = &line.words[chunk.last()?.words.end - 1];
             let guide_left = index % 2 == 0;
-            let stagger = STAGGER_MIN + next_random() * (STAGGER_MAX - STAGGER_MIN);
+            let stagger = stagger_min + next_random() * (stagger_max - stagger_min);
             let chunk_scale = if intensity == AnimationIntensity::Calm { 1.0 } else { 0.8 + next_random() * 0.9 };
             let row_bias = index as f64 - (row_count as f64 - 1.0) / 2.0;
             let configs = word_configs(&words, intensity, chunk_scale);
@@ -177,6 +195,7 @@ fn build(line: &Line, scene: &Scene<'_>, size: Size) -> Rc<PartitaLayout> {
                 guide_left,
                 start: first.start,
                 last_word: (last_word.start, last_word.end),
+                guides,
             })
         })
         .collect();
@@ -231,4 +250,54 @@ fn word_configs(words: &[Word], intensity: AnimationIntensity, scale: f64) -> Ve
             }
         })
         .collect()
+}
+
+const PARTITA: &[crate::tuning::Item] = &[
+    crate::tuning::Item::Switch {
+        key: "showGuideLines",
+        label_key: "options.partitaGuideLines",
+        hint_key: None,
+        default: true,
+    },
+    crate::tuning::Item::Switch {
+        key: "useSemanticLayout",
+        label_key: "options.partitaSemanticLayout",
+        hint_key: None,
+        default: true,
+    },
+    crate::tuning::Item::Slider {
+        key: "staggerMin",
+        label_key: "options.partitaStaggerMin",
+        hint_key: None,
+        min: 0.0,
+        max: 180.0,
+        step: 5.0,
+        default: 20.0,
+    },
+    crate::tuning::Item::Slider {
+        key: "staggerMax",
+        label_key: "options.partitaStaggerMax",
+        hint_key: None,
+        min: 0.0,
+        max: 180.0,
+        step: 5.0,
+        default: 100.0,
+    },
+];
+
+const PARTITA_GROUPS: &[crate::tuning::Group] =
+    &[crate::tuning::Group { id: "vis-partita", title_key: "options.partitaSettings", foot_key: None, items: PARTITA }];
+
+pub fn manifest() -> crate::tuning::Manifest {
+    crate::tuning::Manifest { storage_key: "partita_tuning", older_keys: &[], groups: PARTITA_GROUPS }
+}
+
+/// The smaller stagger is stored first, as the original `resolve` does.
+pub fn normalize(values: &mut crate::tuning::Values) {
+    let manifest = manifest();
+    let (min, max) = (values.number(manifest, "staggerMin"), values.number(manifest, "staggerMax"));
+    if min > max {
+        values.set_number(manifest, "staggerMin", max);
+        values.set_number(manifest, "staggerMax", min);
+    }
 }

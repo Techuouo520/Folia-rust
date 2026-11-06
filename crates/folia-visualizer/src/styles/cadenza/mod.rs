@@ -2,6 +2,7 @@
 
 mod envelopes;
 mod place;
+mod tuning;
 
 use std::rc::Rc;
 
@@ -12,8 +13,11 @@ use iced::{Point, Size, Vector};
 use crate::styles::glow::scale_around;
 use crate::{Scene, color};
 
-pub use envelopes::{Motion, Status, Timing, WordMotion, glow_envelope, line_fade, motion, status, timing_of};
+pub use envelopes::{
+    GLOW, MOTION, Motion, Status, Timing, WIDTH_RATIO, WordMotion, glow_envelope, line_fade, motion, status, timing_of,
+};
 pub use place::{Placement, font_px, layout};
+pub use tuning::manifest;
 
 pub struct LineLayout {
     placements: Vec<Placement>,
@@ -26,6 +30,7 @@ struct Key {
     height: u32,
     font: u32,
     intensity: u8,
+    salt: u64,
 }
 
 #[derive(Default)]
@@ -40,6 +45,8 @@ impl Cache {
         size: Size,
         font_scale: f32,
         intensity: AnimationIntensity,
+        salt: u64,
+        width_ratio: f64,
     ) -> Rc<LineLayout> {
         let key = Key {
             start: line.start.to_bits(),
@@ -51,11 +58,14 @@ impl Cache {
                 AnimationIntensity::Normal => 1,
                 AnimationIntensity::Chaotic => 2,
             },
+            salt,
         };
         if let Some((_, hit)) = self.entries.iter().find(|(held, _)| *held == key) {
             return Rc::clone(hit);
         }
-        let layout = Rc::new(LineLayout { placements: layout(line, size.width, size.height, font_scale, intensity) });
+        let layout = Rc::new(LineLayout {
+            placements: layout(line, size.width, size.height, font_scale, intensity, width_ratio),
+        });
         if self.entries.len() == 4 {
             self.entries.remove(0);
         }
@@ -70,7 +80,8 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
         return;
     };
     let line = &scene.lyrics.lines[index];
-    let layout = cache.layout(line, size, scene.font_scale, scene.theme.intensity);
+    let scale = scene.font_scale;
+    let layout = cache.layout(line, size, scale, scene.theme.intensity, 0, envelopes::WIDTH_RATIO);
     let timing = timing_of(line);
     let (opacity, line_scale) = line_fade(scene.time, line, &timing);
     if opacity <= 0.01 {
@@ -80,10 +91,20 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
     let lift = (scene.time * 2.3).sin() * 3.0;
     frame.with_save(|frame| {
         scale_around(frame, origin, line_scale, 0.0);
-        let px = font_px(size.width, line.text.chars().count(), line.words.len().max(1), scene.font_scale);
+        let px = font_px(size.width, line.text.chars().count(), line.words.len().max(1), scale);
         for bucket in buckets(&layout.placements, scene.time, &timing) {
             for index in bucket {
-                let ctx = Paint { scene, timing: &timing, size, lift, opacity, line_start: line.start, font_px: px };
+                let ctx = Paint {
+                    scene,
+                    timing: &timing,
+                    size,
+                    lift,
+                    opacity,
+                    line_start: line.start,
+                    font_px: px,
+                    motion_amount: envelopes::MOTION,
+                    glow: envelopes::GLOW,
+                };
                 paint(frame, &layout.placements[index], &ctx);
             }
         }
@@ -111,10 +132,12 @@ struct Paint<'a> {
     opacity: f64,
     line_start: f64,
     font_px: f32,
+    motion_amount: f64,
+    glow: f64,
 }
 
 fn paint(frame: &mut Frame, placement: &Placement, paint: &Paint<'_>) {
-    let Paint { scene, timing, size, lift, opacity, line_start, font_px } = *paint;
+    let Paint { scene, timing, size, lift, opacity, line_start, font_px, motion_amount, glow } = *paint;
     let posed = motion(
         &WordMotion {
             scale: placement.scale,
@@ -124,7 +147,7 @@ fn paint(frame: &mut Frame, placement: &Placement, paint: &Paint<'_>) {
             start: placement.start,
             end: placement.end,
             line_start,
-            motion_amount: envelopes::MOTION,
+            motion_amount,
         },
         scene.time,
         timing,
@@ -140,13 +163,21 @@ fn paint(frame: &mut Frame, placement: &Placement, paint: &Paint<'_>) {
         frame.translate(Vector::new(anchor.x, anchor.y));
         frame.rotate((posed.rotation as f32).to_radians());
         frame.scale(posed.scale as f32);
-        paint_glow(frame, scene, placement, timing, posed.glow * opacity, font_px);
+        paint_glow(frame, scene, placement, timing, posed.glow * opacity, font_px, glow);
         let body = scene.theme.primary.mix(scene.theme.accent, posed.mix as f32);
         fill(frame, &placement.text, 0.0, color(body, (posed.alpha * opacity) as f32), font_px);
     });
 }
 
-fn paint_glow(frame: &mut Frame, scene: &Scene<'_>, placement: &Placement, timing: &Timing, glow: f64, font_px: f32) {
+fn paint_glow(
+    frame: &mut Frame,
+    scene: &Scene<'_>,
+    placement: &Placement,
+    timing: &Timing,
+    glow: f64,
+    font_px: f32,
+    glow_scale: f64,
+) {
     if glow <= 0.02 {
         return;
     }
@@ -155,7 +186,7 @@ fn paint_glow(frame: &mut Frame, scene: &Scene<'_>, placement: &Placement, timin
     if !split {
         frame.with_save(|frame| {
             frame.scale(1.08_f32);
-            fill(frame, &placement.text, 0.0, fade(tint, glow * 0.55), font_px);
+            fill(frame, &placement.text, 0.0, fade(tint, glow * 0.55 * glow_scale), font_px);
         });
         return;
     }
@@ -164,7 +195,7 @@ fn paint_glow(frame: &mut Frame, scene: &Scene<'_>, placement: &Placement, timin
         let width = next.unwrap_or(placement.width as f32) - glyph.offset;
         let intensity = envelopes::char_glow(scene.time, placement.end, glyph.start, glyph.end);
         let x = glyph.offset + width / 2.0 - placement.width as f32 / 2.0;
-        fill(frame, &glyph.text, x, fade(tint, glow * intensity * 0.7 * envelopes::GLOW), font_px);
+        fill(frame, &glyph.text, x, fade(tint, glow * intensity * 0.7 * glow_scale), font_px);
     }
 }
 

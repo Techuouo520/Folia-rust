@@ -4,10 +4,15 @@ mod anim;
 mod preview;
 mod registry;
 pub mod styles;
+mod tuning;
 
 pub use anim::{Ease, keyframes, spring, tween};
-pub use preview::{Frozen, POSTER_TIME, PREVIEW_LOOP, Pictures, STAGE_HEIGHT, STAGE_WIDTH, preview_lyrics};
+pub use preview::{
+    Frozen, POSTER_TIME, PREVIEW_LOOP, Pictures, RESERVED_LOOP, STAGE_HEIGHT, STAGE_WIDTH, preview_lyrics,
+    preview_reserved,
+};
 pub use registry::Style;
+pub use tuning::{Group, Item, Manifest, Values};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,11 +20,13 @@ use std::rc::Rc;
 use folia_core::{Line, Lyrics, Rgb, Theme};
 use iced::advanced::text::{self as core_text, Paragraph as _};
 use iced::widget::canvas::{self, Frame, Geometry};
-use iced::{Color, Font, Rectangle, Renderer, Size, mouse};
+use iced::widget::{shader, stack};
+use iced::{Color, Element, Font, Length, Rectangle, Renderer, Size, mouse};
 
 pub(crate) const BOLD: Font = Font { weight: iced::font::Weight::Bold, ..Font::DEFAULT };
 
 /// Everything a style needs to draw one frame.
+#[derive(Clone)]
 pub struct Scene<'a> {
     pub style: Style,
     pub lyrics: &'a Lyrics,
@@ -27,8 +34,14 @@ pub struct Scene<'a> {
     pub time: f64,
     pub theme: &'a Theme,
     pub font_scale: f32,
+    /// Song id. Lumiere casts light positions from this string, matching the original program seed.
+    pub seed: &'a str,
     /// Draws as on a stage this large, scaled down to cover the widget; `None` draws at the widget size.
     pub stage: Option<Size>,
+    /// The style's saved tuning. An empty value reads as that style's defaults.
+    pub tuning: Values,
+    /// Fills the theme background before the style. A shader behind the canvas turns this off.
+    pub backdrop: bool,
 }
 
 /// Per-widget state: measured line layouts survive between frames.
@@ -39,6 +52,7 @@ pub struct SceneState {
     classic: RefCell<LayoutCache<styles::classic::LineLayout>>,
     partita: RefCell<LayoutCache<styles::partita::PartitaLayout>>,
     tilt: RefCell<LayoutCache<styles::tilt::TiltLayout>>,
+    lumiere: RefCell<styles::lumiere::Cache>,
     still: styles::still::StillCache,
 }
 
@@ -75,7 +89,9 @@ impl Scene<'_> {
     /// Fills `target` with the theme background, then draws the stage scaled down to cover it.
     pub(crate) fn paint(&self, state: &SceneState, frame: &mut Frame, target: Size) {
         let size = self.stage_size(target);
-        frame.fill_rectangle(iced::Point::ORIGIN, target, color(self.theme.background, 1.0));
+        if self.backdrop {
+            frame.fill_rectangle(iced::Point::ORIGIN, target, color(self.theme.background, 1.0));
+        }
         let scale = (target.width / size.width).max(target.height / size.height);
         if (scale - 1.0).abs() > f32::EPSILON {
             frame.translate(iced::Vector::new(
@@ -89,8 +105,10 @@ impl Scene<'_> {
             Style::Tilt => styles::tilt::draw(self, &mut state.tilt.borrow_mut(), frame, size),
             Style::Claddagh => styles::claddagh::draw(self, &mut state.claddagh.borrow_mut(), frame, size),
             Style::Cadenza => styles::cadenza::draw(self, &mut state.cadenza.borrow_mut(), frame, size),
+            Style::Lumiere => styles::lumiere::draw(self, &mut state.lumiere.borrow_mut(), frame, size),
             Style::Still => styles::still::draw_stage(self, frame, size),
             Style::Classic => styles::classic::draw(self, &mut state.classic.borrow_mut(), frame, size),
+            Style::Nebbia => styles::nebbia::draw(self, frame, size),
         }
     }
 }
@@ -106,6 +124,7 @@ struct LayoutKey {
     width: u32,
     height: u32,
     font_scale: u32,
+    salt: u64,
 }
 
 impl<T> Default for LayoutCache<T> {
@@ -117,12 +136,20 @@ impl<T> Default for LayoutCache<T> {
 impl<T> LayoutCache<T> {
     const CAPACITY: usize = 4;
 
-    pub fn get_or_insert(&mut self, line: &Line, size: Size, font_scale: f32, build: impl FnOnce() -> Rc<T>) -> Rc<T> {
+    pub fn get_or_insert(
+        &mut self,
+        line: &Line,
+        size: Size,
+        font_scale: f32,
+        salt: u64,
+        build: impl FnOnce() -> Rc<T>,
+    ) -> Rc<T> {
         let key = LayoutKey {
             start: line.start.to_bits(),
             width: size.width.to_bits(),
             height: size.height.to_bits(),
             font_scale: font_scale.to_bits(),
+            salt,
         };
         if let Some((_, layout)) = self.entries.iter().find(|(k, _)| *k == key) {
             return layout.clone();
@@ -134,6 +161,20 @@ impl<T> LayoutCache<T> {
         self.entries.push((key, layout.clone()));
         layout
     }
+}
+
+/// The playing picture. Canvas styles draw alone; shader styles put their GPU passes around a clear lyric canvas.
+pub fn lyric_view<'a, Message: 'a>(scene: Scene<'a>) -> Element<'a, Message> {
+    if !matches!(scene.style, Style::Nebbia | Style::Lumiere) {
+        return iced::widget::canvas(scene).width(Length::Fill).height(Length::Fill).into();
+    }
+    let lyrics =
+        iced::widget::canvas(Scene { backdrop: false, ..scene.clone() }).width(Length::Fill).height(Length::Fill);
+    if scene.style == Style::Nebbia {
+        return stack![shader(styles::nebbia::view(scene)).width(Length::Fill).height(Length::Fill), lyrics].into();
+    }
+    let front = shader(styles::lumiere::front_view(scene.clone())).width(Length::Fill).height(Length::Fill);
+    stack![shader(styles::lumiere::field_view(scene)).width(Length::Fill).height(Length::Fill), lyrics, front].into()
 }
 
 pub fn color(rgb: Rgb, alpha: f32) -> Color {

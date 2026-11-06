@@ -57,6 +57,7 @@ fn main() -> anyhow::Result<()> {
         appearance: store.load_or_default::<AppearanceSettings>(),
         playback: store.load_or_default::<PlaybackSettings>(),
         player: store.load_or_default::<PlayerSettings>(),
+        visualizer: store.load_or_default::<folia_store::VisualizerSettings>(),
         library_db: dirs.data.join("library.db"),
         cache_dir: dirs.cache.clone(),
         keyring_service: APP_DIR.to_owned(),

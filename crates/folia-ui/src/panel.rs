@@ -89,6 +89,7 @@ pub enum Effect {
     Home,
     Locate,
     Settings,
+    Workbench,
     Playback(playback::Message),
     Intensity,
     Theme(ThemeMode),
@@ -117,6 +118,13 @@ pub struct PlayerPanel {
     fold: [Tween; 3],
     /// The last tab other than the cover, whose body the panel grows to.
     body_tab: Tab,
+    /// The body tab before it: the height eases from its body to `body_tab`'s (`st-t-unfold`, 300ms).
+    body_from: Tab,
+    grow: Tween,
+    /// The tab before the current one: the dock's mark slides from it and the new page comes in
+    /// (`st-page-in`, 220ms, from 6px below).
+    tab_from: Tab,
+    page: Tween,
     pickers: mode_picker::Pickers,
     quality: quality_select::Select,
 }
@@ -139,6 +147,10 @@ impl PlayerPanel {
                 Tween::new(1.0, CLOSE_MS, OPEN_EASE, now),
             ],
             body_tab: Tab::Controls,
+            body_from: Tab::Controls,
+            grow: Tween::new(1.0, OPEN_MS, OPEN_EASE, now),
+            tab_from: Tab::Cover,
+            page: Tween::new(1.0, CLOSE_MS, OPEN_EASE, now),
             pickers: mode_picker::Pickers::new(now),
             quality: quality_select::Select::new(now),
         }
@@ -159,7 +171,7 @@ impl PlayerPanel {
     }
 
     pub fn animating(&self, now: Instant) -> bool {
-        [self.surface, self.handle, self.handle_tone, self.handle_hover]
+        [self.surface, self.handle, self.handle_tone, self.handle_hover, self.grow, self.page]
             .iter()
             .chain(&self.fold)
             .any(|tween| tween.running(now))
@@ -197,7 +209,9 @@ impl PlayerPanel {
                 if *tab == Tab::Queue && self.tab != Tab::Queue {
                     self.queue.opened();
                 }
+                self.tab_from = self.tab;
                 self.tab = *tab;
+                self.page.restart(0.0, now);
                 self.fold_to(*tab, now);
                 self.pickers.set_open(None, now);
                 self.quality.dismiss(now);
@@ -248,7 +262,7 @@ impl PlayerPanel {
                 mode_picker::Outcome::Style(style) => Effect::Visualizer(style),
                 mode_picker::Outcome::Settings => {
                     self.set_open(false, now);
-                    Effect::Settings
+                    Effect::Workbench
                 }
             },
             Message::Intensity => Effect::Intensity,
@@ -318,8 +332,10 @@ impl PlayerPanel {
     /// `st-t-unfold` for the shape, `st-t-move` for the folded row; the big block leaves with `st-t-fast`.
     fn fold_to(&mut self, tab: Tab, now: Instant) {
         let folded = if tab == Tab::Cover { 0.0 } else { 1.0 };
-        if tab != Tab::Cover {
+        if tab != Tab::Cover && tab != self.body_tab {
+            self.body_from = self.body_tab;
             self.body_tab = tab;
+            self.grow.restart(0.0, now);
         }
         self.fold[0].set(folded, now);
         self.fold[1].set(folded, now);
@@ -406,7 +422,9 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     let max_h = (view.height - under - view.bottom - TOP_MARGIN).max(220.0);
     // The header and body heights move with the fold, between the cover tab and the last other tab.
     let (big_h, _, cover_px) = measure(Tab::Cover, view.queue.len(), view.account.is_some(), inner, max_h);
-    let (_, full_body, _) = measure(panel.body_tab, view.queue.len(), view.account.is_some(), inner, max_h);
+    let body_of = |tab| measure(tab, view.queue.len(), view.account.is_some(), inner, max_h).1;
+    let (from_body, to_body) = (body_of(panel.body_from), body_of(panel.body_tab));
+    let full_body = from_body + (to_body - from_body) * panel.grow.value(now);
     let fold =
         Fold { shape: panel.fold[0].value(now), folded: panel.fold[1].value(now), under: panel.fold[2].value(now) };
     let header_h = big_h + (FOLDED - big_h) * fold.shape;
@@ -444,7 +462,8 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     })
     .width(Length::Fixed(x1 - x0))
     .height(Length::Fixed(y1 - y0));
-    let column = Column { tab, width: panel_w, header_h, body_h, cover_px, open, fold };
+    let switch = Switch { from: shown_tab(panel.tab_from, local, online), page: panel.page.value(now) };
+    let column = Column { tab, width: panel_w, header_h, body_h, cover_px, open, fold, switch };
     let face = mouse_area(face_column(view, tokens, column, (panel, now)))
         .on_press(Message::FacePress)
         .interaction(iced::mouse::Interaction::Idle);
@@ -517,15 +536,28 @@ struct Column {
     cover_px: f32,
     open: f32,
     fold: Fold,
+    switch: Switch,
+}
+
+/// A tab change in flight: the tab it left and the new page's progress (0 just switched, 1 settled).
+#[derive(Clone, Copy)]
+struct Switch {
+    from: Tab,
+    page: f32,
 }
 
 fn face_column<'a>(view: View<'a>, tokens: Tokens, column: Column, rows: Rows<'a>) -> Element<'a, Message> {
-    let Column { tab, width, header_h, body_h, cover_px, open, fold } = column;
+    let Column { tab, width, header_h, body_h, cover_px, open, fold, switch } = column;
     let ink = Color { a: open, ..tokens.t1 };
     let header = header(view, tokens, cover_px, header_h, fold);
     // The body keeps its hairline while it closes back into the cover tab; it is cut to its moving height.
-    let content: Element<'a, Message> =
-        if tab == Tab::Cover { space().into() } else { tab_body(view, tokens, tab, ink, rows) };
+    let content: Element<'a, Message> = if tab == Tab::Cover {
+        space().into()
+    } else {
+        let page_ink = Color { a: ink.a * switch.page, ..ink };
+        let page = tab_body(view, tokens.faded(switch.page), tab, page_ink, rows);
+        container(page).padding(pad(6.0 * (1.0 - switch.page), 0.0, 0.0, 0.0)).into()
+    };
     let body: Element<'a, Message> = if body_h < 0.5 {
         space().into()
     } else {
@@ -541,7 +573,7 @@ fn face_column<'a>(view: View<'a>, tokens: Tokens, column: Column, rows: Rows<'a
         .clip(true)
         .into()
     };
-    column![header, body, space().height(12.0), dock(view, tokens, tab, ink)]
+    column![header, body, space().height(12.0), dock(view, tokens, (tab, switch), width - 28.0, ink)]
         .spacing(0)
         .padding(12)
         .width(Length::Fixed(width))
@@ -706,7 +738,14 @@ fn heart<'a>(view: View<'a>, tokens: Tokens, ink: Color, filled: bool) -> Elemen
     )
 }
 
-fn dock<'a>(view: View<'a>, tokens: Tokens, tab: Tab, ink: Color) -> Element<'a, Message> {
+/// `TabDock`: one raised mark shared by the tabs, sliding from the old tab to the new one (`move`, 220ms).
+fn dock<'a>(
+    view: View<'a>,
+    tokens: Tokens,
+    (tab, switch): (Tab, Switch),
+    width: f32,
+    ink: Color,
+) -> Element<'a, Message> {
     let local = view.track.is_some_and(|track| track.online.is_none());
     let online = view.track.is_some_and(|track| track.online.is_some());
     let mut tabs = vec![
@@ -720,9 +759,25 @@ fn dock<'a>(view: View<'a>, tokens: Tokens, tab: Tab, ink: Color) -> Element<'a,
     } else if online {
         tabs.insert(1, (Tab::Source, view.i18n.t("localMusic.lyrics")));
     }
+    let index_of = |wanted: Tab| tabs.iter().position(|(id, _)| *id == wanted);
+    let to = index_of(tab).unwrap_or(0) as f32;
+    let from = index_of(switch.from).map_or(to, |index| index as f32);
+    let cell = width / tabs.len() as f32;
+    let at = (from + (to - from) * switch.page) * cell;
+    let mark = container(space()).width(Length::Fixed(cell)).height(Length::Fill).style(move |_theme: &IcedTheme| {
+        container::Style {
+            background: Some(tokens.raise.into()),
+            border: Border { radius: 8.0.into(), ..Border::default() },
+            shadow: iced::Shadow {
+                color: Color { a: 0.2 * ink.a, ..Color::BLACK },
+                offset: iced::Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..container::Style::default()
+        }
+    });
     let buttons = tabs.into_iter().map(|(id, label)| {
         let on = id == tab;
-        let bg = if on { tokens.raise } else { Color::TRANSPARENT };
         button(
             container(text(label).size(13).color(if on { ink } else { Color { a: ink.a, ..tokens.t2 } }))
                 .center_x(Length::Fill)
@@ -732,15 +787,13 @@ fn dock<'a>(view: View<'a>, tokens: Tokens, tab: Tab, ink: Color) -> Element<'a,
         .width(Length::Fill)
         .height(Length::Fill)
         .on_press_maybe((!on).then_some(Message::Choose(id)))
-        .style(move |_theme: &IcedTheme, _status| button::Style {
-            background: Some(Background::Color(bg)),
-            text_color: ink,
-            border: Border { radius: 8.0.into(), ..Border::default() },
-            ..button::Style::default()
-        })
+        .style(move |_theme: &IcedTheme, _status| button::Style { text_color: ink, ..button::Style::default() })
         .into()
     });
-    container(row(buttons).spacing(0))
+    // A stack takes its first layer's size, so the mark's layer spans the dock and the buttons share its width.
+    let mark = container(mark).padding(pad(0.0, 0.0, 0.0, at)).width(Length::Fill).height(Length::Fill);
+    let marked = stack![mark, row(buttons).spacing(0).width(Length::Fill).height(Length::Fill)];
+    container(marked)
         .padding(2)
         .width(Length::Fill)
         .height(Length::Fixed(36.0))

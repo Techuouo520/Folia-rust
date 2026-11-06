@@ -40,6 +40,7 @@ mod typeface;
 mod wall;
 mod wall_pan;
 mod wall_shift;
+mod workbench;
 
 pub use background::{error_chain, format_time};
 pub use home::title::seam_title_activates;
@@ -63,8 +64,10 @@ use std::path::PathBuf;
 use folia_core::{AudioQuality, Language, LanguagePreference, Lyrics, Theme, Track};
 use folia_i18n::I18n;
 use folia_omni::Omni;
-use folia_store::{AppearanceSettings, FrameRate, GeneralSettings, PlaybackSettings, Store, ThemeMode};
-use folia_visualizer::{Scene, Style};
+use folia_store::{
+    AppearanceSettings, FrameRate, GeneralSettings, PlaybackSettings, Store, ThemeMode, VisualizerSettings,
+};
+use folia_visualizer::{Scene, Style, Values};
 use iced::widget::{container, mouse_area, space, stack};
 use iced::{Alignment, Color, Element, Length, Size, Subscription, Task, mouse};
 use lucide_static_svg::Icon;
@@ -89,6 +92,7 @@ pub struct Init {
     pub appearance: AppearanceSettings,
     pub playback: PlaybackSettings,
     pub player: folia_store::PlayerSettings,
+    pub visualizer: VisualizerSettings,
     pub i18n: I18n,
     pub system_locale: Option<String>,
     pub library_db: PathBuf,
@@ -117,6 +121,7 @@ pub enum Message {
     Navigate(Page),
     OpenSettings,
     Settings(settings::Message),
+    Workbench(workbench::Message),
     LanguagePicked(LanguagePreference),
     Theme(ThemeMode),
     FrameRate(FrameRate),
@@ -185,6 +190,8 @@ pub struct Shell {
     iced_theme: iced::Theme,
     page: Page,
     settings: Option<settings::Settings>,
+    workbench: Option<workbench::Workbench>,
+    visualizer: VisualizerSettings,
     library: LibraryPage,
     search: SearchPage,
     omni: Option<Omni>,
@@ -214,6 +221,8 @@ pub struct Shell {
     login: login::Login,
     /// An input method is composing in a field on the player page.
     composing: bool,
+    /// Song id string the original visualizer uses as its geometry seed.
+    visualizer_seed: String,
 }
 
 impl Shell {
@@ -243,6 +252,8 @@ impl Shell {
             next_page: None,
             seam_flip: None,
             settings: None,
+            workbench: None,
+            visualizer: init.visualizer,
             library,
             search: SearchPage::default(),
             playback: Playback::new(init.playback, omni.clone()),
@@ -269,10 +280,24 @@ impl Shell {
             positioning: None,
             login: login::Login::new(std::time::Instant::now()),
             composing: false,
+            visualizer_seed: "lumiere".to_owned(),
         };
         let open = if init.open_files.is_empty() { Task::none() } else { open_files(init.open_files) };
         let window = iced::window::oldest().map(Message::WindowReady);
         (shell, Task::batch([load.map(Message::Library), open, window]))
+    }
+
+    fn refresh_visualizer_seed(&mut self) {
+        let next = match self.playback.current() {
+            Some(track) => match &track.online {
+                Some(online) => online.id.clone(),
+                None => track.id.to_string(),
+            },
+            None => "lumiere".to_owned(),
+        };
+        if self.visualizer_seed != next {
+            self.visualizer_seed = next;
+        }
     }
 
     pub fn title(&self) -> String {
@@ -293,6 +318,7 @@ impl Shell {
         let opens_search = matches!(&message, Message::Home(home::Message::Search));
         let focus_title = matches!(message, Message::Home(home::Message::TitleToggle { keyboard: true, .. }));
         let task = self.handle(message);
+        self.refresh_visualizer_seed();
         if self.page != before || self.playback.current().is_none() {
             self.play_navigation.cancel();
         }
@@ -386,6 +412,7 @@ impl Shell {
                 self.settings = Some(settings::Settings::open());
                 Task::none()
             }
+            Message::Workbench(message) => self.workbench(message),
             Message::Settings(message) => {
                 let Some(window) = self.settings.as_mut() else { return Task::none() };
                 let task = window.update(message).map(Message::Settings);
@@ -913,13 +940,17 @@ impl Shell {
             }
             Page::NowPlaying => {
                 let lyrics = self.playback.lyrics.as_ref().unwrap_or(&self.empty_lyrics);
+                let tuning = self.tuning_of(self.style());
                 let scene = Scene {
                     style: self.style(),
                     lyrics,
                     time: self.playback.lyric_time(),
                     theme: &self.theme,
                     font_scale: self.appearance.lyrics_font_scale,
+                    seed: self.visualizer_seed.as_str(),
                     stage: None,
+                    tuning,
+                    backdrop: true,
                 };
                 let subtitle = self.subtitle();
                 let bottom =
@@ -1051,6 +1082,24 @@ impl Shell {
                 quality,
             };
             frame = frame.push(self.panel.view(panel_view, std::time::Instant::now()).map(Message::Panel));
+        }
+        if let Some(window) = &self.workbench {
+            let style = self.style();
+            let live = self
+                .playback
+                .lyrics
+                .as_ref()
+                .filter(|lyrics| !lyrics.lines.is_empty())
+                .map(|lyrics| (lyrics, self.playback.lyric_time()));
+            frame = frame.push(window.view(workbench::Look {
+                i18n: &self.i18n,
+                theme: &self.theme,
+                daylight,
+                window: self.window_size,
+                style,
+                font_scale: self.appearance.lyrics_font_scale,
+                live,
+            }));
         }
         if let Some(window) = &self.settings {
             let values = settings::Values {
@@ -1184,6 +1233,7 @@ impl Shell {
         }
         let player_keys = self.page == Page::NowPlaying
             && self.settings.is_none()
+            && self.workbench.is_none()
             && !self.login.is_open()
             && self.positioning.is_none();
         if player_keys {
@@ -1196,10 +1246,17 @@ impl Shell {
                 parts.push(iced::window::frames().map(|_| Message::Settings(settings::Message::Frame)));
             }
         }
+        if let Some(window) = &self.workbench {
+            parts.push(iced::event::listen_with(workbench_key));
+            if window.ticking() {
+                parts.push(iced::window::frames().map(|_| Message::Workbench(workbench::Message::Frame)));
+            }
+        }
         if self.positioning.is_some() {
             parts.push(iced::event::listen_with(positioner_key));
         }
-        let quiet = self.settings.is_none() && !self.login.is_open() && !self.home_menu_open();
+        let quiet =
+            self.settings.is_none() && self.workbench.is_none() && !self.login.is_open() && !self.home_menu_open();
         if self.page == Page::Library && quiet {
             if self.home.search_query().is_some() {
                 parts.push(iced::event::listen_with(seam_search_key));
@@ -1277,6 +1334,52 @@ impl Shell {
             parts.push(playback);
         }
         Subscription::batch(parts)
+    }
+
+    fn workbench(&mut self, message: workbench::Message) -> Task<Message> {
+        let style = self.style();
+        let manifest = style.manifest();
+        let Some(window) = self.workbench.as_mut() else { return Task::none() };
+        let effect = window.update(message, manifest);
+        let values = window.values.clone();
+        match effect {
+            workbench::Effect::None => Task::none(),
+            workbench::Effect::Close => {
+                self.workbench = None;
+                Task::none()
+            }
+            workbench::Effect::Draft => {
+                self.hold_tuning(style, values);
+                Task::none()
+            }
+            workbench::Effect::Save => self.store_tuning(style, values),
+            workbench::Effect::Style(next) => {
+                self.appearance.visualizer = next.id().to_owned();
+                if let Some(window) = self.workbench.as_mut() {
+                    window.values = next.load(&self.visualizer.tables);
+                }
+                save(&self.store, &self.appearance)
+            }
+            workbench::Effect::Font(scale) => {
+                let before = self.appearance.clone();
+                self.appearance.lyrics_font_scale = scale;
+                self.appearance_changed(&before)
+            }
+        }
+    }
+
+    fn hold_tuning(&mut self, style: Style, values: Values) {
+        let manifest = style.manifest();
+        self.visualizer.insert_style(manifest.storage_key, values.to_table(manifest), manifest.older_keys);
+    }
+
+    fn store_tuning(&mut self, style: Style, values: Values) -> Task<Message> {
+        self.hold_tuning(style, values);
+        save(&self.store, &self.visualizer)
+    }
+
+    fn tuning_of(&self, style: Style) -> Values {
+        style.load(&self.visualizer.tables)
     }
 
     fn style(&self) -> Style {
@@ -1544,6 +1647,12 @@ impl Shell {
             }
             panel::Effect::Settings => {
                 self.settings = Some(settings::Settings::open());
+                Task::none()
+            }
+            panel::Effect::Workbench => {
+                let mut window = workbench::Workbench::open();
+                window.values = self.tuning_of(self.style());
+                self.workbench = Some(window);
                 Task::none()
             }
             panel::Effect::Intensity => {
@@ -1828,6 +1937,19 @@ fn settings_key(event: iced::Event, status: iced::event::Status, _id: iced::wind
             key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
             ..
         }) => Some(Message::Settings(settings::Message::Escape)),
+        _ => None,
+    }
+}
+
+fn workbench_key(event: iced::Event, status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    if status == iced::event::Status::Captured {
+        return None;
+    }
+    match event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            ..
+        }) => Some(Message::Workbench(workbench::Message::Close)),
         _ => None,
     }
 }

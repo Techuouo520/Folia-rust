@@ -1,11 +1,13 @@
 // Tilt (倾诉): a line split into one to four centered rows, one of them large and italic, revealed in time order.
 
 mod layout;
+mod tuning;
 
 pub use layout::{
     Arrangement, MAX_ROWS, Segment, TiltTuning, arrange, char_pulse, line_count, revealed_through, seeded,
     segment_times, visible_row_count,
 };
+pub use tuning::manifest;
 
 use std::rc::Rc;
 
@@ -91,7 +93,14 @@ fn paint(
     if moment.opacity <= 0.002 {
         return;
     }
-    let layout = cache.get_or_insert(line, size, scene.font_scale, || Rc::new(build(line, scene, size)));
+    let manifest = manifest();
+    let tuning = TiltTuning {
+        split_probability: f64::from(scene.tuning.number(manifest, "splitProbability")),
+        tilt_style_probability: f64::from(scene.tuning.number(manifest, "tiltStyleProbability")),
+    };
+    let layout = cache.get_or_insert(line, size, scene.font_scale, scene.tuning.fingerprint(), || {
+        Rc::new(build(line, scene, size, tuning))
+    });
     let gap = if size.width >= 640.0 { 16.0 } else { 12.0 };
     let total = layout.segments.iter().map(|segment| segment.height).sum::<f32>()
         + gap * layout.segments.len().saturating_sub(1) as f32;
@@ -127,7 +136,7 @@ struct Moment {
 fn draw_segment(frame: &mut Frame, scene: &Scene<'_>, segment: &DrawnSegment, center_x: f32, top: f32, moment: Moment) {
     let anim_start = moment.line_start.max(segment.start - 0.25);
     let (row_opacity, row_y, row_scale) = row_pose(moment, anim_start, segment.tilt);
-    let rgb = if segment.tilt { scene.theme.accent } else { scene.theme.primary };
+    let rgb = tilt_ink(scene, segment.tilt);
     let center_y = top + segment.height / 2.0;
     let moment = Moment { opacity: moment.opacity * row_opacity, ..moment };
     frame.with_save(|frame| {
@@ -231,11 +240,23 @@ fn pulse_scale(segment: &DrawnSegment, glyph: &Glyph, time: f64) -> f32 {
     (1.0 + char_pulse(time, timing.start, timing.end) * factor) as f32
 }
 
-fn build(line: &Line, scene: &Scene<'_>, size: Size) -> TiltLayout {
+fn tilt_ink(scene: &Scene<'_>, tilt: bool) -> folia_core::Rgb {
+    let scheme = scene.tuning.choice(manifest(), "colorScheme");
+    match scheme {
+        "accentAll" => scene.theme.accent,
+        "primaryAll" => scene.theme.primary,
+        "swap" if tilt => scene.theme.primary,
+        "swap" => scene.theme.accent,
+        _ if tilt => scene.theme.accent,
+        _ => scene.theme.primary,
+    }
+}
+
+fn build(line: &Line, scene: &Scene<'_>, size: Size, tuning: TiltTuning) -> TiltLayout {
     let viewport = size.width.max(1.0);
     let available = viewport.max(320.0) * 0.85;
     let base = (viewport * 0.06875).max(90.0 * scene.font_scale);
-    let arrangement = arrange(&line.text, line.start, TiltTuning::default(), available, |text, tilt| {
+    let arrangement = arrange(&line.text, line.start, tuning, available, |text, tilt| {
         if tilt {
             graphemes(text)
                 .iter()

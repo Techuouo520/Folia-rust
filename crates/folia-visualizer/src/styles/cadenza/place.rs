@@ -1,7 +1,7 @@
 // Cadenza placement: wrap a line, pick one hero word, then push the others apart.
 // Wrapping measures graphemes with `measure` and breaks at spaces. The original uses pretext.
 
-use super::envelopes::{self, FONT_SCALE, WIDTH_RATIO};
+use super::envelopes::{self, FONT_SCALE};
 use folia_core::{AnimationIntensity, Line};
 
 /// One glyph of a placed fragment, with its left edge and sung interval.
@@ -93,6 +93,7 @@ pub fn layout(
     height: f32,
     lyrics_scale: f32,
     intensity: AnimationIntensity,
+    width_ratio: f64,
 ) -> Vec<Placement> {
     let chars = envelopes::graphemes(&line.text);
     if chars.is_empty() || width <= 0.0 || height <= 0.0 {
@@ -100,10 +101,11 @@ pub fn layout(
     }
     let px = font_px(width, chars.len(), line.words.len().max(1), lyrics_scale);
     let widths = measure_widths(&chars, px);
-    let rows = wrap(&chars, &widths, max_width(width, chars.len()));
+    let limit = max_width(width, chars.len(), width_ratio);
+    let rows = wrap(&chars, &widths, limit);
     let ranges = word_ranges(line, &chars);
     let fragments = fragments(&chars, &widths, &rows, &ranges);
-    scatter(line, &fragments, px, max_width(width, chars.len()), intensity)
+    scatter(line, &fragments, px, limit, intensity)
 }
 
 fn measure_widths(chars: &[String], font_px: f32) -> Vec<f32> {
@@ -122,12 +124,12 @@ fn measure_widths(chars: &[String], font_px: f32) -> Vec<f32> {
         .collect()
 }
 
-fn max_width(viewport: f32, grapheme_count: usize) -> f32 {
+fn max_width(viewport: f32, grapheme_count: usize, width_ratio: f64) -> f32 {
     let available = (viewport - 48.0).max(120.0);
     let min_width = 220.0_f32.min(available);
     let compression =
         if grapheme_count > 12 { (0.92 - (grapheme_count - 12) as f64 * 0.018).clamp(0.62, 0.92) } else { 0.92 };
-    ((viewport as f64) * WIDTH_RATIO * compression).min(820.0).clamp(f64::from(min_width), f64::from(available)) as f32
+    ((viewport as f64) * width_ratio * compression).min(820.0).clamp(f64::from(min_width), f64::from(available)) as f32
 }
 
 fn wrap(chars: &[String], widths: &[f32], max_width: f32) -> Vec<(usize, usize)> {

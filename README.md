@@ -38,6 +38,7 @@ Folia-rust 换掉了整个地基：
 
 - **封面墙首页**：无限延展的 Bravais 封面墙，拖动带惯性，滚轮平滑滑行；书脊式侧缝可展开、收起，切换页签时整墙翻转入场。
 - **歌词可视化**：歌词样式逐个从原版移植，GLSL 改写为 WGSL，参数照搬原版。每一帧都只由播放时间决定，拖动进度不会跳帧。
+- **歌词样式工作台**：实时预览，逐个样式调节参数，调节项由各样式自己声明。
 - **六个在线平台**：一个统一的 `Omni` 门面接入网易云、酷狗、QQ 音乐、波点、汽水、Spotify，支持扫码登录、多账号切换、歌单、电台、探索页、逐字歌词和音质选择。
 - **本地音乐**：扫描、元数据、SQLite 资料库、目录监视。
 - **原生播放引擎**：symphonia 解码、cpal 输出、rubato 重采样。
@@ -54,6 +55,7 @@ Folia-rust 换掉了整个地基：
 | 倾诉 | `tilt` | ✅ |
 | 回环 | `claddagh` | ✅ |
 | 心象 | `cadenza` | ✅ |
+| 雾笺 | `nebbia` | ✅ |
 | 其余原版样式 | — | 🚧 按代码量逐个移植 |
 
 ## 在线平台
@@ -123,7 +125,7 @@ folia-app            组装：日志、设置、语言、窗口
 
 - [x] 骨架：窗口、设置、语言切换
 - [x] 本地音乐扫描与播放
-- [x] 歌词解析，六个歌词样式
+- [x] 歌词解析，七个歌词样式，歌词样式工作台
 - [x] 封面墙首页、侧缝、工具面板、播放器面板
 - [x] 六个在线平台
 - [ ] 其余歌词样式与背景、视觉回归测试
@@ -144,3 +146,5 @@ folia-app            组装：日志、设置、语言、窗口
 Folia-rust 移植了 [folia-major](https://github.com/chthollyphile/folia-major)（AGPL-3.0）的界面设计、动画算法、着色器、文案和资源，属于它的衍生作品，因此同样以 AGPL-3.0 发布。原项目的版权归其作者所有。分发本程序（包括发给他人的测试版）时，需要同时让接收者能获得对应的完整源代码。
 
 `assets/platforms/` 下的平台图标是各音乐平台的商标，归各自所有者，不在 AGPL-3.0 授权范围内，仅用于标识对应平台。本项目与这些平台没有任何关联。
+
+`assets/nebbia/nebbia-strokes.bin.gz` 是由 [AnimCJK](https://github.com/parsimonhi/animCJK) 笔画数据生成的独立数据文件，按 Arphic Public License 分发，授权文本见同目录的 `NOTICE.txt`、`COPYING.txt`、`ARPHICPL.TXT`，不在 AGPL-3.0 授权范围内。`assets/nebbia/nebbiaRaindrop.png` 来自 SardineFish 的 raindrop-fx，MIT 许可，见同目录的授权文件。`crates/cryoglyph/` 是 iced 文字渲染库 [cryoglyph](https://github.com/iced-rs/cryoglyph) 0.1.0 的副本（MIT、Apache-2.0 或 Zlib，授权文件在该目录），只改了着色器里深色文字的覆盖度，说明见 `crates/cryoglyph/PATCH.md`。

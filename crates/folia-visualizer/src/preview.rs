@@ -41,6 +41,31 @@ pub fn preview_lyrics() -> Lyrics {
     Lyrics { lines, title: Some("神文之诗".to_owned()), word_timed: true, ..Lyrics::default() }
 }
 
+/// The second built-in sample, `reserved` in `PreviewPlaceholder.ts`. It loops at 13.6s.
+pub fn preview_reserved() -> Lyrics {
+    let lines = vec![
+        line(
+            0.0,
+            3.1,
+            "You and the others who think",
+            Some(&["You", "and", "the", "others", "who", "think"]),
+            "你和那些自以为如此的人",
+        ),
+        line(3.6, 6.9, "真実のために生きていると思う人たち、", None, "那些自以为为真理而活的人，"),
+        line(
+            7.4,
+            10.3,
+            "et, par extension, qui aiment",
+            Some(&["et,", "par", "extension,", "qui", "aiment"]),
+            "并因此爱上一切……",
+        ),
+        line(10.8, 13.6, "一切冰冷的事物。", None, "all that is cold."),
+    ];
+    Lyrics { lines, title: Some("野芝麻".to_owned()), word_timed: true, ..Lyrics::default() }
+}
+
+pub const RESERVED_LOOP: f64 = 13.6;
+
 fn line(start: f64, end: f64, text: &str, tokens: Option<&[&str]>, translation: &str) -> Line {
     let pieces: Vec<String> = match tokens {
         // Words carry their own spacing in this crate's lyrics, so each token but the last keeps a space.
@@ -75,6 +100,7 @@ struct PictureKey {
     theme: Theme,
     font_scale: u32,
     time: u64,
+    tuning: u64,
 }
 
 /// The images of the small pictures, kept while the app runs so a picker opened again shows them at once.
@@ -95,6 +121,7 @@ impl Pictures {
                 && key.theme == *scene.theme
                 && key.font_scale == scene.font_scale.to_bits()
                 && key.time == scene.time.to_bits()
+                && key.tuning == scene.tuning.fingerprint()
         });
         let entry = match found {
             Some(index) => images.remove(index),
@@ -104,6 +131,7 @@ impl Pictures {
                     theme: scene.theme.clone(),
                     font_scale: scene.font_scale.to_bits(),
                     time: scene.time.to_bits(),
+                    tuning: scene.tuning.fingerprint(),
                 };
                 (key, Rc::new(Cache::new()))
             }

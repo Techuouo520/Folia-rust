@@ -1,8 +1,10 @@
 // Classic (流光): one line at a time; each word springs in, glows while sung and drifts once passed.
 
 mod layout;
+mod tuning;
 
 pub use layout::{ClassicTuning, Justify, font_px, justify, random, word_configs, wrap};
+pub use tuning::manifest;
 
 use std::rc::Rc;
 
@@ -27,13 +29,19 @@ pub struct LineLayout {
 }
 
 pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<LineLayout>, frame: &mut Frame, size: Size) {
-    let tuning = ClassicTuning::default();
+    let manifest = manifest();
+    let tuning = ClassicTuning {
+        word_rotation: scene.tuning.flag(manifest, "enableWordRotation"),
+        breathing: f64::from(scene.tuning.number(manifest, "breathingFloatMultiplier")),
+        word_spacing: f64::from(scene.tuning.number(manifest, "wordSpacing")),
+    };
+    let salt = scene.tuning.fingerprint();
     let theme = scene.theme;
     let center = Point::new(size.width / 2.0, size.height / 2.0);
     let (breath_y, breath_scale) = glow::breathing(scene.time, theme.intensity, tuning.breathing);
 
     glow::visible_lines(&scene.lyrics.lines, scene.time, |line, opacity, scale, _active| {
-        let layout = cache.get_or_insert(line, size, scene.font_scale, || build(line, scene, size, tuning));
+        let layout = cache.get_or_insert(line, size, scene.font_scale, salt, || build(line, scene, size, tuning));
         let hints = RenderHints::of(line);
         frame.with_save(|frame| {
             glow::scale_around(frame, center, scale * breath_scale, breath_y);

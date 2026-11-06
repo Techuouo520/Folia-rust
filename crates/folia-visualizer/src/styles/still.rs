@@ -139,6 +139,10 @@ fn font(weight: Weight) -> Font {
     Font { weight, ..Font::DEFAULT }
 }
 
+pub fn manifest() -> crate::tuning::Manifest {
+    crate::tuning::Manifest { storage_key: "still_tuning", older_keys: &[], groups: &[] }
+}
+
 /// `radial-gradient(ellipse at center, transparent, #000)` at 65% opacity, drawn as thin elliptical rings.
 fn vignette(frame: &mut Frame, size: Size) {
     let reach = std::f32::consts::SQRT_2;

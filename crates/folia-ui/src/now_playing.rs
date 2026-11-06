@@ -2,8 +2,8 @@
 
 use folia_i18n::I18n;
 use folia_render::{Atmosphere, Program};
-use folia_visualizer::Scene;
-use iced::widget::{canvas, column, container, shader, stack, text};
+use folia_visualizer::{Scene, lyric_view};
+use iced::widget::{column, container, shader, stack, text};
 use iced::{Alignment, Color, Element, Length, Size};
 
 use crate::overlay::{self, Subtitle};
@@ -21,7 +21,7 @@ pub fn view<'a, M: 'a>(
     let has_lyrics = !scene.lyrics.lines.is_empty();
     let font_scale = scene.font_scale;
     let time = scene.time as f32;
-    let visualizer = canvas(scene).width(Length::Fill).height(Length::Fill);
+    let visualizer = lyric_view(scene);
     let show_glow = subtitle.translation.is_some() || subtitle.upcoming.is_some();
     let ellipse = overlay::glow_ellipse(
         window.width,

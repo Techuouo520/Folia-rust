@@ -347,6 +347,8 @@ impl Pickers {
         let Cell { which, index, label, chosen, width, picture_h } = cell;
         let hovered = self.hovered == Some(index);
         let picture: Element<'a, crate::panel::Message> = match (which, Style::ALL.get(index)) {
+            // A canvas cannot fade with the popover, so a closing picker drops its pictures at once.
+            (Row::Style, Some(_)) if self.open.is_none() => space().into(),
             (Row::Style, Some(style)) => {
                 // `posterTime` at rest; the picture under the pointer plays the clock.
                 let time = if hovered {
@@ -360,7 +362,10 @@ impl Pickers {
                     time,
                     theme: look.theme,
                     font_scale: look.font_scale,
+                    seed: "style-picture-lumiere",
                     stage: Some(Size::new(folia_visualizer::STAGE_WIDTH, folia_visualizer::STAGE_HEIGHT)),
+                    tuning: folia_visualizer::Values::default(),
+                    backdrop: true,
                 };
                 if hovered {
                     canvas(scene).width(Length::Fill).height(Length::Fill).into()

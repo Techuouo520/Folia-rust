@@ -9,11 +9,21 @@ pub enum Style {
     Tilt,
     Claddagh,
     Cadenza,
+    Nebbia,
+    Lumiere,
 }
 
 impl Style {
-    pub const ALL: [Style; 6] =
-        [Style::Classic, Style::Partita, Style::Still, Style::Tilt, Style::Claddagh, Style::Cadenza];
+    pub const ALL: [Style; 8] = [
+        Style::Classic,
+        Style::Partita,
+        Style::Still,
+        Style::Tilt,
+        Style::Claddagh,
+        Style::Cadenza,
+        Style::Nebbia,
+        Style::Lumiere,
+    ];
 
     /// Id used in settings files, the same as the original app's mode id.
     pub fn id(self) -> &'static str {
@@ -24,6 +34,8 @@ impl Style {
             Style::Tilt => "tilt",
             Style::Claddagh => "claddagh",
             Style::Cadenza => "cadenza",
+            Style::Nebbia => "nebbia",
+            Style::Lumiere => "lumiere",
         }
     }
 
@@ -66,6 +78,14 @@ impl Style {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">"#,
                 r#"<circle cx="9.5" cy="12.5" r="3.5"/><path d="M4 6.5h3.5" opacity="0.45"/><path d="M16 8h4" opacity="0.45"/><path d="M15 17h4.5" opacity="0.45"/></svg>"#
             ),
+            Style::Nebbia => concat!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">"#,
+                r#"<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M7 14c2-3.5 4-3.5 5 0s3 3 5-1" opacity="0.6"/><path d="M8 8v1.5M15.5 7.5v2" opacity="0.5"/></svg>"#
+            ),
+            Style::Lumiere => concat!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">"#,
+                r#"<path d="M10 3.5 6 15M14 3.5 18 15" opacity="0.5"/><path d="M6 19h12"/></svg>"#
+            ),
         }
     }
 
@@ -77,13 +97,51 @@ impl Style {
             Style::Tilt => "ui.visualizerTilt",
             Style::Claddagh => "ui.visualizerCladdagh",
             Style::Cadenza => "ui.visualizerCadenze",
+            Style::Nebbia => "ui.visualizerNebbia",
+            Style::Lumiere => "ui.visualizerLumiere",
         }
+    }
+
+    /// The settings this style draws, declared beside the style. Empty when it has none.
+    pub fn manifest(self) -> crate::tuning::Manifest {
+        match self {
+            Style::Classic => crate::styles::classic::manifest(),
+            Style::Partita => crate::styles::partita::manifest(),
+            Style::Still => crate::styles::still::manifest(),
+            Style::Tilt => crate::styles::tilt::manifest(),
+            Style::Claddagh => crate::styles::claddagh::manifest(),
+            Style::Cadenza => crate::styles::cadenza::manifest(),
+            Style::Nebbia => crate::styles::nebbia::manifest(),
+            Style::Lumiere => crate::styles::lumiere::manifest(),
+        }
+    }
+
+    /// Reads one style's table. `older_keys` fill in when the current key is absent.
+    pub fn load(self, tables: &std::collections::BTreeMap<String, toml::Value>) -> crate::tuning::Values {
+        let manifest = self.manifest();
+        let table =
+            tables.get(manifest.storage_key).or_else(|| manifest.older_keys.iter().find_map(|key| tables.get(*key)));
+        let table = table.and_then(toml::Value::as_table);
+        let mut values = crate::tuning::Values::from_table(manifest, table);
+        if self == Style::Partita {
+            crate::styles::partita::normalize(&mut values);
+        }
+        if self == Style::Nebbia {
+            crate::styles::nebbia::normalize(table, &mut values);
+        }
+        values
     }
 
     /// The most frames per second the style can use; static styles only need to notice line changes.
     pub fn max_fps(self) -> Option<u32> {
         match self {
-            Style::Classic | Style::Partita | Style::Tilt | Style::Claddagh | Style::Cadenza => None,
+            Style::Classic
+            | Style::Partita
+            | Style::Tilt
+            | Style::Claddagh
+            | Style::Cadenza
+            | Style::Nebbia
+            | Style::Lumiere => None,
             Style::Still => Some(10),
         }
     }

@@ -4,11 +4,13 @@ mod appearance;
 mod general;
 mod playback;
 mod player;
+mod visualizer;
 
 pub use appearance::{AppearanceSettings, FrameRate, ThemeMode};
 pub use general::{GeneralSettings, HomeTab};
 pub use playback::PlaybackSettings;
 pub use player::{BOTTOM_BAR_BASE, PlayerSettings, bottom_bar_max_offset, clamp_bottom_bar_offset};
+pub use visualizer::VisualizerSettings;
 
 use std::fs;
 use std::io;
