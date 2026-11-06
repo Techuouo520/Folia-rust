@@ -339,7 +339,7 @@ impl Omni {
         let code = self.provider(provider)?.login_code().await?;
         match code.content {
             QrContent::Url(url) => LoginQr::encode(code.key, &url),
-            QrContent::Png(png) => LoginQr::from_png(code.key, &png),
+            QrContent::Png(png) => LoginQr::decode_png(code.key, &png),
             QrContent::Browser(url) => Ok(LoginQr::browser(code.key, url)),
         }
     }
