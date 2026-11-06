@@ -401,6 +401,7 @@ fn column_body<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
             title_track,
             title_track,
             ink,
+            iced::font::Weight::ExtraBold,
         ));
     }
     head = head.push(fold).push(tab_column(host, ink, fit));
@@ -895,13 +896,13 @@ fn filter_field<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Ele
     let has_query = !seam.query.is_empty();
     let tone = if has_query { ink } else { soft(ink) };
     let accent = host.accent;
-    let input = iced::widget::text_input(super::tr(host, "libraryBravais.filterPlaceholder"), &seam.query)
+    let input = iced::widget::text_input("", &seam.query)
         .id(super::filter_id())
         .on_input(Message::Query)
         .on_submit(Message::FilterSubmit)
         .size(13)
         .padding(0)
-        .font(crate::typeface::font(iced::font::Weight::Semibold))
+        .font(crate::typeface::font(iced::font::Weight::Bold))
         .style(move |_theme: &Theme, _status| iced::widget::text_input::Style {
             background: Background::Color(Color::TRANSPARENT),
             border: Border::default(),
@@ -910,6 +911,14 @@ fn filter_field<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Ele
             value: ink,
             selection: Color { a: 0.3, ..accent },
         });
+    // The placeholder is 500 where the typed filter is 650; iced takes one font for both, so an empty field
+    // shows a plain line of its own over the input instead of the bold placeholder.
+    let input: Element<'a, Message> = if has_query {
+        input.into()
+    } else {
+        let hint = text(super::tr(host, "libraryBravais.filterPlaceholder")).size(13).color(soft(ink));
+        stack![input, container(hint).width(Length::Fill).height(Length::Fixed(34.0)).align_y(Alignment::Center)].into()
+    };
     let mut line =
         row![icon(Icon::ListFilter, 14.0, if has_query { accent } else { Color { a: tone.a * 0.75, ..tone } }), input]
             .spacing(8)
@@ -1042,7 +1051,7 @@ fn collection_menu<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
         a: ink.a,
     };
     let item = |label: &'a str, message: Message| -> Element<'a, Message> {
-        button(text(label).size(13).font(crate::typeface::font(iced::font::Weight::Semibold)).color(ink))
+        button(text(label).size(13).font(crate::typeface::font(iced::font::Weight::Bold)).color(ink))
             .width(Length::Fill)
             .padding([8.0, 10.0])
             .on_press(message)
@@ -1253,14 +1262,28 @@ fn row_body<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
     } else {
         items.push(fold);
         if !spine {
-            items.push(tracked_row(super::tr(host, "libraryBravais.homeTitle"), 15.0, 0.3, 0.3, ink));
+            items.push(tracked_row(
+                super::tr(host, "libraryBravais.homeTitle"),
+                15.0,
+                0.3,
+                0.3,
+                ink,
+                iced::font::Weight::ExtraBold,
+            ));
         }
         let tab_pad = if spine { (5.0, 9.0) } else { (8.0, 12.0) };
         let tab_size = if spine { 12.0 } else { 14.0 };
         let tab_track = if spine { 0.06 } else { 0.12 };
         let tabs = host.tabs.iter().map(|&(tab, label)| {
             let active = tab == host.current;
-            let face = tracked_row(label, tab_size, tab_track, 0.0, if active { ink } else { soft(ink) });
+            let face = tracked_row(
+                label,
+                tab_size,
+                tab_track,
+                0.0,
+                if active { ink } else { soft(ink) },
+                iced::font::Weight::Bold,
+            );
             home_tab(face, tab_pad, active, ink, Message::SelectTab(tab), None)
         });
         items.push(row(tabs).spacing(4).align_y(Alignment::Center).into());
@@ -1490,11 +1513,17 @@ fn ghost<'a>(lucide: Icon, icon_px: f32, box_px: f32, ink: Color, on_press: Opti
         .into()
 }
 
-fn tracked_row<'a>(label: &str, size: f32, tracking: f32, indent: f32, color: Color) -> Element<'a, Message> {
-    let chars = label
-        .chars()
-        .map(|ch| text(ch.to_string()).size(size).color(color).font(extra_bold()).into())
-        .collect::<Vec<_>>();
+fn tracked_row<'a>(
+    label: &str,
+    size: f32,
+    tracking: f32,
+    indent: f32,
+    color: Color,
+    weight: iced::font::Weight,
+) -> Element<'a, Message> {
+    let font = crate::typeface::font(weight);
+    let chars =
+        label.chars().map(|ch| text(ch.to_string()).size(size).color(color).font(font).into()).collect::<Vec<_>>();
     row(chars)
         .spacing(size * tracking)
         .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: size * indent })

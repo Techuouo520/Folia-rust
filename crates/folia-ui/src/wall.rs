@@ -37,7 +37,7 @@ const FIELD_ASPECT: f32 = 2.2;
 const TITLE_LINES: usize = 3;
 const BADGE_FONT: Font = crate::typeface::font(iced::font::Weight::ExtraBold);
 const TITLE_FONT: Font = crate::typeface::font(iced::font::Weight::Bold);
-const ARTIST_FONT: Font = crate::typeface::font(iced::font::Weight::Semibold);
+const ARTIST_FONT: Font = crate::typeface::font(iced::font::Weight::Bold);
 
 /// `x, y, cols, rows` in cells, from the original `blockTemplates.ts`.
 const TEMPLATES: [[(i32, i32, i32, i32); SLOTS_PER_BLOCK]; 4] = [

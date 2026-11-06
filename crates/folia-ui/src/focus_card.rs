@@ -473,7 +473,7 @@ pub fn body<'a>(i18n: &'a I18n, card: Card<'a>, reveal: (f32, f32)) -> Element<'
     .clip(true);
     // `.bravais-focus-links`: 17px, 650, at 85%; the separators at half that.
     let link = |value: String| {
-        text(value).size(17.0 * s).font(crate::typeface::font(iced::font::Weight::Semibold)).color(fade(0.85))
+        text(value).size(17.0 * s).font(crate::typeface::font(iced::font::Weight::Bold)).color(fade(0.85))
     };
     let mark = |value: &'static str| text(value).size(17.0 * s).color(fade(0.85 * 0.5));
     let mut links: Vec<Element<'a, Action>> = Vec::new();

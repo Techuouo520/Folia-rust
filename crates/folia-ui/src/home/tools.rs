@@ -257,6 +257,7 @@ fn island_face<'a>(home: &'a HomeChrome, host: &Host<'a>, geo: &Geometry, now: I
             daylight: host.daylight,
             actions_on_current: false,
             reorder: true,
+            row: queue_island::ISLAND_ROW,
         };
         home.queue.view(look, host.queue, host.queue_index, geo.list_h, now).map(Message::ToolsQueue)
     };
@@ -312,7 +313,7 @@ fn clear_button<'a>(home: &HomeChrome, host: &Host<'a>, ink: Color, alpha: f32) 
         let accent = Color { a: alpha, ..host.tokens.accent };
         let glyph = icon(Icon::Trash, 15.0, on_accent);
         button(
-            row![glyph, text(label).size(11).font(semibold()).color(on_accent)]
+            row![glyph, text(label).size(11).font(crate::typeface::font(iced::font::Weight::Bold)).color(on_accent)]
                 .spacing(6)
                 .align_y(Alignment::Center)
                 .padding(Padding { top: 0.0, right: 7.0, bottom: 0.0, left: 7.0 }),
@@ -587,7 +588,7 @@ fn lights_toggle<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
         } else {
             (None, Color { a: ink.a * 0.58, ..ink })
         };
-        container(text(label.to_owned()).size(10.5).font(semibold()).color(color))
+        container(text(label.to_owned()).size(10.5).font(crate::typeface::font(iced::font::Weight::Bold)).color(color))
             .width(Length::Fixed(44.0))
             .align_x(Alignment::Center)
             .padding(Padding { top: 4.0, right: 9.0, bottom: 4.0, left: 9.0 })

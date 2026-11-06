@@ -362,7 +362,31 @@ pub struct Look<'a> {
     pub actions_on_current: bool,
     /// The wall tools island drags its rows by a handle; the player panel's queue only scrolls.
     pub reorder: bool,
+    pub row: RowLook,
 }
+
+/// Row type: the island's 12.5px 550/700 over a 10.5px artist, the panel's 13px 400/600 over a 12px artist.
+#[derive(Clone, Copy)]
+pub struct RowLook {
+    pub title: f32,
+    pub title_weight: iced::font::Weight,
+    pub active_weight: iced::font::Weight,
+    pub artist: f32,
+}
+
+pub const ISLAND_ROW: RowLook = RowLook {
+    title: 12.5,
+    title_weight: iced::font::Weight::Semibold,
+    active_weight: iced::font::Weight::Bold,
+    artist: 10.5,
+};
+
+pub const PANEL_ROW: RowLook = RowLook {
+    title: 13.0,
+    title_weight: iced::font::Weight::Normal,
+    active_weight: iced::font::Weight::Semibold,
+    artist: 12.0,
+};
 
 /// `WallToolsQueueRow`: handle, the song (marker, title over artist), and on hover the row's actions.
 fn queue_row<'a>(
@@ -402,15 +426,15 @@ fn queue_row<'a>(
             border: Border { radius: 2.0.into(), ..Border::default() },
             ..container::Style::default()
         });
-    let weight = if active { iced::font::Weight::Bold } else { iced::font::Weight::Semibold };
+    let weight = if active { look.row.active_weight } else { look.row.title_weight };
     let title = text(track.title.as_str())
-        .size(12.5)
+        .size(look.row.title)
         .line_height(iced::widget::text::LineHeight::Relative(1.25))
         .font(crate::typeface::font(weight))
         .color(ink)
         .wrapping(iced::widget::text::Wrapping::None);
     let artist = text(track.artist.as_deref().unwrap_or(""))
-        .size(10.5)
+        .size(look.row.artist)
         .line_height(iced::widget::text::LineHeight::Relative(1.25))
         .color(Color { a: ink.a * 0.52, ..ink })
         .wrapping(iced::widget::text::Wrapping::None);
@@ -508,13 +532,13 @@ fn ghost<'a>(look: Look<'a>, track: &'a Track) -> Element<'a, Message> {
     let ink = look.ink;
     let words = column![
         text(track.title.as_str())
-            .size(12.5)
+            .size(look.row.title)
             .line_height(iced::widget::text::LineHeight::Relative(1.25))
-            .font(crate::typeface::font(iced::font::Weight::Semibold))
+            .font(crate::typeface::font(look.row.title_weight))
             .color(ink)
             .wrapping(iced::widget::text::Wrapping::None),
         text(track.artist.as_deref().unwrap_or(""))
-            .size(10.5)
+            .size(look.row.artist)
             .line_height(iced::widget::text::LineHeight::Relative(1.25))
             .color(Color { a: ink.a * 0.52, ..ink })
             .wrapping(iced::widget::text::Wrapping::None),

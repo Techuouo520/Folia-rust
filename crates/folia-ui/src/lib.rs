@@ -53,6 +53,7 @@ pub use overlay::{
 pub use platform_highlight::ProviderHighlight;
 pub use platform_rows::{ProviderRowStatus, order_provider_rows};
 pub use playback_navigation::PlaybackNavigation;
+pub use typeface::install as install_fonts;
 pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, seam_on_axis, wider_span};
 pub use wall_pan::{Glide as WallGlide, Inertia as WallInertia, Release as WallRelease};
 pub use wall_shift::{Kind as ShiftKind, Pose as ShiftPose, Shift as WallShift};

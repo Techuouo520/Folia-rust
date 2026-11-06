@@ -902,6 +902,7 @@ fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Tokens, ink: Co
         daylight: view.daylight,
         actions_on_current: true,
         reorder: false,
+        row: queue_island::PANEL_ROW,
     };
     let list = panel.queue.view(look, view.queue, view.index, list_h, Instant::now()).map(Message::Queue);
     column![head, list].spacing(0).into()

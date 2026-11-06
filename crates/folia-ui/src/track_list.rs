@@ -62,9 +62,13 @@ fn track_row<'a, M: Clone + 'a>(
     let album = track.album.as_deref().unwrap_or_else(|| i18n.t("player.unknownAlbum"));
     let content = row![
         text((index + 1).to_string()).size(13).color(muted).width(Length::Fixed(40.0)),
-        column![text(&track.title).size(15), text(artist).size(12).color(muted)].width(Length::FillPortion(3)),
+        column![
+            text(&track.title).size(14).font(crate::typeface::font(iced::font::Weight::Semibold)),
+            text(artist).size(12).color(muted)
+        ]
+        .width(Length::FillPortion(3)),
         text(album).size(13).color(muted).width(Length::FillPortion(2)),
-        text(format_time(track.duration)).size(13).color(muted),
+        text(format_time(track.duration)).size(12).font(iced::Font::MONOSPACE).color(muted),
     ]
     .spacing(12)
     .align_y(Alignment::Center);

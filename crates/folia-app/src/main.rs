@@ -51,6 +51,7 @@ fn main() -> anyhow::Result<()> {
     let system_locale = sys_locale::get_locale();
     let i18n = I18n::new(general.language.resolve(system_locale.as_deref()))?;
     tracing::info!(config = %store.dir().display(), language = i18n.language().code(), "starting");
+    folia_ui::install_fonts();
 
     let init = Init {
         appearance: store.load_or_default::<AppearanceSettings>(),
