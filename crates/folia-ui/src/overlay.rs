@@ -12,8 +12,11 @@ pub const CAPSULE_EXPAND_MS: u64 = 20;
 pub const CAPSULE_COLLAPSE_MS: u64 = 100;
 /// Capsule showing and hiding with the player chrome, the original 0.26s `easeOut`.
 pub const CAPSULE_FADE_MS: u64 = 260;
-/// By then the layout spring is within 0.05px of a 160px move (decay `e^(-12t)`).
+/// By then the layout spring is within 0.05px of a 160px move (decay `e^(-12t)`); the subtitle's (`e^(-14t)`)
+/// is closer still.
 pub const CAPSULE_SETTLE_MS: u64 = 700;
+/// `PLAYER_BOTTOM_BAR_SUBTITLE_CLEARANCE_PX`: room the subtitle keeps above the bar's baseline while the bar is up.
+pub const SUBTITLE_CLEARANCE: f32 = 80.0;
 /// Widest expanded capsule, the original `32rem`.
 pub const CAPSULE_MAX: f32 = 512.0;
 
@@ -102,17 +105,30 @@ impl CapsuleHover {
     }
 }
 
-/// Size of the capsule between collapsed (0) and expanded (1), moved by the original layout spring.
+/// A framer-motion spring's stiffness and damping, unit mass.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CapsuleSpring {
+pub struct SpringParams {
+    pub stiffness: f64,
+    pub damping: f64,
+}
+
+/// `CONTROL_LAYOUT_SPRING`: the capsule's size between collapsed (0) and expanded (1). It overshoots a little.
+pub const CAPSULE_LAYOUT_SPRING: SpringParams = SpringParams { stiffness: 280.0, damping: 24.0 };
+/// `SUBTITLE_PRESENCE_SPRING`: the subtitle making room for the capsule (`controlBarPresence`, 0 absent, 1 present).
+pub const SUBTITLE_PRESENCE_SPRING: SpringParams = SpringParams { stiffness: 280.0, damping: 28.0 };
+
+/// A chrome value moved by a spring released at rest; settled after [`CAPSULE_SETTLE_MS`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChromeSpring {
     pub from: f32,
     pub to: f32,
     pub started_ms: u64,
+    pub params: SpringParams,
 }
 
-impl CapsuleSpring {
-    pub fn settled(value: f32, now_ms: u64) -> Self {
-        Self { from: value, to: value, started_ms: now_ms }
+impl ChromeSpring {
+    pub fn settled(value: f32, now_ms: u64, params: SpringParams) -> Self {
+        Self { from: value, to: value, started_ms: now_ms, params }
     }
 
     /// Releases the spring towards `to` from where it is now. The same target leaves it running.
@@ -120,22 +136,28 @@ impl CapsuleSpring {
         if (self.to - to).abs() < 0.001 {
             return self;
         }
-        Self { from: self.value(now_ms), to, started_ms: now_ms }
+        Self { from: self.value(now_ms), to, started_ms: now_ms, params: self.params }
     }
 
-    /// `CONTROL_LAYOUT_SPRING`: stiffness 280, damping 24, unit mass. It overshoots a little.
     pub fn value(self, now_ms: u64) -> f32 {
         let elapsed = now_ms.saturating_sub(self.started_ms) as f64 / 1000.0;
         if elapsed * 1000.0 >= CAPSULE_SETTLE_MS as f64 {
             return self.to;
         }
-        let value = folia_visualizer::spring(f64::from(self.from), f64::from(self.to), elapsed, 280.0, 24.0);
-        value as f32
+        let SpringParams { stiffness, damping } = self.params;
+        folia_visualizer::spring(f64::from(self.from), f64::from(self.to), elapsed, stiffness, damping) as f32
     }
 
     pub fn running(self, now_ms: u64) -> bool {
         (self.from - self.to).abs() > 0.001 && now_ms.saturating_sub(self.started_ms) < CAPSULE_SETTLE_MS
     }
+}
+
+/// `resolvePlayerSubtitleBottomFromPresence`: the subtitle's `bottom` for a bar `offset` and the spring's presence.
+/// Present it stands `PLAYER_BOTTOM_BAR_SUBTITLE_CLEARANCE_PX` above the bar's baseline, absent on the base 32.
+pub fn subtitle_bottom(offset: f32, presence: f32) -> f32 {
+    let base = folia_store::BOTTOM_BAR_BASE;
+    base + presence * ((offset - base) + SUBTITLE_CLEARANCE)
 }
 
 /// Hover opens the capsule. A track that is loaded and not playing stays open, as the original does.

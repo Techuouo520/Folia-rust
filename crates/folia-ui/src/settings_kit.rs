@@ -103,6 +103,103 @@ impl Tokens {
     }
 }
 
+/// The colours of a surface that fades as a whole, with its opacity already applied. Faces built only from this
+/// cannot paint anything at full strength while the rest of the surface fades out.
+#[derive(Debug, Clone, Copy)]
+pub struct Faded {
+    alpha: f32,
+    daylight: bool,
+    text: Color,
+    accent: Color,
+    tokens: Tokens,
+}
+
+impl Faded {
+    pub fn new(tokens: Tokens, text: Color, accent: Color, daylight: bool, alpha: f32) -> Self {
+        let alpha = alpha.clamp(0.0, 1.0);
+        let tokens = tokens.faded(alpha);
+        Self { alpha, daylight, text: tint(text, text.a, alpha), accent: tint(accent, accent.a, alpha), tokens }
+    }
+
+    /// A part that fades on its own inside this surface: the help list, a disabled row.
+    pub fn faded(self, share: f32) -> Self {
+        let share = share.clamp(0.0, 1.0);
+        Self {
+            alpha: self.alpha * share,
+            daylight: self.daylight,
+            text: tint(self.text, self.text.a, share),
+            accent: tint(self.accent, self.accent.a, share),
+            tokens: self.tokens.faded(share),
+        }
+    }
+
+    pub fn alpha(&self) -> f32 {
+        self.alpha
+    }
+
+    pub fn daylight(&self) -> bool {
+        self.daylight
+    }
+
+    pub fn text(&self) -> Color {
+        self.text
+    }
+
+    pub fn accent(&self) -> Color {
+        self.accent
+    }
+
+    pub fn tokens(&self) -> Tokens {
+        self.tokens
+    }
+
+    /// The text at `share` of its own opacity.
+    pub fn ink(&self, share: f32) -> Color {
+        tint(self.text, self.text.a, share)
+    }
+
+    /// `color`'s hue at opacity `a` before the fade: a fixed wash, ring or shadow.
+    pub fn tint(&self, color: Color, a: f32) -> Color {
+        tint(color, a, self.alpha)
+    }
+
+    /// Black at `day` in daylight, white at `night` otherwise: the washes, rules and borders on glass.
+    pub fn wash(&self, day: f32, night: f32) -> Color {
+        if self.daylight { self.tint(Color::BLACK, day) } else { self.tint(Color::WHITE, night) }
+    }
+
+    /// `container::rounded_box` under this fade, for tooltips over the surface.
+    pub fn tip(self) -> impl Fn(&iced::Theme) -> container::Style {
+        faded_box(self.alpha)
+    }
+}
+
+// Reads as the faded tokens, so a face that took `Tokens` reads the same fields from the fade.
+impl std::ops::Deref for Faded {
+    type Target = Tokens;
+
+    fn deref(&self) -> &Tokens {
+        &self.tokens
+    }
+}
+
+/// `container::rounded_box` at `alpha` of its opacity.
+pub fn faded_box(alpha: f32) -> impl Fn(&iced::Theme) -> container::Style {
+    move |theme| {
+        let style = container::rounded_box(theme);
+        container::Style {
+            background: style.background.map(|background| background.scale_alpha(alpha)),
+            text_color: style.text_color.map(|color| color.scale_alpha(alpha)),
+            border: Border { color: style.border.color.scale_alpha(alpha), ..style.border },
+            ..style
+        }
+    }
+}
+
+fn tint(color: Color, a: f32, alpha: f32) -> Color {
+    Color { a: a * alpha, ..color }
+}
+
 /// A list entry whose label is already translated.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Choice<T> {

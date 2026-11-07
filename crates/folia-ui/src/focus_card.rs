@@ -392,8 +392,10 @@ pub fn key_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers, r
     match named {
         // Alt+Enter opens the album or artist, which have no pages here.
         Named::Enter if !repeat && !modifiers.alt() => Some(if modifiers.shift() { Key::Enqueue } else { Key::Enter }),
-        _ if modifiers.alt() || modifiers.shift() => None,
+        _ if modifiers.alt() => None,
+        // Escape comes before the Shift cut, so Shift + Esc steps back as well.
         Named::Escape if !repeat => Some(Key::Escape),
+        _ if modifiers.shift() => None,
         Named::ArrowUp => Some(Key::Move(Direction::Up)),
         Named::ArrowDown => Some(Key::Move(Direction::Down)),
         Named::ArrowLeft => Some(Key::Move(Direction::Left)),

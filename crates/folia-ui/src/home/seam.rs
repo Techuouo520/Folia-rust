@@ -3,11 +3,9 @@
 use std::time::{Duration, Instant};
 
 use folia_render::Plate;
-use iced::advanced::layout::{self, Layout};
-use iced::advanced::widget::{Operation, Tree};
-use iced::advanced::{Clipboard, Shell, Widget};
+
 use iced::widget::{button, column, container, mouse_area, row, shader, space, stack, text};
-use iced::{Alignment, Background, Border, Color, Element, Event, Length, Rectangle, Size, Theme, Vector, mouse};
+use iced::{Alignment, Background, Border, Color, Element, Length, Size, Theme, Vector};
 use lucide_static_svg::Icon;
 
 use super::{AccountSlot, HomeChrome, Host, Message};
@@ -73,7 +71,7 @@ fn plate_box(host: &Host<'_>) -> ([f32; 2], [f32; 2]) {
 fn clip_body<'a>(host: &Host<'a>, body: Element<'a, Message>) -> Element<'a, Message> {
     let (clip_origin, clip_size, layout_size, shift) = clip_frame(host);
     let shifted = iced::widget::float(body).translate(move |_, _| shift);
-    let sized = SeamLayout { content: shifted.into(), size: layout_size };
+    let sized = crate::design_size::DesignSize { content: shifted.into(), size: layout_size };
     let clipped =
         container(Element::new(sized)).width(Length::Fixed(clip_size.0)).height(Length::Fixed(clip_size.1)).clip(true);
     let seam = mouse_area(clipped).on_press(Message::Frame).interaction(iced::mouse::Interaction::Idle);
@@ -84,104 +82,6 @@ fn clip_body<'a>(host: &Host<'a>, body: Element<'a, Message>) -> Element<'a, Mes
         .align_y(Alignment::Start)
         .padding(iced::Padding { top: clip_origin.1.max(0.0), right: 0.0, bottom: 0.0, left: clip_origin.0.max(0.0) })
         .into()
-}
-
-/// `Length::Fixed` is clamped by the parent's maximum, so a clipped seam would reflow its panel while it opens.
-/// This wrapper keeps the layout at the content's design size; the container around it still clips the overhang.
-pub(crate) struct SeamLayout<'a, Message> {
-    pub(crate) content: Element<'a, Message>,
-    pub(crate) size: Size,
-}
-
-impl<Message> Widget<Message, Theme, iced::Renderer> for SeamLayout<'_, Message> {
-    fn children(&self) -> Vec<Tree> {
-        vec![Tree::new(&self.content)]
-    }
-
-    fn diff(&self, tree: &mut Tree) {
-        tree.diff_children(std::slice::from_ref(&self.content));
-    }
-
-    fn size(&self) -> Size<Length> {
-        self.content.as_widget().size()
-    }
-
-    fn layout(&mut self, tree: &mut Tree, renderer: &iced::Renderer, limits: &layout::Limits) -> layout::Node {
-        let max = limits.max();
-        let inflated = layout::Limits::new(
-            limits.min(),
-            Size::new(max.width.max(self.size.width), max.height.max(self.size.height)),
-        );
-        self.content.as_widget_mut().layout(&mut tree.children[0], renderer, &inflated)
-    }
-
-    fn operate(
-        &mut self,
-        tree: &mut Tree,
-        layout: Layout<'_>,
-        renderer: &iced::Renderer,
-        operation: &mut dyn Operation,
-    ) {
-        self.content.as_widget_mut().operate(&mut tree.children[0], layout, renderer, operation);
-    }
-
-    fn update(
-        &mut self,
-        tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &iced::Renderer,
-        clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, Message>,
-        viewport: &Rectangle,
-    ) {
-        self.content.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            layout,
-            cursor,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
-        );
-    }
-
-    fn draw(
-        &self,
-        tree: &Tree,
-        renderer: &mut iced::Renderer,
-        theme: &Theme,
-        style: &iced::advanced::renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        self.content.as_widget().draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
-    }
-
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &iced::Renderer,
-    ) -> mouse::Interaction {
-        self.content.as_widget().mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
-    }
-
-    fn overlay<'a>(
-        &'a mut self,
-        tree: &'a mut Tree,
-        layout: Layout<'a>,
-        renderer: &iced::Renderer,
-        viewport: &Rectangle,
-        offset: Vector,
-    ) -> Option<iced::advanced::overlay::Element<'a, Message, Theme, iced::Renderer>> {
-        self.content.as_widget_mut().overlay(&mut tree.children[0], layout, renderer, viewport, offset)
-    }
 }
 
 fn clip_frame(host: &Host<'_>) -> ((f32, f32), (f32, f32), Size, Vector) {

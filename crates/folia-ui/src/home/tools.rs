@@ -2,6 +2,8 @@
 
 use std::time::Instant;
 
+use folia_core::Track;
+use folia_i18n::I18n;
 use folia_render::Plate;
 use iced::widget::slider::{Handle, HandleShape, Rail};
 use iced::widget::{
@@ -13,6 +15,7 @@ use lucide_static_svg::Icon;
 use super::{HELP_PAD, HELP_ROW_H, HELP_ROWS, HomeChrome, Host, Message};
 use crate::icons::icon;
 use crate::queue_island;
+use crate::settings_kit::Faded;
 
 const BUTTON: f32 = 48.0;
 const GAP: f32 = 16.0;
@@ -88,10 +91,6 @@ fn edge(host: &Host<'_>) -> f32 {
     if host.window_width < 640.0 { 16.0 } else { 24.0 }
 }
 
-fn panel_width(host: &Host<'_>) -> f32 {
-    (host.window_width - 32.0).clamp(1.0, 296.0)
-}
-
 /// `max-height: max(150px, calc(100vh - 600px))`, further capped so the panel and the smallest island fit.
 fn help_visible(host: &Host<'_>, island: bool, room: f32) -> f32 {
     let full = HELP_PAD + HELP_ROWS as f32 * HELP_ROW_H;
@@ -110,10 +109,10 @@ pub fn dock<'a>(home: &'a HomeChrome, host: &Host<'a>, now: Instant) -> Element<
     let geo = geometry(home, host, now);
     let mut body = column![].width(Length::Fixed(geo.panel_w)).align_x(Alignment::End);
     if geo.island {
-        body = body.push(island_face(home, host, &geo, now));
+        body = body.push(island_face(home, Face::new(host, home.island(now)), &geo, now));
         body = body.push(space().height(Length::Fixed(STACK_GAP)));
     }
-    body = body.push(panel_face(home, host, open, &geo, now));
+    body = body.push(panel_face(home, Face::new(host, open), &geo, now));
     body = body.push(space().height(Length::Fixed(GAP)));
     body = body.push(button);
     // Presses on the panel padding stay here. The dismiss layer is underneath.
@@ -233,17 +232,40 @@ fn plate<'a>(host: &Host<'a>, rect: Rectangle, radius: f32, fill: [f32; 4], shad
         .into()
 }
 
-fn island_face<'a>(home: &'a HomeChrome, host: &Host<'a>, geo: &Geometry, now: Instant) -> Element<'a, Message> {
-    let alpha = home.island(now);
-    let ink = Color { a: host.text.a * alpha, ..host.text };
-    let border = if host.daylight {
-        Color { a: 0.07 * alpha, ..Color::BLACK }
-    } else {
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 * alpha }
-    };
-    let count = host.queue.len();
+/// What a panel face reads of the host: its words and state, and its colours only through the panel's fade.
+#[derive(Clone, Copy)]
+struct Face<'a> {
+    i18n: &'a I18n,
+    paint: Faded,
+    has_track: bool,
+    fm: bool,
+    volume: f32,
+    muted: bool,
+    queue: &'a [Track],
+    queue_index: Option<usize>,
+}
+
+impl<'a> Face<'a> {
+    fn new(host: &Host<'a>, alpha: f32) -> Self {
+        Self {
+            i18n: host.i18n,
+            paint: Faded::new(host.tokens, host.text, host.accent, host.daylight, alpha),
+            has_track: host.has_track,
+            fm: host.fm,
+            volume: host.volume,
+            muted: host.muted,
+            queue: host.queue,
+            queue_index: host.queue_index,
+        }
+    }
+}
+
+fn island_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: Instant) -> Element<'a, Message> {
+    let paint = face.paint;
+    let border = paint.wash(0.07, 0.08);
+    let count = face.queue.len();
     let list: Element<'a, Message> = if count == 0 {
-        container(text(host.i18n.t("queue.empty").to_owned()).size(12).color(Color { a: ink.a * 0.45, ..ink }))
+        container(text(face.i18n.t("queue.empty").to_owned()).size(12).color(paint.ink(0.45)))
             .width(Length::Fill)
             .height(Length::Fixed(geo.list_h))
             .align_x(Alignment::Center)
@@ -251,17 +273,17 @@ fn island_face<'a>(home: &'a HomeChrome, host: &Host<'a>, geo: &Geometry, now: I
             .into()
     } else {
         let look = queue_island::Look {
-            i18n: host.i18n,
-            tokens: host.tokens.faded(alpha),
-            ink,
-            daylight: host.daylight,
+            i18n: face.i18n,
+            tokens: paint.tokens(),
+            ink: paint.text(),
+            daylight: paint.daylight(),
             actions_on_current: false,
             reorder: true,
             row: queue_island::ISLAND_ROW,
         };
-        home.queue.view(look, host.queue, host.queue_index, geo.list_h, now).map(Message::ToolsQueue)
+        home.queue.view(look, face.queue, face.queue_index, geo.list_h, now).map(Message::ToolsQueue)
     };
-    let body = column![island_header(home, host, alpha, count), list].width(Length::Fill).height(Length::Fill);
+    let body = column![island_header(home, face, count), list].width(Length::Fill).height(Length::Fill);
     container(body)
         .width(Length::Fixed(geo.panel_w))
         .height(Length::Fixed(geo.island_h))
@@ -273,25 +295,20 @@ fn island_face<'a>(home: &'a HomeChrome, host: &Host<'a>, geo: &Geometry, now: I
         .into()
 }
 
-fn island_header<'a>(home: &HomeChrome, host: &Host<'a>, alpha: f32, count: usize) -> Element<'a, Message> {
-    let ink = Color { a: host.text.a * alpha, ..host.text };
-    let line = if host.daylight {
-        Color { a: 0.07 * alpha, ..Color::BLACK }
-    } else {
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 * alpha }
-    };
+fn island_header<'a>(home: &HomeChrome, face: Face<'a>, count: usize) -> Element<'a, Message> {
+    let line = face.paint.wash(0.07, 0.08);
     let count_text = count.to_string();
-    let title = host.i18n.format("wallTools.queueCount", &[("count", count_text.as_str())]);
+    let title = face.i18n.format("wallTools.queueCount", &[("count", count_text.as_str())]);
     let title = text(title)
         .size(12)
         .font(crate::typeface::font(iced::font::Weight::Bold))
-        .color(Color { a: ink.a * 0.72, ..ink })
+        .color(face.paint.ink(0.72))
         .width(Length::Fill)
         .wrapping(iced::widget::text::Wrapping::None);
     let mut bar = row![title].align_y(Alignment::Center).width(Length::Fill);
     // The playing item stays after a clear, so with it alone there is nothing left to clear.
     if count > 1 {
-        bar = bar.push(clear_button(home, host, ink, alpha));
+        bar = bar.push(clear_button(home, face));
     }
     column![
         container(bar).width(Length::Fill).height(Length::Fixed(ISLAND_HEADER - 1.0)).padding(Padding {
@@ -305,12 +322,13 @@ fn island_header<'a>(home: &HomeChrome, host: &Host<'a>, alpha: f32, count: usiz
     .into()
 }
 
-fn clear_button<'a>(home: &HomeChrome, host: &Host<'a>, ink: Color, alpha: f32) -> Element<'a, Message> {
+fn clear_button<'a>(home: &HomeChrome, face: Face<'a>) -> Element<'a, Message> {
+    let paint = face.paint;
     let armed = home.queue_clear_armed();
-    let label = if armed { host.i18n.t("wallTools.queueClearConfirm") } else { host.i18n.t("wallTools.queueClear") };
+    let label = if armed { face.i18n.t("wallTools.queueClearConfirm") } else { face.i18n.t("wallTools.queueClear") };
     if armed {
-        let on_accent = Color { a: alpha, ..host.tokens.on_accent };
-        let accent = Color { a: alpha, ..host.tokens.accent };
+        let on_accent = paint.tokens().on_accent;
+        let accent = paint.tokens().accent;
         let glyph = icon(Icon::Trash, 15.0, on_accent);
         button(
             row![glyph, text(label).size(11).font(crate::typeface::font(iced::font::Weight::Bold)).color(on_accent)]
@@ -328,8 +346,7 @@ fn clear_button<'a>(home: &HomeChrome, host: &Host<'a>, ink: Color, alpha: f32) 
         })
         .into()
     } else {
-        let daylight = host.daylight;
-        let glyph = icon(Icon::Trash, 15.0, Color { a: ink.a * 0.72, ..ink });
+        let glyph = icon(Icon::Trash, 15.0, paint.ink(0.72));
         button(container(glyph).center(Length::Fixed(28.0)))
             .width(Length::Fixed(28.0))
             .height(Length::Fixed(28.0))
@@ -337,13 +354,8 @@ fn clear_button<'a>(home: &HomeChrome, host: &Host<'a>, ink: Color, alpha: f32) 
             .on_press(Message::ToolsQueueClear)
             .style(move |_theme: &Theme, status| {
                 let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
-                let fill = if daylight {
-                    Color { a: 0.07 * alpha, ..Color::BLACK }
-                } else {
-                    Color { r: 1.0, g: 1.0, b: 1.0, a: 0.10 * alpha }
-                };
                 button::Style {
-                    background: hot.then_some(Background::Color(fill)),
+                    background: hot.then_some(Background::Color(paint.wash(0.07, 0.10))),
                     border: Border { radius: 9.0.into(), ..Border::default() },
                     ..button::Style::default()
                 }
@@ -352,36 +364,25 @@ fn clear_button<'a>(home: &HomeChrome, host: &Host<'a>, ink: Color, alpha: f32) 
     }
 }
 
-fn panel_face<'a>(
-    home: &'a HomeChrome,
-    host: &Host<'a>,
-    open: f32,
-    geo: &Geometry,
-    now: Instant,
-) -> Element<'a, Message> {
-    let border = if host.daylight {
-        Color { a: 0.07 * open, ..Color::BLACK }
-    } else {
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.08 * open }
-    };
-    let ink = Color { a: host.text.a * open, ..host.text };
+fn panel_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: Instant) -> Element<'a, Message> {
+    let border = face.paint.wash(0.07, 0.08);
     let mut inner = column![
-        quick_row(home, host, ink, geo.panel_w),
+        quick_row(home, face, geo.panel_w),
         space().height(Length::Fixed(QUICK_GAP)),
-        volume_row(host, ink),
+        volume_row(face),
         space().height(Length::Fixed(HEADING_GAP)),
-        heading(host, ink, "libraryBravais.toolsAppearance"),
+        heading(face, "libraryBravais.toolsAppearance"),
         space().height(Length::Fixed(ROW_GAP)),
-        look_row(host, ink),
+        look_row(face),
         space().height(Length::Fixed(ROW_GAP)),
-        tint_row(host, ink),
+        tint_row(face),
         space().height(Length::Fixed(HELP_MARGIN)),
-        help_section(host, ink),
+        help_section(face),
     ];
     if home.help_shown(now) {
         inner = inner.push(space().height(Length::Fixed(HELP_LIST_MARGIN))).push(help_list(
-            host,
-            open,
+            face,
+            geo.panel_w,
             geo.help_h,
             home.help(now),
         ));
@@ -396,41 +397,37 @@ fn panel_face<'a>(
         .into()
 }
 
-fn quick_row<'a>(home: &HomeChrome, host: &Host<'a>, ink: Color, panel_w: f32) -> Element<'a, Message> {
+fn quick_row<'a>(home: &HomeChrome, face: Face<'a>, panel_w: f32) -> Element<'a, Message> {
     let cell = ((panel_w - 20.0) - 4.0 * 5.0) / 6.0;
-    let fm = host.fm;
+    let (i18n, paint, fm) = (face.i18n, face.paint, face.fm);
     let queue_open = home.queue_island_open();
-    let shuffle_tip = tooltip_text(
-        host.i18n.t("wallTools.shuffle"),
-        Some(host.i18n.t("wallTools.shuffleUnavailable")),
-        Some(": + R"),
-    );
-    let theme_tip = tooltip_text(host.i18n.t("wallTools.theme"), Some(host.i18n.t("wallTools.themeUnavailable")), None);
+    let shuffle_tip =
+        tooltip_text(i18n.t("wallTools.shuffle"), Some(i18n.t("wallTools.shuffleUnavailable")), Some(": + R"));
+    let theme_tip = tooltip_text(i18n.t("wallTools.theme"), Some(i18n.t("wallTools.themeUnavailable")), None);
     let queue_status = if fm {
-        host.i18n.t("wallTools.queueUnavailableInFm")
+        i18n.t("wallTools.queueUnavailableInFm")
     } else if queue_open {
-        host.i18n.t("wallTools.queueHide")
+        i18n.t("wallTools.queueHide")
     } else {
-        host.i18n.t("wallTools.queueShow")
+        i18n.t("wallTools.queueShow")
     };
-    let queue_tip = tooltip_text(host.i18n.t("wallTools.queue"), Some(queue_status), None);
-    let lattice_status =
-        if fm { host.i18n.t("status.latticeUnavailableInFm") } else { host.i18n.t("status.latticeUnavailable") };
+    let queue_tip = tooltip_text(i18n.t("wallTools.queue"), Some(queue_status), None);
+    let lattice_status = if fm { i18n.t("status.latticeUnavailableInFm") } else { i18n.t("status.latticeUnavailable") };
     // No Lattice and no Ctrl/Cmd + B in this build: the label and the reason only.
-    let lattice_tip = tooltip_text(host.i18n.t("libraryBravais.toolsLattice"), Some(lattice_status), None);
+    let lattice_tip = tooltip_text(i18n.t("libraryBravais.toolsLattice"), Some(lattice_status), None);
     let player_tip = tooltip_text(
-        host.i18n.t("wallTools.openPlayer"),
-        (!host.has_track).then_some(host.i18n.t("wallTools.openPlayerUnavailable")),
+        i18n.t("wallTools.openPlayer"),
+        (!face.has_track).then_some(i18n.t("wallTools.openPlayerUnavailable")),
         None,
     );
-    let settings_tip = host.i18n.t("wallTools.openSettings").to_owned();
+    let settings_tip = i18n.t("wallTools.openSettings").to_owned();
     row![
-        quick(Icon::Shuffle, cell, ink, host.daylight, None, shuffle_tip),
-        quick(Icon::Sparkles, cell, ink, host.daylight, None, theme_tip),
-        quick(Icon::ListMusic, cell, ink, host.daylight, (!fm).then_some(Message::ToolsQueueToggle), queue_tip,),
-        quick(Icon::PanelsTopLeft, cell, ink, host.daylight, None, lattice_tip),
-        quick(Icon::Disc3, cell, ink, host.daylight, host.has_track.then_some(Message::Player), player_tip),
-        quick(Icon::Settings, cell, ink, host.daylight, Some(Message::Settings), settings_tip),
+        quick(Icon::Shuffle, cell, paint, None, shuffle_tip),
+        quick(Icon::Sparkles, cell, paint, None, theme_tip),
+        quick(Icon::ListMusic, cell, paint, (!fm).then_some(Message::ToolsQueueToggle), queue_tip),
+        quick(Icon::PanelsTopLeft, cell, paint, None, lattice_tip),
+        quick(Icon::Disc3, cell, paint, face.has_track.then_some(Message::Player), player_tip),
+        quick(Icon::Settings, cell, paint, Some(Message::Settings), settings_tip),
     ]
     .spacing(4)
     .height(Length::Fixed(QUICK_H))
@@ -448,19 +445,14 @@ fn tooltip_text(label: &str, status: Option<&str>, kbd: Option<&str>) -> String 
     parts.join(" · ")
 }
 
-fn heading<'a>(host: &Host<'a>, ink: Color, key: &'static str) -> Element<'a, Message> {
-    let line = if host.daylight {
-        Color { a: 0.09 * ink.a, ..Color::BLACK }
-    } else {
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.10 * ink.a }
-    };
+fn heading<'a>(face: Face<'a>, key: &'static str) -> Element<'a, Message> {
     column![
-        rule(line),
+        rule(face.paint.wash(0.09, 0.10)),
         container(
-            text(host.i18n.t(key).to_owned())
+            text(face.i18n.t(key).to_owned())
                 .size(10)
                 .font(crate::typeface::font(iced::font::Weight::Bold))
-                .color(Color { a: ink.a * 0.52, ..ink }),
+                .color(face.paint.ink(0.52)),
         )
         .width(Length::Fill)
         .height(Length::Fixed(HEADING_H - 1.0))
@@ -481,36 +473,34 @@ fn rule<'a>(color: Color) -> Element<'a, Message> {
 }
 
 /// `透光`: value cycled by the wall look store, which this build does not have yet; shown as its current solid state.
-fn look_row<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
-    let value = host.i18n.t("options.libraryWallLookSolid");
-    action_row(host, ink, Icon::Blinds, host.i18n.t("options.libraryWallLook"), Some(value), None, false)
+fn look_row<'a>(face: Face<'a>) -> Element<'a, Message> {
+    let value = face.i18n.t("options.libraryWallLookSolid");
+    action_row(face, Icon::Blinds, face.i18n.t("options.libraryWallLook"), Some(value), None, false)
 }
 
 /// `海报聚焦叠色`: the toggle needs `latticePosterTintEnabled`, absent here, so it stays off and disabled.
-fn tint_row<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
-    action_row(host, ink, Icon::Layers, host.i18n.t("options.latticePosterTint"), None, Some(false), false)
+fn tint_row<'a>(face: Face<'a>) -> Element<'a, Message> {
+    action_row(face, Icon::Layers, face.i18n.t("options.latticePosterTint"), None, Some(false), false)
 }
 
 fn action_row<'a>(
-    host: &Host<'a>,
-    ink: Color,
+    face: Face<'a>,
     glyph: Icon,
     label: &str,
     value: Option<&str>,
     toggle: Option<bool>,
     enabled: bool,
 ) -> Element<'a, Message> {
-    let alpha = if enabled { 1.0 } else { 0.35 };
-    let ink = Color { a: ink.a * alpha, ..ink };
-    let daylight = host.daylight;
+    let paint = face.paint.faded(if enabled { 1.0 } else { 0.35 });
+    let ink = paint.text();
     let icon = icon(glyph, 17.0, ink);
     let label = text(label.to_owned()).size(13).font(crate::typeface::font(iced::font::Weight::Normal)).color(ink);
     let mut content = row![icon, label].spacing(11).align_y(Alignment::Center).width(Length::Fill);
     if let Some(value) = value {
-        content = content.push(text(value.to_owned()).size(12).font(semibold()).color(Color { a: ink.a * 0.6, ..ink }));
+        content = content.push(text(value.to_owned()).size(12).font(semibold()).color(paint.ink(0.6)));
     }
     if let Some(checked) = toggle {
-        content = content.push(toggle_face(host, ink, checked, alpha));
+        content = content.push(toggle_face(paint, checked));
     }
     button(content)
         .width(Length::Fill)
@@ -519,13 +509,8 @@ fn action_row<'a>(
         .on_press_maybe(enabled.then_some(Message::Frame))
         .style(move |_theme: &Theme, status| {
             let hot = enabled && matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let fill = if daylight {
-                Color { a: 0.07 * ink.a, ..Color::BLACK }
-            } else {
-                Color { r: 1.0, g: 1.0, b: 1.0, a: 0.10 * ink.a }
-            };
             button::Style {
-                background: hot.then_some(Background::Color(fill)),
+                background: hot.then_some(Background::Color(paint.wash(0.07, 0.10))),
                 border: Border { radius: 12.0.into(), ..Border::default() },
                 ..button::Style::default()
             }
@@ -533,10 +518,10 @@ fn action_row<'a>(
         .into()
 }
 
-fn toggle_face<'a>(host: &Host<'a>, ink: Color, checked: bool, alpha: f32) -> Element<'a, Message> {
-    let (fill, opacity) = if checked { (Some(host.tokens.accent), 1.0) } else { (None, 0.42) };
-    let fill = fill.map(|color| Color { a: color.a * alpha, ..color });
-    let knob = if checked { Color { a: alpha, ..host.tokens.on_accent } } else { ink };
+fn toggle_face<'a>(paint: Faded, checked: bool) -> Element<'a, Message> {
+    let fill = checked.then_some(paint.tokens().accent);
+    let ring = paint.ink(if checked { 1.0 } else { 0.42 });
+    let knob = if checked { paint.tokens().on_accent } else { paint.text() };
     container(container(space()).width(Length::Fixed(12.0)).height(Length::Fixed(12.0)).style(move |_| {
         container::Style {
             background: Some(Background::Color(knob)),
@@ -550,24 +535,19 @@ fn toggle_face<'a>(host: &Host<'a>, ink: Color, checked: bool, alpha: f32) -> El
     .align_x(if checked { Alignment::End } else { Alignment::Start })
     .style(move |_theme: &Theme| container::Style {
         background: fill.map(Background::Color),
-        border: Border { radius: 9.0.into(), width: 1.0, color: Color { a: ink.a * opacity, ..ink } },
+        border: Border { radius: 9.0.into(), width: 1.0, color: ring },
         ..container::Style::default()
     })
     .into()
 }
 
-fn help_section<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
-    let line = if host.daylight {
-        Color { a: 0.09 * ink.a, ..Color::BLACK }
-    } else {
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.10 * ink.a }
-    };
-    let content = row![lights_toggle(host, ink), space().width(Length::Fill), help_trigger(host, ink)]
+fn help_section<'a>(face: Face<'a>) -> Element<'a, Message> {
+    let content = row![lights_toggle(face), space().width(Length::Fill), help_trigger(face)]
         .height(Length::Fixed(32.0))
         .align_y(Alignment::Center)
         .width(Length::Fill);
     column![
-        rule(line),
+        rule(face.paint.wash(0.09, 0.10)),
         container(content).width(Length::Fill).height(Length::Fixed(HELP_SECTION_H - 1.0)).padding(Padding {
             top: 6.0,
             right: 0.0,
@@ -578,16 +558,12 @@ fn help_section<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
     .into()
 }
 
-fn lights_toggle<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
-    // No lighting backend yet: the wall is lit, so the on segment is current and the control is inert.
-    let alpha = 0.35;
-    let ink = Color { a: ink.a * alpha, ..ink };
+fn lights_toggle<'a>(face: Face<'a>) -> Element<'a, Message> {
+    // No lighting backend yet: the wall is lit, so the on segment is current and the control is inert at 35%.
+    let paint = face.paint.faded(0.35);
     let segment = |label: &str, active: bool| {
-        let (fill, color) = if active {
-            (Some(Color { a: alpha, ..host.tokens.accent }), Color { a: alpha, ..host.tokens.on_accent })
-        } else {
-            (None, Color { a: ink.a * 0.58, ..ink })
-        };
+        let (fill, color) =
+            if active { (Some(paint.tokens().accent), paint.tokens().on_accent) } else { (None, paint.ink(0.58)) };
         container(text(label.to_owned()).size(10.5).font(crate::typeface::font(iced::font::Weight::Bold)).color(color))
             .width(Length::Fixed(44.0))
             .align_x(Alignment::Center)
@@ -598,27 +574,22 @@ fn lights_toggle<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
                 ..container::Style::default()
             })
     };
-    let daylight = host.daylight;
-    let face =
-        row![segment(host.i18n.t("home.latticeLightsOn"), true), segment(host.i18n.t("home.latticeLightsOff"), false)]
+    let face_row =
+        row![segment(face.i18n.t("home.latticeLightsOn"), true), segment(face.i18n.t("home.latticeLightsOff"), false)]
             .spacing(2);
-    container(face)
+    container(face_row)
         .padding(3)
         .style(move |_theme: &Theme| container::Style {
-            background: Some(Background::Color(if daylight {
-                Color { a: 0.05 * alpha, ..Color::BLACK }
-            } else {
-                Color { r: 1.0, g: 1.0, b: 1.0, a: 0.06 * alpha }
-            })),
-            border: Border { radius: 999.0.into(), width: 1.0, color: Color { a: ink.a * 0.18, ..ink } },
+            background: Some(Background::Color(paint.wash(0.05, 0.06))),
+            border: Border { radius: 999.0.into(), width: 1.0, color: paint.ink(0.18) },
             ..container::Style::default()
         })
         .into()
 }
 
-fn help_trigger<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
-    let daylight = host.daylight;
-    let glyph = icon(Icon::CircleQuestionMark, 17.0, ink);
+fn help_trigger<'a>(face: Face<'a>) -> Element<'a, Message> {
+    let paint = face.paint;
+    let glyph = icon(Icon::CircleQuestionMark, 17.0, paint.text());
     let button = button(container(glyph).center(Length::Fill))
         .width(Length::Fixed(32.0))
         .height(Length::Fixed(32.0))
@@ -626,42 +597,27 @@ fn help_trigger<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
         .on_press(Message::ToolsHelp)
         .style(move |_theme: &Theme, status| {
             let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let fill = if daylight {
-                Color { a: 0.07 * ink.a, ..Color::BLACK }
-            } else {
-                Color { r: 1.0, g: 1.0, b: 1.0, a: 0.10 * ink.a }
-            };
             button::Style {
-                background: hot.then_some(Background::Color(fill)),
+                background: hot.then_some(Background::Color(paint.wash(0.07, 0.10))),
                 border: Border { radius: 12.0.into(), ..Border::default() },
                 ..button::Style::default()
             }
         });
-    tooltip(button, text(host.i18n.t("home.latticeHelp").to_owned()).size(12), Position::Top)
+    tooltip(button, text(face.i18n.t("home.latticeHelp").to_owned()).size(12), Position::Top)
         .delay(TOOLTIP_DELAY)
-        .style(container::rounded_box)
+        .style(paint.tip())
         .into()
 }
 
-const HELP_LABELS: [(&str, &str); HELP_ROWS] = [
-    ("libraryBravais.helpSearch", "/"),
-    ("libraryBravais.helpMove", "← ↑ ↓ →"),
-    ("libraryBravais.helpOpen", "Enter"),
-    ("libraryBravais.helpPlay", "Enter"),
-    ("libraryBravais.helpEnqueue", "Shift + Enter"),
-    ("libraryBravais.helpBack", "Esc"),
-];
-
-fn help_list<'a>(host: &Host<'a>, open: f32, visible: f32, amount: f32) -> Element<'a, Message> {
-    let fade = open * amount;
-    let ink = Color { a: host.text.a * fade, ..host.text };
-    let inner_w = (panel_width(host) - 20.0).max(1.0);
+fn help_list<'a>(face: Face<'a>, panel_w: f32, visible: f32, amount: f32) -> Element<'a, Message> {
+    let rows = face.paint.faded(amount);
+    let inner_w = (panel_w - 20.0).max(1.0);
     let full = HELP_PAD + HELP_ROWS as f32 * HELP_ROW_H;
     let body = column(
-        HELP_LABELS
+        super::HELP_LIST
             .iter()
             .enumerate()
-            .map(|(index, (label, kbd))| help_row(host, ink, label, kbd, index > 0))
+            .map(|(index, row)| help_row(face.i18n, rows, row.label, row.kbd, index > 0))
             .collect::<Vec<_>>(),
     )
     .width(Length::Fill);
@@ -680,13 +636,9 @@ fn help_list<'a>(host: &Host<'a>, open: f32, visible: f32, amount: f32) -> Eleme
             .into()
     };
     let content: Element<'a, Message> =
-        Element::new(super::seam::SeamLayout { content, size: Size::new(inner_w, visible.min(full)) });
+        Element::new(crate::design_size::DesignSize { content, size: Size::new(inner_w, visible.min(full)) });
     let shown = visible.min(full) * amount;
-    let fill = if host.daylight {
-        Color { a: 0.05 * open, ..Color::BLACK }
-    } else {
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.06 * open }
-    };
+    let fill = face.paint.wash(0.05, 0.06);
     container(pin(content).width(Length::Fill).height(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fixed(shown.max(0.0)))
@@ -699,19 +651,16 @@ fn help_list<'a>(host: &Host<'a>, open: f32, visible: f32, amount: f32) -> Eleme
         .into()
 }
 
-fn help_row<'a>(host: &Host<'a>, ink: Color, key: &'static str, kbd: &str, border: bool) -> Element<'a, Message> {
-    let line = if host.daylight {
-        Color { a: 0.06 * ink.a, ..Color::BLACK }
-    } else {
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.07 * ink.a }
-    };
+fn help_row<'a>(i18n: &'a I18n, paint: Faded, key: &'static str, kbd: &str, border: bool) -> Element<'a, Message> {
+    let ink = paint.text();
+    let ring = paint.ink(0.36);
     let content = row![
-        text(host.i18n.t(key).to_owned()).size(12).color(Color { a: ink.a * 0.76, ..ink }),
+        text(i18n.t(key).to_owned()).size(12).color(paint.ink(0.76)),
         space().width(Length::Fill),
         container(text(kbd.to_owned()).size(10).font(semibold()).color(ink))
             .padding(Padding { top: 2.0, right: 6.0, bottom: 2.0, left: 6.0 })
             .style(move |_theme: &Theme| container::Style {
-                border: Border { radius: 6.0.into(), width: 1.0, color: Color { a: ink.a * 0.36, ..ink } },
+                border: Border { radius: 6.0.into(), width: 1.0, color: ring },
                 ..container::Style::default()
             })
     ]
@@ -722,11 +671,13 @@ fn help_row<'a>(host: &Host<'a>, ink: Color, key: &'static str, kbd: &str, borde
     } else {
         HELP_ROW_H
     }));
-    if border { column![rule(line), body].into() } else { body.into() }
+    if border { column![rule(paint.wash(0.06, 0.07)), body].into() } else { body.into() }
 }
 
-fn volume_row<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
-    let shown = if host.muted { 0.0 } else { host.volume };
+fn volume_row<'a>(face: Face<'a>) -> Element<'a, Message> {
+    let paint = face.paint;
+    let ink = paint.text();
+    let shown = if face.muted { 0.0 } else { face.volume };
     // `volumeIcon`: by the shown value, 0 / under half / the rest.
     let icon_kind = if shown <= 0.0 {
         Icon::VolumeX
@@ -735,15 +686,16 @@ fn volume_row<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
     } else {
         Icon::Volume2
     };
-    let icon_color = if host.muted { Color { a: ink.a, ..host.accent } } else { ink };
-    let label = if host.muted {
-        super::tr(host, "wallTools.muted").to_owned()
+    let icon_color = if face.muted { paint.accent() } else { ink };
+    let label = if face.muted {
+        face.i18n.t("wallTools.muted").to_owned()
     } else {
-        format!("{}%", (host.volume * 100.0).round() as i32)
+        format!("{}%", (face.volume * 100.0).round() as i32)
     };
-    let track = Color { a: 0.18 * ink.a, ..ink };
-    let accent = Color { a: ink.a, ..host.accent };
-    let value_color = Color { a: 0.66 * ink.a, ..ink };
+    let track = paint.ink(0.18);
+    let accent = paint.accent();
+    let hover = paint.tint(ink, 0.10);
+    let handle_ring = paint.tint(Color::BLACK, 0.22);
     let row = row![
         button(container(icon(icon_kind, 17.0, icon_color)).center(Length::Fill))
             .width(Length::Fixed(30.0))
@@ -753,11 +705,7 @@ fn volume_row<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
             .style(move |_theme: &Theme, status| {
                 let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
                 button::Style {
-                    background: Some(Background::Color(if hot {
-                        Color { a: 0.10, ..ink }
-                    } else {
-                        Color::TRANSPARENT
-                    })),
+                    background: Some(Background::Color(if hot { hover } else { Color::TRANSPARENT })),
                     border: Border { radius: 9.0.into(), ..Border::default() },
                     ..button::Style::default()
                 }
@@ -773,21 +721,17 @@ fn volume_row<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
                     shape: HandleShape::Circle { radius: 7.0 },
                     background: Background::Color(ink),
                     border_width: 1.0,
-                    border_color: Color { a: 0.22, ..Color::BLACK },
+                    border_color: handle_ring,
                 },
             }
         ),
-        text(label).size(12).color(value_color).font(semibold()).width(Length::Fixed(38.0)).align_x(Alignment::End),
+        text(label).size(12).color(paint.ink(0.66)).font(semibold()).width(Length::Fixed(38.0)).align_x(Alignment::End),
     ]
     .spacing(8)
     .align_y(Alignment::Center)
     .padding(Padding { top: 0.0, right: 12.0, bottom: 0.0, left: 4.0 })
     .height(Length::Fixed(VOLUME_H));
-    let fill = if host.daylight {
-        Color { a: 0.05 * ink.a, ..Color::BLACK }
-    } else {
-        Color { r: 1.0, g: 1.0, b: 1.0, a: 0.06 * ink.a }
-    };
+    let fill = paint.wash(0.05, 0.06);
     container(row)
         .style(move |_theme: &Theme| container::Style {
             background: Some(Background::Color(fill)),
@@ -807,36 +751,24 @@ fn tool_button<'a>(host: &Host<'a>, open: bool) -> Element<'a, Message> {
     round_button(icon, 20.0, BUTTON, fill, icon_color, Some(Message::Tools))
 }
 
-fn quick<'a>(
-    lucide: Icon,
-    cell: f32,
-    ink: Color,
-    daylight: bool,
-    on_press: Option<Message>,
-    tip: String,
-) -> Element<'a, Message> {
+fn quick<'a>(lucide: Icon, cell: f32, paint: Faded, on_press: Option<Message>, tip: String) -> Element<'a, Message> {
     let enabled = on_press.is_some();
-    let alpha = if enabled { 1.0 } else { 0.35 };
-    let color = Color { a: ink.a * alpha, ..ink };
-    let button = button(container(icon(lucide, 18.0, color)).center(Length::Fill))
+    let dim = paint.faded(if enabled { 1.0 } else { 0.35 });
+    let button = button(container(icon(lucide, 18.0, dim.text())).center(Length::Fill))
         .width(Length::Fixed(cell))
         .height(Length::Fixed(QUICK_H))
         .padding(0)
         .on_press_maybe(on_press)
         .style(move |_theme: &Theme, status| {
             let hot = enabled && matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let idle = if daylight { 0.05 } else { 0.06 };
-            let hover = if daylight { 0.10 } else { 0.13 };
+            let fill = if hot { dim.wash(0.10, 0.13) } else { dim.wash(0.05, 0.06) };
             button::Style {
-                background: Some(Background::Color(Color {
-                    a: if hot { hover } else { idle } * alpha,
-                    ..if daylight { Color::BLACK } else { Color::WHITE }
-                })),
+                background: Some(Background::Color(fill)),
                 border: Border { radius: 12.0.into(), ..Border::default() },
                 ..button::Style::default()
             }
         });
-    tooltip(button, text(tip).size(12), Position::Top).delay(TOOLTIP_DELAY).style(container::rounded_box).into()
+    tooltip(button, text(tip).size(12), Position::Top).delay(TOOLTIP_DELAY).style(paint.tip()).into()
 }
 
 fn round_button<'a>(

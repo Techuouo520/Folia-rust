@@ -5,6 +5,7 @@ mod background;
 mod block_reflows;
 mod chrome;
 mod cover_flight;
+mod design_size;
 mod drag_capture;
 mod focus_card;
 mod home;
@@ -43,19 +44,22 @@ mod wall_shift;
 mod workbench;
 
 pub use background::{error_chain, format_time};
+pub use focus_card::{Direction as CardDirection, Key as CardKey};
 pub use home::title::seam_title_activates;
-pub use home::{default_level_is_spine, seam_safe_bottom};
+pub use home::{HELP_LIST, HelpRow, WallKey, default_level_is_spine, seam_safe_bottom, wall_key_of};
 pub use overlay::{
-    CAPSULE_COLLAPSE_MS, CAPSULE_EXPAND_MS, CAPSULE_FADE_MS, CAPSULE_SETTLE_MS, CHROME_HOLD_MS, CHROME_LEAVE_MS,
-    CapsuleHover, CapsuleSpring, ChromeClock, GLOW_BLUR_PX, GlowEllipse, Subtitle, capsule_open, capsule_row,
-    capsule_width, glow_coverage, glow_ellipse, row_gap, subtitle_at, subtitle_line_width, translation_px,
-    upcoming_look, upcoming_px,
+    CAPSULE_COLLAPSE_MS, CAPSULE_EXPAND_MS, CAPSULE_FADE_MS, CAPSULE_LAYOUT_SPRING, CAPSULE_SETTLE_MS, CHROME_HOLD_MS,
+    CHROME_LEAVE_MS, CapsuleHover, ChromeClock, ChromeSpring, GLOW_BLUR_PX, GlowEllipse, SUBTITLE_CLEARANCE,
+    SUBTITLE_PRESENCE_SPRING, SpringParams, Subtitle, capsule_open, capsule_row, capsule_width, glow_coverage,
+    glow_ellipse, row_gap, subtitle_at, subtitle_bottom, subtitle_line_width, translation_px, upcoming_look,
+    upcoming_px,
 };
 pub use platform_highlight::ProviderHighlight;
 pub use platform_rows::{ProviderRowStatus, order_provider_rows};
 pub use playback_navigation::PlaybackNavigation;
 /// The floating capsule. `shown` is its 0.26s ease-out hide, shared by opacity, offset and scale.
-pub use player_bar::PlayerBar;
+pub use player_bar::{CapsuleBox, PlayerBar, capsule_box};
+pub use settings_kit::{Faded, Tokens};
 pub use typeface::install as install_fonts;
 pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, seam_on_axis, wider_span};
 pub use wall_pan::{Glide as WallGlide, Inertia as WallInertia, Release as WallRelease};
@@ -206,6 +210,8 @@ pub struct Shell {
     /// Origin for [`ChromeClock`] milliseconds.
     started: std::time::Instant,
     clock: ChromeClock,
+    /// `controlBarPresence`: the subtitle's room for the capsule, sprung as the chrome shows and hides.
+    subtitle_presence: ChromeSpring,
     bar: player_bar::PlayerBar,
     window_size: Size,
     pointer_held: bool,
@@ -267,6 +273,7 @@ impl Shell {
             fullscreen: false,
             started: std::time::Instant::now(),
             clock: ChromeClock::shown(0),
+            subtitle_presence: ChromeSpring::settled(1.0, 0, SUBTITLE_PRESENCE_SPRING),
             bar: player_bar::PlayerBar::new(std::time::Instant::now()),
             window_size: INITIAL_WINDOW,
             pointer_held: false,
@@ -379,6 +386,8 @@ impl Shell {
         self.bar.set_forced(self.positioning.is_some());
         self.bar.sync(&self.playback, self.window_size.width, now);
         self.bar.set_shown(self.chrome_visible(), now);
+        let presence = if self.chrome_visible() { 1.0 } else { 0.0 };
+        self.subtitle_presence = self.subtitle_presence.retarget(self.now_ms(), presence);
         let (quality_levels, quality) = self.audio_quality();
         let room = panel::Room {
             width: self.window_size.width,
@@ -955,8 +964,7 @@ impl Shell {
                     backdrop: true,
                 };
                 let subtitle = self.subtitle();
-                let bottom =
-                    if self.chrome_visible() { self.bar_offset() + SUBTITLE_CLEARANCE } else { SUBTITLE_BOTTOM_HIDDEN };
+                let bottom = subtitle_bottom(self.bar_offset(), self.subtitle_presence.value(self.now_ms()));
                 let background = folia_visualizer::color(self.theme.background, 1.0);
                 now_playing::view(scene, &self.i18n, muted, background, self.window_size, subtitle, bottom)
             }
@@ -1265,14 +1273,19 @@ impl Shell {
         if self.positioning.is_some() {
             parts.push(iced::event::listen_with(positioner_key));
         }
-        let quiet =
-            self.settings.is_none() && self.workbench.is_none() && !self.login.is_open() && !self.home_menu_open();
-        if self.page == Page::Library && quiet {
+        let sheets = self.settings.is_none() && self.workbench.is_none() && !self.login.is_open();
+        // The tools panel leaves the wall its keys; only its Escape is the panel's (`WallToolsSurface`).
+        let beside_tools = self.home.tools_open() && !self.home.more_open() && !self.library.menu_open();
+        if self.page == Page::Library && sheets && (!self.home_menu_open() || beside_tools) {
             if self.home.search_query().is_some() {
                 parts.push(iced::event::listen_with(seam_search_key));
                 parts.push(iced::event::listen_with(seam_search_ime));
             } else {
-                parts.push(iced::event::listen_with(wall_key));
+                if beside_tools {
+                    parts.push(iced::event::listen_with(wall_key_beside_tools));
+                } else {
+                    parts.push(iced::event::listen_with(wall_key));
+                }
                 if self.library.filter_editing() {
                     parts.push(iced::event::listen_with(filter_escape));
                 }
@@ -1296,7 +1309,7 @@ impl Shell {
                 iced::window::frames().map(|_| Message::Library(library::Message::Online(online::Message::SyncFrame))),
             );
         }
-        if self.page != Page::Search && self.bar.animating(now) {
+        if self.page != Page::Search && (self.bar.animating(now) || self.subtitle_presence.running(self.now_ms())) {
             parts.push(iced::window::frames().map(|_| Message::Bar(player_bar::Message::Frame)));
         }
         if self.page_fade.as_ref().is_some_and(|fade| fade.running(now)) {
@@ -1902,10 +1915,6 @@ fn open_files(paths: Vec<PathBuf>) -> Task<Message> {
 
 /// Top-left square that reveals the back button, from `PLAYER_CHROME_HOTSPOT_SIZE`.
 const HOTSPOT: f32 = 120.0;
-/// `PLAYER_BOTTOM_BAR_SUBTITLE_CLEARANCE_PX`: the subtitle sits this far above the bar's baseline while it is up.
-const SUBTITLE_CLEARANCE: f32 = 80.0;
-/// Subtitle `bottom` once the capsule has hidden. The baseline itself stays at 32.
-const SUBTITLE_BOTTOM_HIDDEN: f32 = 32.0;
 
 fn pin<'a>(button: Element<'a, Message>, x: Alignment, y: Alignment, pad: iced::Padding) -> Element<'a, Message> {
     container(button).width(Length::Fill).height(Length::Fill).align_x(x).align_y(y).padding(pad).into()
@@ -2068,20 +2077,17 @@ fn wall_key(event: iced::Event, status: iced::event::Status, _id: iced::window::
     let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, repeat, .. }) = event else {
         return None;
     };
-    if key == iced::keyboard::Key::Named(iced::keyboard::key::Named::Tab) {
-        return Some(Message::Home(home::Message::TitleFocus { backwards: modifiers.shift() }));
-    }
-    // `/` (bravaisHomeKeys): the home seam's global search, not a filter character.
-    if let iced::keyboard::Key::Character(character) = &key
-        && character.as_str() == "/"
-        && !repeat
-        && !modifiers.control()
-        && !modifiers.alt()
-        && !modifiers.command()
-    {
-        return Some(Message::Home(home::Message::Search));
-    }
-    focus_card::key_of(&key, modifiers, repeat).map(|key| Message::Library(library::Message::Key(key)))
+    Some(match home::wall_key_of(&key, modifiers, repeat)? {
+        home::WallKey::Focus { backwards } => Message::Home(home::Message::TitleFocus { backwards }),
+        home::WallKey::Search => Message::Home(home::Message::Search),
+        home::WallKey::Card(key) => Message::Library(library::Message::Key(key)),
+    })
+}
+
+/// The wall's keys under the open tools panel, whose Escape `home_dismiss` spends on closing it.
+fn wall_key_beside_tools(event: iced::Event, status: iced::event::Status, id: iced::window::Id) -> Option<Message> {
+    wall_key(event, status, id)
+        .filter(|message| !matches!(message, Message::Library(library::Message::Key(focus_card::Key::Escape))))
 }
 
 /// Escape shuts the seam's search panel unless the input method is composing; the field keeps the key first.

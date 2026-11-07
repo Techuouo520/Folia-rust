@@ -20,7 +20,7 @@ use crate::platform_icon::mark_faded;
 use crate::playback;
 use crate::quality_select;
 use crate::queue_island::{self, QueueList};
-use crate::settings_kit::{self, Tokens};
+use crate::settings_kit::{self, Faded, Tokens};
 
 const OPEN_MS: f64 = 300.0;
 const CLOSE_MS: f64 = 220.0;
@@ -410,7 +410,8 @@ pub struct View<'a> {
 
 fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) -> Element<'a, Message> {
     // iced cannot fade a subtree, so every paint of the surface takes the open state's opacity.
-    let tokens = tokens_of(&view).faded(open);
+    let raw = tokens_of(&view);
+    let tokens = Faded::new(raw, raw.t1, raw.accent, view.daylight, open);
     let online = view.track.is_some_and(|track| track.online.is_some());
     let local = view.track.is_some_and(|track| track.online.is_none());
     let tab = shown_tab(panel.tab, local, online);
@@ -472,7 +473,7 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     if tab == Tab::Controls {
         let look = mode_picker::Look {
             i18n: view.i18n,
-            tokens,
+            tokens: tokens.tokens(),
             theme: view.theme,
             font_scale: view.font_scale,
             style_id: view.style_id,
@@ -498,7 +499,7 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
         };
         let look = quality_select::Look {
             i18n: view.i18n,
-            tokens,
+            tokens: tokens.tokens(),
             daylight: view.daylight,
             levels: view.quality_levels,
             value: view.quality,
@@ -546,7 +547,7 @@ struct Switch {
     page: f32,
 }
 
-fn face_column<'a>(view: View<'a>, tokens: Tokens, column: Column, rows: Rows<'a>) -> Element<'a, Message> {
+fn face_column<'a>(view: View<'a>, tokens: Faded, column: Column, rows: Rows<'a>) -> Element<'a, Message> {
     let Column { tab, width, header_h, body_h, cover_px, open, fold, switch } = column;
     let ink = Color { a: open, ..tokens.t1 };
     let header = header(view, tokens, cover_px, header_h, fold);
@@ -593,7 +594,7 @@ struct Fold {
 
 /// `SongHeader`: one cover that shrinks from the panel's width to 48px (radius 10 to 8) while the header folds
 /// to 48px; the folded title and heart come in from 4px above, the big title and actions leave 8px down.
-fn header<'a>(view: View<'a>, tokens: Tokens, cover_px: f32, header_h: f32, fold: Fold) -> Element<'a, Message> {
+fn header<'a>(view: View<'a>, tokens: Faded, cover_px: f32, header_h: f32, fold: Fold) -> Element<'a, Message> {
     let (title, album) = title_album(view);
     let open = tokens.t1.a;
     let size = cover_px + (FOLDED - cover_px) * fold.shape;
@@ -613,7 +614,7 @@ fn header<'a>(view: View<'a>, tokens: Tokens, cover_px: f32, header_h: f32, fold
             .font(settings_kit::SEMIBOLD)
             .color(small_ink)
             .wrapping(iced::widget::text::Wrapping::None),
-        artists(view, small, small_ink.a, 12.0, 18.0),
+        artists(view, small, 12.0, 18.0),
     ];
     let lines = container(lines).width(Length::Fill).clip(true).padding(pad(5.0 + lift, 44.0, 0.0, 60.0));
     let heart = container(heart(view, small, small_ink, false))
@@ -632,7 +633,7 @@ fn header<'a>(view: View<'a>, tokens: Tokens, cover_px: f32, header_h: f32, fold
             .line_height(LineHeight::Absolute(iced::Pixels(26.0)))
             .font(settings_kit::SEMIBOLD)
             .color(big_ink),
-        artists(view, big, big_ink.a, 13.0, 20.0),
+        artists(view, big, 13.0, 20.0),
         text(album).size(12).line_height(LineHeight::Absolute(iced::Pixels(18.0))).color(big.t3),
     ];
     let under = column![credits, actions(view, big, big_ink)].padding(pad(14.0, 4.0, 0.0, 4.0));
@@ -647,33 +648,27 @@ fn header<'a>(view: View<'a>, tokens: Tokens, cover_px: f32, header_h: f32, fold
     stack![under, folded_row, cover].width(Length::Fill).height(Length::Fixed(header_h)).clip(true).into()
 }
 
-fn artists<'a>(view: View<'a>, tokens: Tokens, open: f32, size: f32, leading: f32) -> Element<'a, Message> {
+fn artists<'a>(view: View<'a>, tokens: Faded, size: f32, leading: f32) -> Element<'a, Message> {
     let raw = view.track.and_then(|track| track.artist.as_deref()).unwrap_or("");
     let mut row = iced::widget::Row::new().spacing(0);
     for (index, name) in raw.split(" / ").filter(|name| !name.is_empty()).enumerate() {
         if index > 0 {
-            row = row.push(
-                text(" / ")
-                    .size(size)
-                    .line_height(LineHeight::Absolute(iced::Pixels(leading)))
-                    .color(fade(tokens.t3, open)),
-            );
+            row = row
+                .push(text(" / ").size(size).line_height(LineHeight::Absolute(iced::Pixels(leading))).color(tokens.t3));
         }
-        row = row.push(
-            text(name).size(size).line_height(LineHeight::Absolute(iced::Pixels(leading))).color(fade(tokens.t2, open)),
-        );
+        row = row.push(text(name).size(size).line_height(LineHeight::Absolute(iced::Pixels(leading))).color(tokens.t2));
     }
     row.into()
 }
 
-fn actions<'a>(view: View<'a>, tokens: Tokens, ink: Color) -> Element<'a, Message> {
+fn actions<'a>(view: View<'a>, tokens: Faded, ink: Color) -> Element<'a, Message> {
     let dim = Color { a: 0.4 * ink.a, ..tokens.t2 };
     let mut items = vec![heart(view, tokens, ink, true)];
     if view.track.is_some() {
         items.push(icon_btn(
+            tokens,
             Icon::Star,
-            17.0,
-            32.0,
+            (17.0, 32.0),
             dim,
             Some(tokens.fill),
             view.i18n.t("localMusic.addToPlaylist").to_owned(),
@@ -685,18 +680,18 @@ fn actions<'a>(view: View<'a>, tokens: Tokens, ink: Color) -> Element<'a, Messag
     }
     items.push(space().width(Length::Fill).into());
     items.push(icon_btn(
+        tokens,
         Icon::House,
-        17.0,
-        32.0,
+        (17.0, 32.0),
         ink,
         None,
         view.i18n.t("ui.backToHome").to_owned(),
         Some(Message::Home),
     ));
     items.push(icon_btn(
+        tokens,
         Icon::Settings,
-        17.0,
-        32.0,
+        (17.0, 32.0),
         ink,
         None,
         view.i18n.t("ui.options").to_owned(),
@@ -707,7 +702,7 @@ fn actions<'a>(view: View<'a>, tokens: Tokens, ink: Color) -> Element<'a, Messag
 
 /// `SongActions` playing-from pill: 32px high, fully round, `pl-2.5 pr-3 gap-1.5`, Crosshair 14 and 12px text,
 /// both centred on the row; hover lifts the fill to `--st-fill2` and the text to `--st-t1`.
-fn source_pill<'a>(view: View<'a>, tokens: Tokens, ink: Color, name: &'a str, hovered: bool) -> Element<'a, Message> {
+fn source_pill<'a>(view: View<'a>, tokens: Faded, ink: Color, name: &'a str, hovered: bool) -> Element<'a, Message> {
     let open = ink.a;
     let tip = view.i18n.format("ui.playingFrom", &[("name", name)]);
     let tint = fade(if hovered { tokens.t1 } else { tokens.t2 }, open);
@@ -723,14 +718,14 @@ fn source_pill<'a>(view: View<'a>, tokens: Tokens, ink: Color, name: &'a str, ho
             ..button::Style::default()
         });
     let button = mouse_area(button).on_enter(Message::PillHover(true)).on_exit(Message::PillHover(false));
-    tooltip(button, text(tip).size(12), tooltip::Position::Top).style(container::rounded_box).into()
+    tooltip(button, text(tip).size(12), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
-fn heart<'a>(view: View<'a>, tokens: Tokens, ink: Color, filled: bool) -> Element<'a, Message> {
+fn heart<'a>(view: View<'a>, tokens: Faded, ink: Color, filled: bool) -> Element<'a, Message> {
     icon_btn(
+        tokens,
         Icon::Heart,
-        17.0,
-        32.0,
+        (17.0, 32.0),
         Color { a: 0.4 * ink.a, ..tokens.t2 },
         filled.then_some(tokens.fill),
         view.i18n.t("player.like").to_owned(),
@@ -741,7 +736,7 @@ fn heart<'a>(view: View<'a>, tokens: Tokens, ink: Color, filled: bool) -> Elemen
 /// `TabDock`: one raised mark shared by the tabs, sliding from the old tab to the new one (`move`, 220ms).
 fn dock<'a>(
     view: View<'a>,
-    tokens: Tokens,
+    tokens: Faded,
     (tab, switch): (Tab, Switch),
     width: f32,
     ink: Color,
@@ -805,7 +800,7 @@ fn dock<'a>(
         .into()
 }
 
-fn tab_body<'a>(view: View<'a>, tokens: Tokens, tab: Tab, ink: Color, rows: Rows<'a>) -> Element<'a, Message> {
+fn tab_body<'a>(view: View<'a>, tokens: Faded, tab: Tab, ink: Color, rows: Rows<'a>) -> Element<'a, Message> {
     match tab {
         Tab::Cover => space().into(),
         Tab::Controls => controls(view, tokens, ink, rows),
@@ -815,7 +810,7 @@ fn tab_body<'a>(view: View<'a>, tokens: Tokens, tab: Tab, ink: Color, rows: Rows
     }
 }
 
-fn controls<'a>(view: View<'a>, tokens: Tokens, ink: Color, rows: Rows<'a>) -> Element<'a, Message> {
+fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> Element<'a, Message> {
     // `VolumeRow`: a mute shows 0 and keeps the level underneath.
     let shown = if view.muted { 0.0 } else { view.volume };
     let volume_icon = if shown <= 0.0 {
@@ -826,12 +821,20 @@ fn controls<'a>(view: View<'a>, tokens: Tokens, ink: Color, rows: Rows<'a>) -> E
         Icon::Volume2
     };
     let volume = row![
-        icon_btn(volume_icon, 17.0, 32.0, ink, None, view.i18n.t("ui.volume").to_owned(), Some(Message::Mute)),
+        icon_btn(
+            tokens,
+            volume_icon,
+            (17.0, 32.0),
+            ink,
+            None,
+            view.i18n.t("ui.volume").to_owned(),
+            Some(Message::Mute)
+        ),
         slider(0.0..=1.0, shown, Message::Volume)
             .step(0.01_f32)
             .on_release(Message::VolumeDone)
             .width(Length::Fill)
-            .style(move |_, _| settings_kit::slider_style(tokens)),
+            .style(move |_, _| settings_kit::slider_style(tokens.tokens())),
         container(text(format!("{}%", (shown * 100.0).round() as i32)).size(12).color(Color { a: ink.a, ..tokens.t2 }))
             .width(Length::Fixed(38.0))
             .align_x(Alignment::End),
@@ -854,7 +857,7 @@ fn controls<'a>(view: View<'a>, tokens: Tokens, ink: Color, rows: Rows<'a>) -> E
     let pickers = &panel.pickers;
     let look = mode_picker::Look {
         i18n: view.i18n,
-        tokens,
+        tokens: tokens.tokens(),
         theme: view.theme,
         font_scale: view.font_scale,
         style_id: view.style_id,
@@ -895,9 +898,9 @@ fn controls<'a>(view: View<'a>, tokens: Tokens, ink: Color, rows: Rows<'a>) -> E
             Some(view.i18n.t("options.customThemeUnavailable"))
         ),
         icon_btn(
+            tokens,
             Icon::Palette,
-            15.0,
-            28.0,
+            (15.0, 28.0),
             fade(tokens.t2, ink.a * 0.4),
             Some(tokens.fill),
             view.i18n.t("options.themeQuickEditUnavailable").to_owned(),
@@ -922,7 +925,7 @@ fn controls<'a>(view: View<'a>, tokens: Tokens, ink: Color, rows: Rows<'a>) -> E
     column.push(background).push(transparent).push(hairline(tokens)).push(sources).push(name_row).into()
 }
 
-fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Tokens, ink: Color) -> Element<'a, Message> {
+fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Faded, ink: Color) -> Element<'a, Message> {
     if view.queue.is_empty() {
         return text(view.i18n.t("queue.empty")).size(13).color(Color { a: ink.a, ..tokens.t2 }).into();
     }
@@ -931,9 +934,9 @@ fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Tokens, ink: Co
         text(view.queue.len().to_string()).size(13).color(Color { a: ink.a, ..tokens.t3 }),
         space().width(Length::Fill),
         icon_btn(
+            tokens,
             Icon::Shuffle,
-            15.0,
-            28.0,
+            (15.0, 28.0),
             Color { a: 0.4 * ink.a, ..tokens.t2 },
             None,
             if view.queue.len() < 2 {
@@ -950,7 +953,7 @@ fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Tokens, ink: Co
     let list_h = queue_list_h(view.width, view.height, view.bottom, panel.chrome, view.queue.len());
     let look = queue_island::Look {
         i18n: view.i18n,
-        tokens,
+        tokens: tokens.tokens(),
         ink,
         daylight: view.daylight,
         actions_on_current: true,
@@ -962,7 +965,7 @@ fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Tokens, ink: Co
 }
 
 /// `SourceTab`: where the lyrics come from, the timeline offset, online matching and the lyric file, and the gain.
-fn source_tab<'a>(view: View<'a>, tokens: Tokens) -> Element<'a, Message> {
+fn source_tab<'a>(view: View<'a>, tokens: Faded) -> Element<'a, Message> {
     let i18n = view.i18n;
     let online = view.track.is_some_and(|track| track.online.is_some());
     let source = if !view.has_lyrics {
@@ -976,9 +979,9 @@ fn source_tab<'a>(view: View<'a>, tokens: Tokens) -> Element<'a, Message> {
     // The reset keeps its place at 0 so the number beside it does not move.
     let offset_ms = (view.lyric_offset * 1000.0).round() as i64;
     let reset = icon_btn(
+        tokens,
         Icon::RotateCcw,
-        15.0,
-        28.0,
+        (15.0, 28.0),
         fade(tokens.t2, if offset_ms == 0 { 0.0 } else { 1.0 }),
         None,
         i18n.t("localMusic.resetLyricTimelineOffset").to_owned(),
@@ -1022,7 +1025,7 @@ fn source_tab<'a>(view: View<'a>, tokens: Tokens) -> Element<'a, Message> {
 }
 
 /// `PanelRow`: at least 44px, `px-1 py-1.5`, a 14px name on the left and the controls to the right.
-fn panel_row<'a>(tokens: Tokens, label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
+fn panel_row<'a>(tokens: Faded, label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
     let name = text(label).size(14).line_height(iced::Pixels(20.0)).color(tokens.t1);
     let name = container(name).width(Length::Fixed(72.0));
     let control = container(control).width(Length::Fill).align_x(Alignment::End);
@@ -1035,7 +1038,7 @@ fn panel_row<'a>(tokens: Tokens, label: &'a str, control: Element<'a, Message>) 
 }
 
 /// `Stepper`: a 32px `--st-fill` pill with − and + of 250ms, the value in 13px mono and `ms` in `--st-t3`.
-fn stepper<'a>(tokens: Tokens, value_ms: i64, label: &'a str) -> Element<'a, Message> {
+fn stepper<'a>(tokens: Faded, value_ms: i64, label: &'a str) -> Element<'a, Message> {
     let step = move |lucide: Icon, to: i64| -> Element<'a, Message> {
         button(container(icon(lucide, 14.0, tokens.t2)).center(Length::Fixed(28.0)))
             .padding(0)
@@ -1060,11 +1063,11 @@ fn stepper<'a>(tokens: Tokens, value_ms: i64, label: &'a str) -> Element<'a, Mes
         border: Border { radius: 8.0.into(), ..Border::default() },
         ..container::Style::default()
     });
-    tooltip(pill, text(label).size(12), tooltip::Position::Top).style(container::rounded_box).into()
+    tooltip(pill, text(label).size(12), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
 /// `PanelButton`: 32px, `rounded-lg`, `--st-fill`, a 14px icon and 13px text; disabled it is at 40%.
-fn panel_button<'a>(tokens: Tokens, lucide: Icon, label: &'a str, grow: bool) -> Element<'a, Message> {
+fn panel_button<'a>(tokens: Faded, lucide: Icon, label: &'a str, grow: bool) -> Element<'a, Message> {
     let ink = fade(tokens.t1, 0.4);
     let label = text(label).size(13).color(ink).wrapping(iced::widget::text::Wrapping::None);
     let body = row![icon(lucide, 14.0, ink), label].spacing(6).align_y(Alignment::Center);
@@ -1080,7 +1083,7 @@ fn panel_button<'a>(tokens: Tokens, lucide: Icon, label: &'a str, grow: bool) ->
 }
 
 /// One option of `Segments` (`m`): 28px, `rounded-md`, 13px; the chosen one sits on `--st-raise`.
-fn segment<'a>(tokens: Tokens, label: &'a str, chosen: bool, disabled: bool) -> Element<'a, Message> {
+fn segment<'a>(tokens: Faded, label: &'a str, chosen: bool, disabled: bool) -> Element<'a, Message> {
     let ink = if chosen { tokens.t1 } else { tokens.t2 };
     let ink = if disabled { fade(ink, 0.4) } else { ink };
     container(text(label).size(13).color(ink).wrapping(iced::widget::text::Wrapping::None))
@@ -1096,7 +1099,7 @@ fn segment<'a>(tokens: Tokens, label: &'a str, chosen: bool, disabled: bool) -> 
 
 fn quality_tab<'a>(
     view: View<'a>,
-    tokens: Tokens,
+    tokens: Faded,
     ink: Color,
     select: &'a quality_select::Select,
     now: Instant,
@@ -1120,7 +1123,11 @@ fn quality_tab<'a>(
     column![
         account,
         line,
-        labeled(ink, view.i18n.t("account.audioQuality"), select.trigger(view.i18n, tokens, ink, view.quality, now)),
+        labeled(
+            ink,
+            view.i18n.t("account.audioQuality"),
+            select.trigger(view.i18n, tokens.tokens(), ink, view.quality, now)
+        ),
         sync,
     ]
     .spacing(0)
@@ -1133,7 +1140,7 @@ fn account_card<'a>(
     view: View<'a>,
     platform: Platform,
     account: &'a Account,
-    tokens: Tokens,
+    tokens: Faded,
     ink: Color,
 ) -> Element<'a, Message> {
     let face: Element<'a, Message> = match view.account_avatar {
@@ -1190,8 +1197,15 @@ fn account_card<'a>(
             .line_height(LineHeight::Absolute(18.0.into()))
             .color(tokens.t2),
     ];
-    let logout =
-        icon_btn(Icon::LogOut, 17.0, 32.0, ink, None, view.i18n.t("account.logout").to_owned(), Some(Message::SignOut));
+    let logout = icon_btn(
+        tokens,
+        Icon::LogOut,
+        (17.0, 32.0),
+        ink,
+        None,
+        view.i18n.t("account.logout").to_owned(),
+        Some(Message::SignOut),
+    );
     container(row![picture, words, space().width(Length::Fill), logout].spacing(12).align_y(Alignment::Center))
         .height(Length::Fixed(56.0))
         .padding(pad(4.0, 0.0, 4.0, 4.0))
@@ -1199,7 +1213,7 @@ fn account_card<'a>(
 }
 
 /// `PanelButton`: 32px, `rounded-lg`, `--st-fill`, a 14px icon and 13px text.
-fn action_button<'a>(tokens: Tokens, lucide: Icon, label: &'a str, on_press: Option<Message>) -> Element<'a, Message> {
+fn action_button<'a>(tokens: Faded, lucide: Icon, label: &'a str, on_press: Option<Message>) -> Element<'a, Message> {
     let enabled = on_press.is_some();
     let ink = if enabled { tokens.t1 } else { fade(tokens.t1, 0.4) };
     let body = row![icon(lucide, 14.0, ink), text(label).size(13).color(ink)].spacing(6).align_y(Alignment::Center);
@@ -1286,7 +1300,7 @@ fn mix_color(from: Color, to: Color, t: f32) -> Color {
 }
 
 fn cover_box<'a>(
-    tokens: Tokens,
+    tokens: Faded,
     art: Option<&'a iced::widget::image::Handle>,
     px: f32,
     radius: f32,
@@ -1320,13 +1334,7 @@ fn cover_box<'a>(
         .into()
 }
 
-fn tile<'a>(
-    tokens: Tokens,
-    lucide: Icon,
-    label: &'a str,
-    lit: bool,
-    on_press: Option<Message>,
-) -> Element<'a, Message> {
+fn tile<'a>(tokens: Faded, lucide: Icon, label: &'a str, lit: bool, on_press: Option<Message>) -> Element<'a, Message> {
     let color = if lit { tokens.accent } else { fade(tokens.t3, if on_press.is_some() { 1.0 } else { 0.4 }) };
     let bg = if lit { tokens.raise } else { tokens.fill };
     button(
@@ -1368,7 +1376,7 @@ fn text_btn<'a>(label: &'a str, color: Color, on_press: Option<Message>) -> Elem
 
 /// `ModeStepperRow`: arrows at the two ends, the mode in the middle, an optional chip before the right arrow.
 /// 「更多设置」lives in the picture picker (`QuickEffectPicker`), which is not drawn here.
-fn hairline<'a>(tokens: Tokens) -> Element<'a, Message> {
+fn hairline<'a>(tokens: Faded) -> Element<'a, Message> {
     container(space())
         .width(Length::Fill)
         .height(1.0)
@@ -1380,9 +1388,9 @@ fn hairline<'a>(tokens: Tokens) -> Element<'a, Message> {
 }
 
 fn icon_btn<'a>(
+    tokens: Faded,
     lucide: Icon,
-    glyph: f32,
-    box_px: f32,
+    (glyph, box_px): (f32, f32),
     color: Color,
     fill: Option<Color>,
     tip: String,
@@ -1396,12 +1404,12 @@ fn icon_btn<'a>(
     let button = button(mark).padding(0).on_press_maybe(on_press).style(move |_theme: &IcedTheme, status| {
         let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
         button::Style {
-            background: fill.or(hot.then_some(Color { a: 0.08, ..color })).map(Background::Color),
+            background: fill.or(hot.then_some(tokens.tint(color, 0.08))).map(Background::Color),
             border: Border { radius: 8.0.into(), ..Border::default() },
             ..button::Style::default()
         }
     });
-    tooltip(button, text(tip).size(12), tooltip::Position::Top).style(container::rounded_box).into()
+    tooltip(button, text(tip).size(12), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
 fn intensity_key(intensity: folia_core::AnimationIntensity) -> &'static str {
@@ -1414,7 +1422,7 @@ fn intensity_key(intensity: folia_core::AnimationIntensity) -> &'static str {
 
 /// `QuickControlChip`: 28px high, `rounded-lg`, `px-2.5`, 12px; `--st-fill` with `--st-t2`, hover `--st-fill2`
 /// with `--st-t1`, disabled at 40%.
-fn chip<'a>(tokens: Tokens, alpha: f32, tip: &str, label: &'a str, on_press: Option<Message>) -> Element<'a, Message> {
+fn chip<'a>(tokens: Faded, alpha: f32, tip: &str, label: &'a str, on_press: Option<Message>) -> Element<'a, Message> {
     let alpha = if on_press.is_some() { alpha } else { alpha * 0.4 };
     let enabled = on_press.is_some();
     let button = button(
@@ -1433,10 +1441,10 @@ fn chip<'a>(tokens: Tokens, alpha: f32, tip: &str, label: &'a str, on_press: Opt
             ..button::Style::default()
         }
     });
-    tooltip(button, text(tip.to_owned()).size(12), tooltip::Position::Top).style(container::rounded_box).into()
+    tooltip(button, text(tip.to_owned()).size(12), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
-fn source_seg<'a>(tokens: Tokens, ink: Color, label: &'a str, on: bool, tip: Option<&'a str>) -> Element<'a, Message> {
+fn source_seg<'a>(tokens: Faded, ink: Color, label: &'a str, on: bool, tip: Option<&'a str>) -> Element<'a, Message> {
     let button = button(text(label).size(13).color(if on { ink } else { fade(tokens.t2, ink.a * 0.4) }))
         .padding(pad(6.0, 10.0, 6.0, 10.0))
         .on_press_maybe(None)
@@ -1446,12 +1454,12 @@ fn source_seg<'a>(tokens: Tokens, ink: Color, label: &'a str, on: bool, tip: Opt
             ..button::Style::default()
         });
     match tip {
-        Some(tip) => tooltip(button, text(tip).size(12), tooltip::Position::Top).style(container::rounded_box).into(),
+        Some(tip) => tooltip(button, text(tip).size(12), tooltip::Position::Top).style(tokens.tip()).into(),
         None => button.into(),
     }
 }
 
-fn day_night<'a>(tokens: Tokens, ink: Color, daylight: bool) -> Element<'a, Message> {
+fn day_night<'a>(tokens: Faded, ink: Color, daylight: bool) -> Element<'a, Message> {
     let one = |lucide: Icon, on: bool, message: Message| {
         button(container(icon(lucide, 15.0, if on { ink } else { fade(tokens.t2, ink.a) })).center(Length::Fill))
             .width(Length::Fixed(28.0))
@@ -1472,7 +1480,7 @@ fn day_night<'a>(tokens: Tokens, ink: Color, daylight: bool) -> Element<'a, Mess
     .into()
 }
 
-fn off_switch<'a>(tokens: Tokens) -> Element<'a, Message> {
+fn off_switch<'a>(tokens: Faded) -> Element<'a, Message> {
     let knob = container(space()).width(18).height(18).style(move |_theme: &IcedTheme| container::Style {
         background: Some(tokens.knob.into()),
         border: Border { radius: 9.0.into(), ..Border::default() },

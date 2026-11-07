@@ -39,6 +39,50 @@ pub const HELP_ROW_H: f32 = 30.0;
 pub const HELP_PAD: f32 = 14.0;
 /// The help rows this build actually has keys for, in the original's order.
 pub const HELP_ROWS: usize = 6;
+
+/// One line of the tools panel's help list (`BravaisHelpRow`): the label key and the key cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelpRow {
+    pub label: &'static str,
+    pub kbd: &'static str,
+}
+
+/// `BRAVAIS_HELP_ROWS` less the rows whose keys this build has no action for (typing to filter, Tab between the
+/// wall and the seam, F6, `: + C`, `: + R`, Ctrl/Cmd + B and K).
+pub const HELP_LIST: [HelpRow; HELP_ROWS] = [
+    HelpRow { label: "libraryBravais.helpSearch", kbd: "/" },
+    HelpRow { label: "libraryBravais.helpMove", kbd: "↑ ↓ ← →" },
+    HelpRow { label: "libraryBravais.helpOpen", kbd: "Enter" },
+    HelpRow { label: "libraryBravais.helpPlay", kbd: "Enter" },
+    HelpRow { label: "libraryBravais.helpEnqueue", kbd: "Shift + Enter" },
+    HelpRow { label: "libraryBravais.helpBack", kbd: "ESC" },
+];
+
+/// What a key does on the home wall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WallKey {
+    /// `/`: the home seam's online search.
+    Search,
+    /// Tab: the next or previous focusable control.
+    Focus {
+        backwards: bool,
+    },
+    Card(crate::focus_card::Key),
+}
+
+/// `resolveBravaisKey(event) ?? resolveBravaisHomeKey(event)`, for the keys this build has.
+pub fn wall_key_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers, repeat: bool) -> Option<WallKey> {
+    use iced::keyboard::{Key, key::Named};
+    let chord = modifiers.control() || modifiers.logo() || modifiers.alt();
+    if *key == Key::Named(Named::Tab) && !chord {
+        return Some(WallKey::Focus { backwards: modifiers.shift() });
+    }
+    if let Some(card) = crate::focus_card::key_of(key, modifiers, repeat) {
+        return Some(WallKey::Card(card));
+    }
+    let slash = matches!(key, Key::Character(character) if character.as_str() == "/");
+    (slash && !repeat && !chord).then_some(WallKey::Search)
+}
 /// Concealed back button: 200ms CSS `ease`.
 const BACK_EASE: Ease = Ease::new(0.25, 0.1, 0.25, 1.0);
 const BACK_MS: f64 = 200.0;
@@ -566,7 +610,17 @@ impl HomeChrome {
     }
 
     pub fn menu_open(&self) -> bool {
-        self.more || self.tools_goal > 0.5
+        self.more || self.tools_open()
+    }
+
+    /// The tools panel is open. It leaves the wall its keys except Escape, as `WallToolsSurface` does.
+    pub fn tools_open(&self) -> bool {
+        self.tools_goal > 0.5
+    }
+
+    /// The seam's more menu is open.
+    pub fn more_open(&self) -> bool {
+        self.more
     }
 
     pub fn animating(&self, now: Instant) -> bool {

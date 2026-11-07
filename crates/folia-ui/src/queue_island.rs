@@ -523,7 +523,7 @@ fn action<'a>(
     });
     let press = mouse_area(press).on_enter(Message::ActionHover(Some(key))).on_exit(Message::ActionHoverLeave(key));
     tooltip(press, text(look.i18n.t(label).to_owned()).size(12), tooltip::Position::Top)
-        .style(container::rounded_box)
+        .style(crate::settings_kit::faded_box(ink.a))
         .into()
 }
 
@@ -568,9 +568,9 @@ fn ghost<'a>(look: Look<'a>, track: &'a Track) -> Element<'a, Message> {
         .padding(iced::Padding { top: 0.0, right: 12.0, bottom: 0.0, left: 3.0 })
         .align_y(Alignment::Center)
         .style(move |_| container::Style {
-            background: Some(Background::Color(fill)),
-            border: Border { radius: 10.0.into(), width: 1.0, color: ring },
-            shadow: Shadow { color: shadow, offset: Vector::new(0.0, 10.0), blur_radius: 28.0 },
+            background: Some(Background::Color(fill.scale_alpha(ink.a))),
+            border: Border { radius: 10.0.into(), width: 1.0, color: ring.scale_alpha(ink.a) },
+            shadow: Shadow { color: shadow.scale_alpha(ink.a), offset: Vector::new(0.0, 10.0), blur_radius: 28.0 },
             ..container::Style::default()
         })
         .into()

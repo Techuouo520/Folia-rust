@@ -8,12 +8,15 @@ use folia_i18n::I18n;
 use folia_render::Plate;
 use folia_visualizer::Ease;
 use iced::widget::{button, column, container, mouse_area, row, shader, slider, space, stack, text, tooltip};
-use iced::{Alignment, Background, Border, Color, Element, Font, Length, Size, Vector};
+use iced::{Alignment, Background, Border, Color, Element, Font, Length, Point, Size, Vector};
 use lucide_static_svg::Icon;
 
+use crate::design_size::DesignSize;
 use crate::icons::{Variant, icon, variant};
 use crate::motion::{CSS_TRANSITION, Tween};
-use crate::overlay::{CAPSULE_FADE_MS, CapsuleHover, CapsuleSpring, capsule_open, capsule_row, capsule_width};
+use crate::overlay::{
+    CAPSULE_FADE_MS, CAPSULE_LAYOUT_SPRING, CapsuleHover, ChromeSpring, capsule_open, capsule_row, capsule_width,
+};
 use crate::playback::{self, Playback};
 
 /// `HOVER_HITBOX_BOTTOM_BUFFER_PX`: the hover area reaches this far under the bar on the base line.
@@ -75,7 +78,7 @@ struct Enter {
 pub struct PlayerBar {
     epoch: Instant,
     hover: CapsuleHover,
-    size: CapsuleSpring,
+    size: ChromeSpring,
     shown: Tween,
     /// 0 collapsed colours, 0.5 a hovered collapsed bar, 1 expanded.
     tone: Tween,
@@ -104,6 +107,33 @@ pub struct PlayerBar {
     present: bool,
 }
 
+/// The capsule's rounded, clipping frame and the content inside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CapsuleBox {
+    /// Between the collapsed and the expanded size at the layout spring's position.
+    pub frame: Size,
+    /// Always at its own final size: the expanded row, or the collapsed progress pill.
+    pub content: Size,
+}
+
+impl CapsuleBox {
+    /// The content's top-left in the frame. Centred, as the original's inner `layout` div keeps the content at its
+    /// size and on the frame's centre; negative while the frame is the smaller.
+    pub fn content_origin(&self) -> Point {
+        Point::new((self.frame.width - self.content.width) / 2.0, (self.frame.height - self.content.height) / 2.0)
+    }
+}
+
+/// The capsule at layout spring `t`. `expanded` is `showExpanded`: the content swaps the moment it changes.
+pub fn capsule_box(window: Size, home: bool, t: f32, expanded: bool) -> CapsuleBox {
+    let row = capsule_row(window.width, home);
+    let open_h = if window.width < SM { EXPANDED_NARROW_H } else { EXPANDED_H };
+    let frame = Size::new(capsule_width(row, window.width, t).max(0.0), COLLAPSED_H + (open_h - COLLAPSED_H) * t);
+    let content =
+        if expanded { Size::new(row, open_h) } else { Size::new(capsule_width(row, window.width, 0.0), COLLAPSED_H) };
+    CapsuleBox { frame, content }
+}
+
 /// What the bar needs from the shell.
 pub struct Look<'a> {
     pub i18n: &'a I18n,
@@ -125,7 +155,7 @@ impl PlayerBar {
         Self {
             epoch: now,
             hover: CapsuleHover::collapsed(0),
-            size: CapsuleSpring::settled(0.0, 0),
+            size: ChromeSpring::settled(0.0, 0, CAPSULE_LAYOUT_SPRING),
             shown: Tween::new(1.0, CAPSULE_FADE_MS as f64, Ease::OUT, now),
             tone: Tween::new(0.0, TONE_MS, CSS_TRANSITION, now),
             play: Tween::new(0.0, SCALE_MS, CSS_TRANSITION, now),
@@ -318,9 +348,8 @@ impl PlayerBar {
         let window = look.window;
         let narrow = window.width < SM;
         let row_w = capsule_row(window.width, self.home);
-        let width = capsule_width(row_w, window.width, t).max(0.0);
-        let open_h = if narrow { EXPANDED_NARROW_H } else { EXPANDED_H };
-        let height = COLLAPSED_H + (open_h - COLLAPSED_H) * t;
+        let boxed = capsule_box(window, self.home, t, open);
+        let (width, height) = (boxed.frame.width, boxed.frame.height);
         let tone = self.tone.value(now);
         let (fill, border) = if look.daylight {
             (Color { a: 0.4 + 0.2 * tone, ..Color::WHITE }, Color { a: 0.2, ..Color::WHITE })
@@ -329,18 +358,19 @@ impl PlayerBar {
         };
         let body: Element<'a, Message> = if open {
             container(self.expanded(playback, &look, narrow, shown, now))
-                .width(Length::Fixed(row_w))
-                .height(Length::Fixed(open_h))
+                .width(Length::Fixed(boxed.content.width))
+                .height(Length::Fixed(boxed.content.height))
                 .padding(12)
                 .into()
         } else {
-            let collapsed_w = capsule_width(row_w, window.width, 0.0);
             container(container(progress(playback, &look, shown)).padding([0, 16]).center_y(Length::Fixed(32.0)))
-                .width(Length::Fixed(collapsed_w))
-                .height(Length::Fixed(COLLAPSED_H))
+                .width(Length::Fixed(boxed.content.width))
+                .height(Length::Fixed(boxed.content.height))
                 .padding([8, 16])
                 .into()
         };
+        // At its final size and centred on the frame, which clips it while the spring moves the frame.
+        let body = Element::new(DesignSize { content: body, size: boxed.content });
         let radius = height.min(width) / 2.0;
         let border = Color { a: border.a * shown, ..border };
         let capsule = container(body)
@@ -356,19 +386,21 @@ impl PlayerBar {
         let lift = 24.0 * (1.0 - shown);
         let scale = 0.97 + 0.03 * shown;
         let plate = shadow_plate(width, height, radius, fill, look.daylight, open, shown);
-        let capsule: Element<'a, Message> =
-            if self.present { mouse_area(capsule).on_press(Message::Open).into() } else { capsule.into() };
+        // The same widgets whether the bar is present or not: hiding must not rebuild the hover and control state.
+        let mut capsule = mouse_area(capsule);
+        if self.present {
+            capsule = capsule.on_press(Message::Open);
+        }
         let row = container(capsule).width(Length::Fixed(row_w)).align_x(Alignment::Center);
         // The hover area spans the whole row and the buffer below it, even under a collapsed bar.
         // `HOVER_HITBOX_BOTTOM_BUFFER_PX` shrinks as the bar is lifted; below it nothing takes the pointer.
         let hitbox = (HITBOX_BUFFER - (look.bottom - folia_store::BOTTOM_BAR_BASE)).max(0.0);
         let hover = column![row, space().height(Length::Fixed(hitbox))];
-        // `pointerEvents: none` while hidden: the fade still draws, but the bar stops taking the pointer.
-        let hover: Element<'a, Message> = if self.present {
-            mouse_area(hover).on_enter(Message::Inside(true)).on_exit(Message::Inside(false)).into()
-        } else {
-            hover.into()
-        };
+        // `pointerEvents: none` while hidden: the fade still draws, but the bar is not entered or pressed.
+        let mut hover = mouse_area(hover).on_exit(Message::Inside(false));
+        if self.present {
+            hover = hover.on_enter(Message::Inside(true));
+        }
         // One float: glass and controls share the 24px drop and the 0.97 scale. Separate floats
         // each become an overlay and scale around their own center, so the pill and the controls split.
         let group_w = row_w.max(width + 2.0 * plate.reach);
@@ -382,11 +414,13 @@ impl PlayerBar {
             .height(Length::Fixed(group_h))
             .align_x(Alignment::Center)
             .padding(iced::Padding { top: plate.top, ..iced::Padding::ZERO });
-        let mut group = stack![plate_layer, controls];
-        if !self.present {
-            // Covers the buttons for the fade. A press is ignored, matching `pointerEvents: none`.
-            group = group.push(mouse_area(space().width(Length::Fill).height(Length::Fill)).on_press(Message::Frame));
-        }
+        // Covers the buttons for the fade, where a press is ignored as with `pointerEvents: none`; empty while shown.
+        let cover = if self.present {
+            space().width(Length::Fixed(0.0)).height(Length::Fixed(0.0))
+        } else {
+            space().width(Length::Fill).height(Length::Fill)
+        };
+        let group = stack![plate_layer, controls, mouse_area(cover).on_press(Message::Frame)];
         let group = group.width(Length::Fixed(group_w)).height(Length::Fixed(group_h));
         let group = float_in(group.into(), lift, scale);
         let top = (window.height - look.bottom - height - plate.top).max(0.0);
