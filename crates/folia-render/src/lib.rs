@@ -1,13 +1,20 @@
 // Full-window vignette, grain, and the subtitle radial glow.
 
+mod backdrop;
+mod blur;
 mod frame;
 pub mod glyphs;
 mod pipeline;
 mod plate;
 mod wash;
 
+pub use backdrop::{
+    GlassBench, Image as CoverImage, Program as Backdrop, Quad as CoverQuad, Scene as BackdropScene, Shot, bench_glass,
+    blur_source, draw_source, image_key, paint_external, preview_wall, release as release_backdrop, resident_bytes,
+};
+pub use blur::{Pyramid, levels_for_radius, pyramid_bytes};
 pub use frame::grain_frame;
-pub use plate::Plate;
+pub use plate::{Plate, compile_plate};
 pub use wash::{Glow, Veil, Wash};
 
 use pipeline::{Fullscreen, Slot};

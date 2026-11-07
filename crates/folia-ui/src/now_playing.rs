@@ -8,7 +8,13 @@ use iced::{Alignment, Color, Element, Length, Size};
 
 use crate::overlay::{self, Subtitle};
 
-/// `subtitle` is the translation and the next line. `bottom` is how far the block sits above the window edge.
+/// Where the subtitle sits, and whether a glass plate needs the picture behind it.
+pub struct Foot {
+    pub bottom: f32,
+    pub glass: bool,
+}
+
+/// `subtitle` is the translation and the next line. `foot.bottom` is how far the block sits above the window edge.
 pub fn view<'a, M: 'a>(
     scene: Scene<'a>,
     i18n: &'a I18n,
@@ -16,11 +22,14 @@ pub fn view<'a, M: 'a>(
     background: Color,
     window: Size,
     subtitle: Subtitle<'a>,
-    bottom: f32,
+    foot: Foot,
 ) -> Element<'a, M> {
     let has_lyrics = !scene.lyrics.lines.is_empty();
     let font_scale = scene.font_scale;
     let time = scene.time as f32;
+    let glass = foot.glass;
+    let bottom = foot.bottom;
+    let flat = !matches!(scene.style, folia_visualizer::Style::Nebbia | folia_visualizer::Style::Lumiere);
     let visualizer = lyric_view(scene);
     let show_glow = subtitle.translation.is_some() || subtitle.upcoming.is_some();
     let ellipse = overlay::glow_ellipse(
@@ -43,7 +52,23 @@ pub fn view<'a, M: 'a>(
     }))
     .width(Length::Fill)
     .height(Length::Fill);
-    let mut layers = stack![visualizer, atmosphere];
+    let mut layers = stack![];
+    // Canvas styles have no scene texture. The blur source is the theme colour; nebbia and lumiere replace it.
+    if glass && flat {
+        let picture = folia_render::BackdropScene {
+            window: [window.width, window.height],
+            ground: [background.r, background.g, background.b, 1.0],
+            shade: [0.0; 4],
+            tilt: [0.0; 3],
+            quads: Vec::new(),
+            images: Vec::new(),
+            stamp: u64::from(background.r.to_bits())
+                ^ u64::from(background.g.to_bits()) << 16
+                ^ u64::from(window.width.to_bits()),
+        };
+        layers = layers.push(shader(folia_render::Backdrop::new(picture)).width(Length::Fill).height(Length::Fill));
+    }
+    let mut layers = layers.push(visualizer).push(atmosphere);
     if show_glow {
         let block = subtitle_block(subtitle, muted, background, window.width, font_scale);
         let subtitle = container(block)

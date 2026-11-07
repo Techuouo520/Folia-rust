@@ -1103,6 +1103,57 @@ impl WallProgram<'_> {
     }
 }
 
+fn glass_art<'a>(
+    art: &Art<'a>,
+    cover: Option<&'a Handle>,
+    rect: Rectangle,
+    heading: bool,
+) -> (Option<&'a Handle>, [f32; 4], f32) {
+    if heading {
+        return (None, [0.0, 0.0, 1.0, 1.0], 2.0);
+    }
+    match art {
+        Art::Mosaic { image, square } => (Some(image), cover_uv(rect, *square), 1.0),
+        Art::Shard { image, rect: shard, .. } => (Some(image), cover_uv(rect, *shard), 0.0),
+        Art::None => {
+            let Some(handle) = cover else { return (None, [0.0, 0.0, 1.0, 1.0], 0.0) };
+            let side = rect.width.max(rect.height);
+            let square = Rectangle {
+                x: rect.x + (rect.width - side) / 2.0,
+                y: rect.y + (rect.height - side) / 2.0,
+                width: side,
+                height: side,
+            };
+            (Some(handle), cover_uv(rect, square), 0.0)
+        }
+    }
+}
+
+fn cover_uv(tile: Rectangle, square: Rectangle) -> [f32; 4] {
+    if square.width < 1.0 || square.height < 1.0 {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+    let u0 = ((tile.x - square.x) / square.width).clamp(0.0, 1.0);
+    let v0 = ((tile.y - square.y) / square.height).clamp(0.0, 1.0);
+    let u1 = ((tile.x + tile.width - square.x) / square.width).clamp(0.0, 1.0);
+    let v1 = ((tile.y + tile.height - square.y) / square.height).clamp(0.0, 1.0);
+    [u0, v0, u1, v1]
+}
+
+fn push_cover(images: &mut Vec<folia_render::CoverImage>, handle: &Handle) -> u32 {
+    let Handle::Rgba { width, height, pixels, .. } = handle else { return u32::MAX };
+    let key = folia_render::image_key(pixels);
+    if let Some(index) = images.iter().position(|image| image.key == key) {
+        return index as u32;
+    }
+    images.push(folia_render::CoverImage { key, width: *width, height: *height, pixels: handle.clone() });
+    (images.len() - 1) as u32
+}
+
+fn color_of(color: Color) -> [f32; 4] {
+    [color.r, color.g, color.b, 1.0]
+}
+
 /// `fallbackBackground` is painted only for an item without a cover address. A cover still loading, or one that
 /// would not load, leaves the bare poster ground (`--lattice-poster-background`) under the shade and the copy, and
 /// is swapped in at once when decoded, as a CSS background image is. A local file whose tags hold no picture has no
@@ -1749,6 +1800,77 @@ impl Wall {
         let scale = wall_scale(self.viewport.width);
         let target = Vector::new(self.pan.x, self.pan.y + f32::from(direction) * self.viewport.height * 0.85 / scale);
         self.focus.tween_to(self.pan, target, Instant::now());
+    }
+
+    /// Cover quads for the glass blur. Layout and hit testing stay on the canvas; this is only the picture
+    /// under the panels. Text and badges stay out of it.
+    pub(crate) fn glass_scene(
+        &self,
+        tracks: &[Tile],
+        theme: &Theme,
+        daylight: bool,
+        now: Instant,
+    ) -> folia_render::BackdropScene {
+        let poster_rgb = theme.background.mix(theme.primary, if daylight { 0.06 } else { 0.12 });
+        let poster =
+            [f32::from(poster_rgb.r) / 255.0, f32::from(poster_rgb.g) / 255.0, f32::from(poster_rgb.b) / 255.0, 1.0];
+        let ground = [
+            f32::from(theme.background.r) / 255.0,
+            f32::from(theme.background.g) / 255.0,
+            f32::from(theme.background.b) / 255.0,
+            1.0,
+        ];
+        let shade = if daylight { [1.0, 1.0, 1.0, 1.0] } else { [0.0, 0.0, 0.0, 1.0] };
+        let mut images = Vec::new();
+        let mut quads = Vec::new();
+        let mut stamp = 0x8422_23f5u64;
+        let screen = Rectangle::new(Point::ORIGIN, self.viewport);
+        let expanded = self.focus.expanded().map(|(slot, _)| slot);
+        for placement in &self.shown {
+            let rect = self.drawn(placement, now);
+            if !rect.intersects(&screen) {
+                continue;
+            }
+            let Some(item) = tracks.get(placement.track) else { continue };
+            let grown = Some(placement.slot) == expanded;
+            let art = if grown || item.heading {
+                Art::None
+            } else {
+                self.art(placement, item, rect, Some(placement.slot) == self.focus.keyboard())
+            };
+            let loaded = self.covers.peek(&item.id);
+            let (image, uv, shade_kind) = glass_art(&art, loaded.and_then(Option::as_ref), rect, item.heading);
+            let index = image.map(|handle| push_cover(&mut images, handle)).unwrap_or(u32::MAX);
+            let (color0, color1) = if index == u32::MAX && shows_fallback(item, loaded) {
+                let hue = item.hue;
+                (color_of(hsl(hue, 0.68, 0.58)), color_of(hsl((hue + 52.0) % 360.0, 0.62, 0.18)))
+            } else {
+                (poster, poster)
+            };
+            quads.push(folia_render::CoverQuad {
+                rect: [rect.x, rect.y, rect.width, rect.height],
+                uv,
+                image: index,
+                color0,
+                color1,
+                shade: shade_kind,
+                alpha: 1.0,
+            });
+            stamp = stamp.wrapping_mul(0x0000_0100_0000_01b3).wrapping_add((rect.x * 2.0).round() as i32 as u64);
+            stamp = stamp.wrapping_add((rect.y * 2.0).round() as i32 as u64);
+        }
+        let pivot = self.pivot();
+        let tilt = [pivot.x, pivot.y, self.tilt.deg(now).to_radians()];
+        stamp = stamp.wrapping_add((tilt[2] * 1000.0).round() as i32 as u64);
+        folia_render::BackdropScene {
+            window: [self.viewport.width, self.viewport.height],
+            ground,
+            shade,
+            tilt,
+            quads,
+            images,
+            stamp,
+        }
     }
 
     /// A drawn tile's rect on screen: moved with its block, popped by keyboard focus.

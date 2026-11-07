@@ -19,6 +19,16 @@ pub struct Fullscreen {
 #[derive(Debug, Default)]
 pub struct Slot(AtomicUsize);
 
+impl Slot {
+    pub(crate) fn get(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set(&self, index: usize) {
+        self.0.store(index, Ordering::Relaxed)
+    }
+}
+
 impl Fullscreen {
     /// `source` must define `vs`, `fragment` and a uniform at group 0, binding 0 of `uniform_size` bytes.
     pub fn new(

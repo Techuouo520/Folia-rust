@@ -942,10 +942,13 @@ impl Shell {
                     .library
                     .expanded_track()
                     .is_some_and(|track| self.playback.queue.items().iter().any(|queued| queued.id == track.id));
+                let now = std::time::Instant::now();
                 let look = library::CardLook {
                     queued,
                     playing: self.playback.is_playing(),
                     window_width: self.window_size.width,
+                    glass: self.page == Page::Library
+                        && (self.home.tools(now) > 0.02 || self.home.island(now) > 0.005 || self.bar.shown(now) > 0.0),
                 };
                 self.library.view(&self.i18n, &self.theme, daylight, muted, playing, look).map(Message::Library)
             }
@@ -966,7 +969,10 @@ impl Shell {
                 let subtitle = self.subtitle();
                 let bottom = subtitle_bottom(self.bar_offset(), self.subtitle_presence.value(self.now_ms()));
                 let background = folia_visualizer::color(self.theme.background, 1.0);
-                now_playing::view(scene, &self.i18n, muted, background, self.window_size, subtitle, bottom)
+                let now = std::time::Instant::now();
+                let foot =
+                    now_playing::Foot { bottom, glass: self.bar.shown(now) > 0.0 || self.panel.glass(now) > 0.0 };
+                now_playing::view(scene, &self.i18n, muted, background, self.window_size, subtitle, foot)
             }
         };
         let playing = self.page == Page::NowPlaying;

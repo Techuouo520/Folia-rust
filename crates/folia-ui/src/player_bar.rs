@@ -772,12 +772,15 @@ fn shadow_plate<'a>(
         radius,
         fill_origin: [reach, top],
         fill_size: [width, height],
-        fill: [fill.r, fill.g, fill.b, fill.a * shown],
-        shadow: [0.0, 0.0, 0.0, alpha * shown],
+        fill: [fill.r, fill.g, fill.b, fill.a],
+        shadow: [0.0, 0.0, 0.0, alpha],
         shadow_blur: blur,
         shadow_y: y,
         shadow_spread: spread,
         ring: [0.0; 4],
+        backdrop: 24.0,
+        fade: shown,
+        saturate: 1.0,
     };
     let element =
         shader(plate).width(Length::Fixed(width + 2.0 * reach)).height(Length::Fixed(height + top + bottom)).into();

@@ -152,6 +152,9 @@ pub struct Renderer {
     field_key: u64,
     encode: bool,
     bounds: [f32; 4],
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    format: wgpu::TextureFormat,
 }
 
 impl Renderer {
@@ -227,6 +230,9 @@ impl Renderer {
             field_key: 0,
             encode: format.is_srgb(),
             bounds: [0.0; 4],
+            device: device.clone(),
+            queue: queue.clone(),
+            format,
         }
     }
 
@@ -272,6 +278,35 @@ impl Renderer {
         pass.set_pipeline(&self.window);
         pass.set_bind_group(0, &targets.bind, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    /// The same window pass, into the glass blur's quarter-resolution picture.
+    fn paint_blur(&self, encoder: &mut wgpu::CommandEncoder, time: f32, window: [f32; 2]) {
+        let stamp = (time * 30.0).round() as i32 as u64;
+        let drew =
+            folia_render::draw_source(&self.device, &self.queue, self.format, window, stamp, |view, width, height| {
+                let Some(targets) = self.targets.as_ref() else { return };
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("folia-nebbia-blur"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                pass.set_scissor_rect(0, 0, width, height);
+                pass.set_pipeline(&self.window);
+                pass.set_bind_group(0, &targets.bind, &[]);
+                pass.draw(0..3, 0..1);
+            });
+        if drew {
+            folia_render::blur_source(encoder);
+        }
     }
 
     fn instanced(
@@ -510,6 +545,8 @@ impl ShaderPrimitive for Pass {
         clip_bounds: &Rectangle<u32>,
     ) {
         pipeline.0.render(encoder, target, [clip_bounds.x, clip_bounds.y, clip_bounds.width, clip_bounds.height]);
+        let window = [self.uniforms.resolution[0], self.uniforms.resolution[1]];
+        pipeline.0.paint_blur(encoder, self.uniforms.time, window);
     }
 }
 

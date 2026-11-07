@@ -298,6 +298,11 @@ impl PlayerPanel {
         (effect, Task::none())
     }
 
+    /// How open the surface is, including the close fade. Zero once it has finished closing.
+    pub fn glass(&self, now: Instant) -> f32 {
+        self.surface.value(now)
+    }
+
     pub fn view<'a>(&'a self, view: View<'a>, now: Instant) -> Element<'a, Message> {
         let open = self.surface.value(now);
         let shown = self.handle.value(now);
@@ -436,15 +441,15 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     let visual_left = visual_right - panel_w;
     let visual_top = visual_bottom - visual_h;
     let glass = if view.daylight {
-        [244.0 / 255.0, 244.0 / 255.0, 245.0 / 255.0, 0.8 * open]
+        [244.0 / 255.0, 244.0 / 255.0, 245.0 / 255.0, 0.8]
     } else {
-        [28.0 / 255.0, 28.0 / 255.0, 31.0 / 255.0, 0.8 * open]
+        [28.0 / 255.0, 28.0 / 255.0, 31.0 / 255.0, 0.8]
     };
-    // `--pn-shadow`: `0 30px 80px` and a 1px ring.
+    // `--pn-shadow`: `0 30px 80px` and a 1px ring. `open` fades the blur and the fill together.
     let (shadow, ring) = if view.daylight {
-        ([0.0, 0.0, 0.0, 0.24 * open], [0.0, 0.0, 0.0, 0.06 * open])
+        ([0.0, 0.0, 0.0, 0.24], [0.0, 0.0, 0.0, 0.06])
     } else {
-        ([0.0, 0.0, 0.0, 0.55 * open], [1.0, 1.0, 1.0, 0.09 * open])
+        ([0.0, 0.0, 0.0, 0.55], [1.0, 1.0, 1.0, 0.09])
     };
     let x0 = (visual_left - SHADOW_REACH).max(0.0);
     let y0 = (visual_top - (SHADOW_REACH - SHADOW_Y)).max(0.0);
@@ -460,6 +465,9 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
         shadow_y: SHADOW_Y,
         shadow_spread: 0.0,
         ring,
+        backdrop: 40.0,
+        fade: open,
+        saturate: 1.3,
     })
     .width(Length::Fixed(x1 - x0))
     .height(Length::Fixed(y1 - y0));

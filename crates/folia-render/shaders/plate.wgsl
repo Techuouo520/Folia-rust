@@ -13,7 +13,16 @@ struct PlateUniform {
     shadow_spread: f32,
     _pad: f32,
     ring: vec4<f32>,
+    widget: vec2<f32>,
+    window: vec2<f32>,
+    fade: f32,
+    saturate: f32,
+    backdrop: f32,
+    level: f32,
 }
+
+@group(1) @binding(0) var blur_tex: texture_2d<f32>;
+@group(1) @binding(1) var blur_samp: sampler;
 
 @group(0) @binding(0) var<uniform> u: PlateUniform;
 
@@ -94,7 +103,58 @@ fn fs_plate(input: VsOut) -> @location(0) vec4<f32> {
     rgb = mix(rgb, u.fill.rgb, fill_a);
     a = fill_a + a * (1.0 - fill_a);
     rgb = rgb / max(a, 0.0001);
+    a = a * u.fade;
 
+    if (u.encode > 0.5) {
+        rgb = to_linear(rgb);
+    }
+    return vec4<f32>(rgb, a);
+}
+
+fn sat(rgb: vec3<f32>, amount: f32) -> vec3<f32> {
+    let gray = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return mix(vec3<f32>(gray), rgb, amount);
+}
+
+@fragment
+fn fs_plate_blur(input: VsOut) -> @location(0) vec4<f32> {
+    let px = input.uv * u.resolution;
+    let radius = min(u.radius, min(u.size.x, u.size.y) * 0.5);
+    let half = max(u.size * 0.5, vec2<f32>(0.0));
+    let center = u.origin + half;
+    let fill_d = sd_round(px - center, half, radius);
+    let inside = clamp(0.5 - fill_d, 0.0, 1.0);
+
+    let shadow_half = max(half + vec2<f32>(u.shadow_spread), vec2<f32>(0.0));
+    let shadow_corner = max(radius + u.shadow_spread, 0.0);
+    let shadow_p = px - (center + vec2<f32>(0.0, u.shadow_y));
+    var cover = 0.0;
+    if (u.shadow_blur > 0.01) {
+        cover = shadow_coverage(shadow_p, shadow_half, min(shadow_corner, min(shadow_half.x, shadow_half.y)), u.shadow_blur * 0.5);
+    } else {
+        cover = clamp(0.5 - sd_round(shadow_p, shadow_half, shadow_corner), 0.0, 1.0);
+    }
+    let edge = min(min(px.x, u.resolution.x - px.x), min(px.y, u.resolution.y - px.y));
+    let shadow_a = u.shadow.a * cover * (1.0 - inside) * smoothstep(0.0, 1.5, edge) * u.fade;
+    let ring_a = u.ring.a * clamp(1.5 - fill_d, 0.0, 1.0) * (1.0 - inside) * u.fade;
+
+    let window = max(u.window, vec2<f32>(1.0));
+    let uv = (u.widget + px) / window;
+    var blurred = textureSample(blur_tex, blur_samp, uv).rgb;
+    if (u.encode > 0.5) {
+        blurred = pow(max(blurred, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+    }
+    blurred = sat(blurred, u.saturate);
+    let tinted = mix(blurred, u.fill.rgb, u.fill.a);
+    let glass_a = inside * u.fade;
+
+    var rgb = u.shadow.rgb;
+    var a = shadow_a;
+    rgb = mix(rgb * a, u.ring.rgb, ring_a);
+    a = ring_a + a * (1.0 - ring_a);
+    rgb = mix(rgb, tinted, glass_a);
+    a = glass_a + a * (1.0 - glass_a);
+    rgb = rgb / max(a, 0.0001);
     if (u.encode > 0.5) {
         rgb = to_linear(rgb);
     }

@@ -543,6 +543,9 @@ fn popover_plate<'a>(tokens: Tokens, width: f32, height: f32, alpha: f32) -> Pop
         shadow_y: 14.0,
         shadow_spread: 0.0,
         ring: [ring.r, ring.g, ring.b, ring.a * alpha],
+        backdrop: 0.0,
+        fade: 1.0,
+        saturate: 1.0,
     };
     let element = shader(plate)
         .width(Length::Fixed(width + 2.0 * reach))

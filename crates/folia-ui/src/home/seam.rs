@@ -47,6 +47,9 @@ fn strip<'a>(host: &Host<'a>) -> Element<'a, Message> {
         shadow_y: 24.0,
         shadow_spread: 0.0,
         ring: [ring.r, ring.g, ring.b, ring.a],
+        backdrop: 0.0,
+        fade: 1.0,
+        saturate: 1.0,
     };
     let body = if horizontal { row_body(host, ink) } else { column_body(host, ink) };
     let clipped = clip_body(host, body);

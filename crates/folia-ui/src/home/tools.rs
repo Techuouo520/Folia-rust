@@ -183,8 +183,9 @@ fn plates<'a>(home: &HomeChrome, host: &Host<'a>, open: f32, geo: &Geometry, now
                 host,
                 Rectangle { x, y: geo.island_top, width: geo.panel_w, height: geo.island_h },
                 ISLAND_RADIUS,
-                plate_fill(host, alpha),
-                plate_shadow(host, alpha),
+                plate_fill(host),
+                plate_shadow(host),
+                alpha,
             ));
         }
     }
@@ -192,21 +193,30 @@ fn plates<'a>(home: &HomeChrome, host: &Host<'a>, open: f32, geo: &Geometry, now
         host,
         Rectangle { x, y: geo.panel_top, width: geo.panel_w, height: geo.panel_h },
         PANEL_RADIUS,
-        plate_fill(host, open),
-        plate_shadow(host, open),
+        plate_fill(host),
+        plate_shadow(host),
+        open,
     ));
     stack(layers).into()
 }
 
-fn plate_fill(host: &Host<'_>, alpha: f32) -> [f32; 4] {
-    if host.daylight { [1.0, 1.0, 1.0, 0.62 * alpha] } else { [0.0, 0.0, 0.0, 0.40 * alpha] }
+fn plate_fill(host: &Host<'_>) -> [f32; 4] {
+    if host.daylight { [1.0, 1.0, 1.0, 0.62] } else { [0.0, 0.0, 0.0, 0.40] }
 }
 
-fn plate_shadow(host: &Host<'_>, alpha: f32) -> [f32; 4] {
-    if host.daylight { [42.0 / 255.0, 35.0 / 255.0, 27.0 / 255.0, 0.18 * alpha] } else { [0.0, 0.0, 0.0, 0.42 * alpha] }
+fn plate_shadow(host: &Host<'_>) -> [f32; 4] {
+    if host.daylight { [42.0 / 255.0, 35.0 / 255.0, 27.0 / 255.0, 0.18] } else { [0.0, 0.0, 0.0, 0.42] }
 }
 
-fn plate<'a>(host: &Host<'a>, rect: Rectangle, radius: f32, fill: [f32; 4], shadow: [f32; 4]) -> Element<'a, Message> {
+/// `fade` is the panel's open amount. It covers the blur and the fill together (`backdrop-filter: blur(24px)`).
+fn plate<'a>(
+    host: &Host<'a>,
+    rect: Rectangle,
+    radius: f32,
+    fill: [f32; 4],
+    shadow: [f32; 4],
+    fade: f32,
+) -> Element<'a, Message> {
     let right = rect.x + rect.width;
     let bottom = rect.y + rect.height;
     let x0 = (rect.x - REACH).max(0.0);
@@ -223,6 +233,9 @@ fn plate<'a>(host: &Host<'a>, rect: Rectangle, radius: f32, fill: [f32; 4], shad
         shadow_y: SHADOW_Y,
         shadow_spread: 0.0,
         ring: [0.0; 4],
+        backdrop: 24.0,
+        fade,
+        saturate: 1.0,
     };
     let patch = shader(plate).width(Length::Fixed((x1 - x0).max(1.0))).height(Length::Fixed((y1 - y0).max(1.0)));
     container(patch)

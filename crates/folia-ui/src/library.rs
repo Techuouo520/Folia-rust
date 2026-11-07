@@ -182,6 +182,8 @@ pub struct CardLook {
     pub queued: bool,
     pub playing: bool,
     pub window_width: f32,
+    /// Tools, the queue island, or the home capsule is on screen, so the wall feeds the blur.
+    pub glass: bool,
 }
 
 /// What the shell does after a page message.
@@ -1467,7 +1469,14 @@ impl LibraryPage {
             .width(Length::Fill)
             .height(Length::Fill)
             .into();
-        let mut layers = stack![ground(theme), wall.map(Message::Wall)];
+        let mut layers = stack![ground(theme)];
+        if look.glass {
+            let scene = self.wall.glass_scene(&self.tiles, theme, daylight, Instant::now());
+            let backdrop: Element<'a, Message> =
+                shader(folia_render::Backdrop::new(scene)).width(Length::Fill).height(Length::Fill).into();
+            layers = layers.push(backdrop);
+        }
+        layers = layers.push(wall.map(Message::Wall));
         // The focus card's body over its grown tile.
         if let (Some((tile, rect, scale)), Some(_)) =
             (self.wall.expanded_screen(Instant::now()), self.wall.focus.expanded())

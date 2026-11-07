@@ -86,6 +86,10 @@ struct Targets {
     sprites: u32,
     /// Trims since the last prepare. Other windows trim too, so the textures go only after a long run without lumiere.
     idle: u32,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    format: wgpu::TextureFormat,
+    window: [f32; 2],
 }
 
 struct FrontGpu {
@@ -99,7 +103,7 @@ struct FrontGpu {
 }
 
 impl Targets {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let light_module = module(device, "folia-lumiere", LIGHT);
         let decor_module = module(device, "folia-lumiere-decor", DECOR);
         let group0 = uniform_layout(device, "folia-lumiere-light", wgpu::ShaderStages::VERTEX_FRAGMENT, 0);
@@ -161,6 +165,10 @@ impl Targets {
             glyphs: Glyphs::new(device, format, MAX_SPRITES, super::sprite_images()),
             sprites: 0,
             idle: 0,
+            device: device.clone(),
+            queue: queue.clone(),
+            format,
+            window: [1.0, 1.0],
         }
     }
 }
@@ -341,6 +349,7 @@ impl ShaderPrimitive for Pass {
     ) {
         let gpu = &mut pipeline.0;
         gpu.idle = 0;
+        gpu.window = [bounds.width.max(1.0), bounds.height.max(1.0)];
         let (width, height) = pixel_size(bounds, viewport);
         let strength = if self.text_only { 0.0 } else { bloom::GRAPHICS.strength * self.bloom };
         gpu.bloom.sync(device, queue, width, height, &bloom::Preset { strength, ..bloom::GRAPHICS });
@@ -397,6 +406,14 @@ impl ShaderPrimitive for Pass {
             paint_text(gpu, &mut pass, self.echo);
         }
         gpu.text_bloom.encode(encoder, target, clip.x, clip.y, clip.width, clip.height);
+        if let Some(scene) = gpu.bloom.scene() {
+            let stamp = self
+                .bytes
+                .iter()
+                .take(24)
+                .fold(0u64, |hash, byte| hash.wrapping_mul(0x0000_0100_0000_01b3).wrapping_add(u64::from(*byte)));
+            folia_render::paint_external(&gpu.device, &gpu.queue, encoder, gpu.format, scene, stamp, gpu.window);
+        }
     }
 }
 
@@ -505,8 +522,8 @@ pub struct StageGpu(Targets);
 pub struct FrontStage(FrontGpu);
 
 impl shader::Pipeline for StageGpu {
-    fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        Self(Targets::new(device, format))
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        Self(Targets::new(device, queue, format))
     }
 
     /// iced trims after every present of any window. After `IDLE_TRIMS` without lumiere, the full-size textures and
