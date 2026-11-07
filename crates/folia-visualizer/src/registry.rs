@@ -11,10 +11,11 @@ pub enum Style {
     Cadenza,
     Nebbia,
     Lumiere,
+    Monet,
 }
 
 impl Style {
-    pub const ALL: [Style; 8] = [
+    pub const ALL: [Style; 9] = [
         Style::Classic,
         Style::Partita,
         Style::Still,
@@ -23,6 +24,7 @@ impl Style {
         Style::Cadenza,
         Style::Nebbia,
         Style::Lumiere,
+        Style::Monet,
     ];
 
     /// Id used in settings files, the same as the original app's mode id.
@@ -36,6 +38,7 @@ impl Style {
             Style::Cadenza => "cadenza",
             Style::Nebbia => "nebbia",
             Style::Lumiere => "lumiere",
+            Style::Monet => "monet",
         }
     }
 
@@ -86,6 +89,10 @@ impl Style {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">"#,
                 r#"<path d="M10 3.5 6 15M14 3.5 18 15" opacity="0.5"/><path d="M6 19h12"/></svg>"#
             ),
+            Style::Monet => concat!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">"#,
+                r#"<path d="M3 9.5h7"/><path d="M3 13.5h5" opacity="0.55"/><rect x="14" y="5" width="7" height="14" rx="1.5" opacity="0.55"/></svg>"#
+            ),
         }
     }
 
@@ -99,6 +106,7 @@ impl Style {
             Style::Cadenza => "ui.visualizerCadenze",
             Style::Nebbia => "ui.visualizerNebbia",
             Style::Lumiere => "ui.visualizerLumiere",
+            Style::Monet => "ui.visualizerMonet",
         }
     }
 
@@ -113,6 +121,7 @@ impl Style {
             Style::Cadenza => crate::styles::cadenza::manifest(),
             Style::Nebbia => crate::styles::nebbia::manifest(),
             Style::Lumiere => crate::styles::lumiere::manifest(),
+            Style::Monet => crate::styles::monet::manifest(),
         }
     }
 
@@ -141,7 +150,8 @@ impl Style {
             | Style::Claddagh
             | Style::Cadenza
             | Style::Nebbia
-            | Style::Lumiere => None,
+            | Style::Lumiere
+            | Style::Monet => None,
             Style::Still => Some(10),
         }
     }

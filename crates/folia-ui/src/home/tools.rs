@@ -201,7 +201,7 @@ fn plates<'a>(home: &HomeChrome, host: &Host<'a>, open: f32, geo: &Geometry, now
 }
 
 fn plate_fill(host: &Host<'_>) -> [f32; 4] {
-    if host.daylight { [1.0, 1.0, 1.0, 0.62] } else { [0.0, 0.0, 0.0, 0.40] }
+    crate::settings_kit::tools_glass(host.daylight)
 }
 
 fn plate_shadow(host: &Host<'_>) -> [f32; 4] {

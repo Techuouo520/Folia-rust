@@ -86,8 +86,16 @@ pub fn frame(
             encode: 0.0,
             spot_tgt: [sx / width * aspect, sy / height],
             spot_src: [spot_x * aspect, (1.0 - spot_x) * aspect],
-            sky0: pad(colors.sky0),
-            sky1: pad(colors.sky1),
+            sky0: {
+                let mut color = pad(colors.sky0);
+                color[3] = tuning.number(list, "bump");
+                color
+            },
+            sky1: {
+                let mut color = pad(colors.sky1);
+                color[3] = tuning.number(list, "resolution");
+                color
+            },
             la: pad(colors.la),
             lb: pad(colors.lb),
             lc: pad(colors.lc),

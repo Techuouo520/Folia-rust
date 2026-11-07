@@ -289,7 +289,9 @@ const PARTITA_GROUPS: &[crate::tuning::Group] =
     &[crate::tuning::Group { id: "vis-partita", title_key: "options.partitaSettings", foot_key: None, items: PARTITA }];
 
 pub fn manifest() -> crate::tuning::Manifest {
-    crate::tuning::Manifest { storage_key: "partita_tuning", older_keys: &[], groups: PARTITA_GROUPS }
+    let mut manifest = crate::tuning::Manifest::plain("partita_tuning", &[], PARTITA_GROUPS);
+    manifest.reset_key = Some("notifications.partitaReset");
+    manifest
 }
 
 /// The smaller stagger is stored first, as the original `resolve` does.

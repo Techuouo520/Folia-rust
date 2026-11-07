@@ -67,6 +67,7 @@ pub enum Message {
     Toggle(&'static str, bool),
     Member(&'static str, &'static str, bool),
     Choice(&'static str, String),
+    Button(&'static str),
     Reset,
     Frame,
     Font(f32),
@@ -80,6 +81,7 @@ pub enum Effect {
     Save,
     Style(Style),
     Font(f32),
+    Button(&'static str),
 }
 
 /// What the open workbench draws from the shell.
@@ -103,9 +105,14 @@ pub struct Workbench {
     frozen: f64,
     pictures: Pictures,
     pub values: Values,
+    notice: Option<&'static str>,
 }
 
 impl Workbench {
+    pub(crate) fn note(&mut self, key: &'static str) {
+        self.notice = Some(key);
+    }
+
     pub fn open() -> Self {
         Self {
             tab: Tab::Lyrics,
@@ -116,6 +123,7 @@ impl Workbench {
             frozen: 0.0,
             pictures: Pictures::default(),
             values: Values::default(),
+            notice: None,
         }
     }
 
@@ -153,11 +161,17 @@ impl Workbench {
                 Effect::Style(style)
             }
             Message::Slider(key, value) => {
+                if manifest.locked(key) {
+                    return Effect::None;
+                }
                 self.values.set_number(manifest, key, value);
                 Effect::Draft
             }
             Message::Commit => Effect::Save,
             Message::Toggle(key, on) => {
+                if manifest.locked(key) {
+                    return Effect::None;
+                }
                 self.values.set_flag(manifest, key, on);
                 Effect::Save
             }
@@ -166,12 +180,31 @@ impl Workbench {
                 Effect::Save
             }
             Message::Choice(key, value) => {
-                self.values.set_choice(manifest, key, &value);
-                Effect::Save
+                if manifest.locked(key) {
+                    return Effect::None;
+                }
+                let allowed = manifest.items().any(|item| match item {
+                    Item::Select { key: item_key, options, .. } => {
+                        item_key == key
+                            && options.iter().any(|choice| {
+                                choice.value == value
+                                    && choice.requires.is_none_or(|path| self.values.path(path).is_some())
+                            })
+                    }
+                    _ => false,
+                });
+                if allowed {
+                    self.values.set_choice(manifest, key, &value);
+                    Effect::Save
+                } else {
+                    Effect::None
+                }
             }
+            Message::Button(key) => Effect::Button(key),
             Message::Reset => match self.tab {
                 Tab::Lyrics => {
                     self.values.reset(manifest);
+                    self.notice = manifest.reset_key;
                     Effect::Save
                 }
                 Tab::Font => {
@@ -285,6 +318,12 @@ impl Workbench {
             stage: None,
             tuning: self.values.clone(),
             backdrop: true,
+            title: lyrics.title.clone().unwrap_or_default(),
+            artist: lyrics.artist.clone().unwrap_or_default(),
+            album: String::new(),
+            portrait: None,
+            wash: None,
+            preview: true,
         };
         let preview =
             container(lyric_view(scene)).width(Length::Fill).height(Length::Fill).clip(true).style(move |_| {
@@ -412,7 +451,11 @@ impl Workbench {
             .align_y(Alignment::Center);
         let page = self.page(i18n, tokens, style, font_scale);
         let page = scrollable(page).height(Length::Fill).direction(kit::scrollbar()).style(kit::scroll_style(tokens));
-        column![tabs, page].into()
+        let mut column = column![tabs];
+        if let Some(key) = self.notice {
+            column = column.push(text(i18n.t(key)).size(12).color(tokens.t2));
+        }
+        column.push(page).into()
     }
 
     fn page<'a>(
@@ -429,6 +472,16 @@ impl Workbench {
             Tab::Subtitle => notice(i18n, tokens, "options.subtitleFixed"),
             Tab::Global => global_page(i18n, tokens),
         }
+    }
+}
+
+fn item_label(item: Item) -> &'static str {
+    match item {
+        Item::Slider { label_key, .. }
+        | Item::Switch { label_key, .. }
+        | Item::Member { label_key, .. }
+        | Item::Select { label_key, .. }
+        | Item::Button { label_key, .. } => label_key,
     }
 }
 
@@ -465,6 +518,9 @@ fn style_page<'a>(
     for (index, group) in manifest.groups.iter().enumerate() {
         let mut rows = Vec::new();
         for item in group.items {
+            if manifest.hidden(values, item.key()) {
+                continue;
+            }
             rows.push(item_row(i18n, tokens, manifest, values, *item));
         }
         page = page.push(kit::group(
@@ -486,7 +542,11 @@ fn item_row<'a>(
     values: &'a Values,
     item: Item,
 ) -> Row<'a, crate::Message> {
+    let locked = manifest.locked(item.key());
     let control = match item {
+        Item::Slider { key, step, .. } if locked => {
+            kit::value(tokens, format_value(values.number(manifest, key), step))
+        }
         Item::Slider { key, min, max, step, .. } => {
             let value = values.number(manifest, key);
             let shown = format_value(value, step);
@@ -502,9 +562,22 @@ fn item_row<'a>(
             .align_y(Alignment::Center)
             .into()
         }
+        Item::Switch { key, .. } if locked => {
+            kit::toggle_fixed(tokens, if values.flag(manifest, key) { 1.0 } else { 0.0 })
+        }
         Item::Switch { key, .. } => {
             let on = values.flag(manifest, key);
             kit::toggle(tokens, if on { 1.0 } else { 0.0 }, crate::Message::Workbench(Message::Toggle(key, !on)))
+        }
+        Item::Button { key, path_key, .. } => {
+            let enabled = path_key.is_some() || manifest.paths.iter().any(|path| values.path(path).is_some());
+            let label = text(i18n.t(item_label(item))).size(13).color(if enabled { tokens.t1 } else { tokens.t3 });
+            let button = button(label).padding([6, 10]).style(|_, _| button::Style::default());
+            if enabled {
+                button.on_press(crate::Message::Workbench(Message::Button(key))).into()
+            } else {
+                button.into()
+            }
         }
         Item::Member { key, option, .. } => {
             let on = values.member(manifest, key, option);
@@ -523,17 +596,16 @@ fn item_row<'a>(
         }
     };
     let hint = match item {
+        Item::Button { path_key: Some(path), .. } => values
+            .path(path)
+            .and_then(|path| std::path::Path::new(path).file_name())
+            .map(|name| name.to_string_lossy().into_owned()),
         Item::Slider { hint_key: Some(hint), .. }
         | Item::Switch { hint_key: Some(hint), .. }
         | Item::Select { hint_key: Some(hint), .. } => Some(i18n.t(hint).to_owned()),
         _ => None,
     };
-    let label = match item {
-        Item::Slider { label_key, .. }
-        | Item::Switch { label_key, .. }
-        | Item::Member { label_key, .. }
-        | Item::Select { label_key, .. } => i18n.t(label_key).to_owned(),
-    };
+    let label = i18n.t(item_label(item)).to_owned();
     Row { label, hint, sub: false, control }
 }
 
@@ -627,6 +699,12 @@ fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
         stage: Some(Size::new(folia_visualizer::STAGE_WIDTH, folia_visualizer::STAGE_HEIGHT)),
         tuning,
         backdrop: true,
+        title: lyrics.title.clone().unwrap_or_default(),
+        artist: lyrics.artist.clone().unwrap_or_default(),
+        album: String::new(),
+        portrait: None,
+        wash: None,
+        preview: true,
     };
     let picture = container(iced::widget::canvas(pictures.frozen(scene)).width(Length::Fill).height(Length::Fill))
         .width(Length::Fill)

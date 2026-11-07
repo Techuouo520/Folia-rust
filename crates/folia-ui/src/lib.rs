@@ -59,7 +59,7 @@ pub use platform_rows::{ProviderRowStatus, order_provider_rows};
 pub use playback_navigation::PlaybackNavigation;
 /// The floating capsule. `shown` is its 0.26s ease-out hide, shared by opacity, offset and scale.
 pub use player_bar::{CapsuleBox, PlayerBar, capsule_box};
-pub use settings_kit::{Faded, Tokens};
+pub use settings_kit::{Faded, Tokens, panel_glass, quick_tile_fill, tools_glass};
 pub use typeface::install as install_fonts;
 pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, seam_on_axis, wider_span};
 pub use wall_pan::{Glide as WallGlide, Inertia as WallInertia, Release as WallRelease};
@@ -104,6 +104,8 @@ pub struct Init {
     pub library_db: PathBuf,
     /// Where downloaded online audio is cached.
     pub cache_dir: PathBuf,
+    /// Pictures the listener uploads, such as a Monet portrait.
+    pub data_dir: PathBuf,
     /// The system keyring service that keeps platform sessions.
     pub keyring_service: String,
     /// Audio files given on the command line, played as a queue once the window opens.
@@ -165,6 +167,10 @@ pub enum Message {
     Home(home::Message),
     Panel(panel::Message),
     Art(i64, Option<folia_library::Cover>),
+    PortraitPicked(Option<std::path::PathBuf>),
+    PortraitDecoded(String, Option<folia_library::Cover>),
+    PortraitStored(std::path::PathBuf, folia_library::Cover),
+    MonetWash(i64, Option<Vec<u8>>),
     Login(login::Message),
     /// Escape on the player page: leave fullscreen, close the panel, or go back to the wall.
     PlayerEscape,
@@ -231,6 +237,11 @@ pub struct Shell {
     composing: bool,
     /// Song id string the original visualizer uses as its geometry seed.
     visualizer_seed: String,
+    data_dir: std::path::PathBuf,
+    /// Uploaded Monet portrait, keyed by its saved path.
+    monet_portrait: Option<(String, iced::widget::image::Handle)>,
+    /// Painted Monet field for one track.
+    monet_wash: Option<(i64, iced::widget::image::Handle)>,
 }
 
 impl Shell {
@@ -290,10 +301,114 @@ impl Shell {
             login: login::Login::new(std::time::Instant::now()),
             composing: false,
             visualizer_seed: "lumiere".to_owned(),
+            data_dir: init.data_dir,
+            monet_portrait: None,
+            monet_wash: None,
         };
         let open = if init.open_files.is_empty() { Task::none() } else { open_files(init.open_files) };
         let window = iced::window::oldest().map(Message::WindowReady);
-        (shell, Task::batch([load.map(Message::Library), open, window]))
+        let portrait = shell.load_portrait();
+        (shell, Task::batch([load.map(Message::Library), open, window, portrait]))
+    }
+
+    fn portrait_handle(&self, id: Option<i64>) -> Option<&iced::widget::image::Handle> {
+        let values = Style::Monet.load(&self.visualizer.tables);
+        if values.choice(Style::Monet.manifest(), "portraitSource") == "custom"
+            && let Some((_, handle)) = &self.monet_portrait
+        {
+            return Some(handle);
+        }
+        id.and_then(|id| self.art.peek(&id)).and_then(Option::as_ref)
+    }
+
+    fn take_monet_offset(&mut self) -> Task<Message> {
+        let Some(offset) = folia_visualizer::styles::monet::take_offset() else { return Task::none() };
+        let manifest = Style::Monet.manifest();
+        let mut values = Style::Monet.load(&self.visualizer.tables);
+        values.set_number(manifest, "portraitOffsetX", offset);
+        if self.style() == Style::Monet
+            && let Some(window) = self.workbench.as_mut()
+        {
+            window.values = values.clone();
+        }
+        self.store_tuning(Style::Monet, values)
+    }
+
+    fn wash_handle(&self, id: Option<i64>) -> Option<&iced::widget::image::Handle> {
+        let id = id?;
+        self.monet_wash.as_ref().filter(|(held, _)| *held == id).map(|(_, handle)| handle)
+    }
+
+    fn load_portrait(&self) -> Task<Message> {
+        let values = Style::Monet.load(&self.visualizer.tables);
+        let Some(path) = values.path("portraitPath").map(str::to_owned) else { return Task::none() };
+        decode_portrait(path)
+    }
+
+    fn pick_portrait(&self) -> Task<Message> {
+        Task::perform(
+            crate::background::blocking(|| {
+                rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp"]).pick_file()
+            }),
+            |picked| Message::PortraitPicked(picked.flatten()),
+        )
+    }
+
+    fn store_portrait(&mut self, source: std::path::PathBuf) -> Task<Message> {
+        let Some(ext) = source.extension().and_then(|ext| ext.to_str()).map(|ext| ext.to_ascii_lowercase()) else {
+            return Task::none();
+        };
+        if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+            return Task::none();
+        }
+        let stamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_millis());
+        let dest = self.data_dir.join("portraits").join(format!("monet-{stamp}.{ext}"));
+        Task::perform(crate::background::blocking(move || copy_portrait(source, dest)), |copied| {
+            match copied.flatten() {
+                Some((path, cover)) => Message::PortraitStored(path, cover),
+                None => Message::PortraitPicked(None),
+            }
+        })
+    }
+
+    fn remember_portrait(&mut self, path: std::path::PathBuf, cover: folia_library::Cover) -> Task<Message> {
+        let text = path.display().to_string();
+        let handle = iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba);
+        self.monet_portrait = Some((text.clone(), handle));
+        let manifest = Style::Monet.manifest();
+        let mut values = Style::Monet.load(&self.visualizer.tables);
+        values.set_path(manifest, "portraitPath", Some(&text));
+        values.set_choice(manifest, "portraitSource", "custom");
+        if self.style() == Style::Monet
+            && let Some(window) = self.workbench.as_mut()
+        {
+            window.values = values.clone();
+            window.note("notifications.monetPortraitUpdated");
+        }
+        tracing::info!(path = %text, "monet portrait saved");
+        self.store_tuning(Style::Monet, values)
+    }
+
+    fn clear_portrait(&mut self) -> Task<Message> {
+        let manifest = Style::Monet.manifest();
+        let mut values = Style::Monet.load(&self.visualizer.tables);
+        if let Some(path) = values.path("portraitPath").map(str::to_owned) {
+            let _ = std::thread::spawn(move || {
+                let _ = std::fs::remove_file(path);
+            });
+        }
+        values.set_path(manifest, "portraitPath", None);
+        values.set_choice(manifest, "portraitSource", "cover");
+        self.monet_portrait = None;
+        if self.style() == Style::Monet
+            && let Some(window) = self.workbench.as_mut()
+        {
+            window.values = values.clone();
+            window.note("notifications.monetPortraitCleared");
+        }
+        tracing::info!("monet portrait cleared");
+        self.store_tuning(Style::Monet, values)
     }
 
     fn refresh_visualizer_seed(&mut self) {
@@ -572,7 +687,7 @@ impl Shell {
                 if self.page == Page::NowPlaying {
                     self.reveal_chrome();
                 }
-                Task::none()
+                if held { Task::none() } else { self.take_monet_offset() }
             }
             Message::WindowUnfocused => {
                 self.drag_armed = false;
@@ -639,16 +754,47 @@ impl Shell {
                 }
                 let bytes = cover.as_ref().map_or(0, |cover| cover.rgba.len());
                 tracing::debug!(bytes, held = self.art.used_bytes() + bytes, "panel cover decoded");
+                let painted =
+                    cover.as_ref().map(|cover| (cover.width, cover.height, cover.rgba.clone(), self.theme.clone()));
                 let handle =
                     cover.map(|cover| iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba));
                 self.art.insert(id, handle, bytes);
+                let Some((width, height, rgba, theme)) = painted else { return Task::none() };
+                Task::perform(
+                    crate::background::blocking(move || {
+                        folia_visualizer::styles::monet::paint(&rgba, width, height, &theme, Default::default())
+                    }),
+                    move |pixels| Message::MonetWash(id, pixels),
+                )
+            }
+            Message::MonetWash(id, Some(pixels)) => {
+                let handle = iced::widget::image::Handle::from_rgba(
+                    folia_visualizer::styles::monet::WIDTH,
+                    folia_visualizer::styles::monet::HEIGHT,
+                    pixels,
+                );
+                self.monet_wash = Some((id, handle));
                 Task::none()
             }
+            Message::MonetWash(_, None) => Task::none(),
+            Message::PortraitPicked(Some(path)) => self.store_portrait(path),
+            Message::PortraitPicked(None) => Task::none(),
+            Message::PortraitDecoded(path, Some(cover)) => {
+                let handle = iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba);
+                self.monet_portrait = Some((path, handle));
+                Task::none()
+            }
+            Message::PortraitDecoded(_, None) => Task::none(),
+            Message::PortraitStored(path, cover) => self.remember_portrait(path, cover),
             Message::Chrome(message) => self.chrome(message),
-            Message::Pointer(window, at) if self.window == Some(window) => match at {
-                Some(at) => self.chrome(chrome::Message::Activity { x: at.x, y: at.y }),
-                None => self.chrome(chrome::Message::Left),
-            },
+            Message::Pointer(window, at) if self.window == Some(window) => {
+                let saved = self.take_monet_offset();
+                let moved = match at {
+                    Some(at) => self.chrome(chrome::Message::Activity { x: at.x, y: at.y }),
+                    None => self.chrome(chrome::Message::Left),
+                };
+                Task::batch([moved, saved])
+            }
             Message::Pointer(..) => Task::none(),
             // `resolvePlayerEscapeAction`: fullscreen leaves the key to the system, then the panel closes,
             // and only with neither does the player go back.
@@ -953,8 +1099,19 @@ impl Shell {
                 self.library.view(&self.i18n, &self.theme, daylight, muted, playing, look).map(Message::Library)
             }
             Page::NowPlaying => {
-                let lyrics = self.playback.lyrics.as_ref().unwrap_or(&self.empty_lyrics);
+                let (title, artist, album, track_id) = match self.playback.current() {
+                    Some(track) => (
+                        track.title.clone(),
+                        track.artist.clone().unwrap_or_default(),
+                        track.album.clone().unwrap_or_default(),
+                        Some(track.id),
+                    ),
+                    None => (String::new(), String::new(), String::new(), None),
+                };
+                let portrait = self.portrait_handle(track_id).cloned();
+                let wash = self.wash_handle(track_id).cloned();
                 let tuning = self.tuning_of(self.style());
+                let lyrics = self.playback.lyrics.as_ref().unwrap_or(&self.empty_lyrics);
                 let scene = Scene {
                     style: self.style(),
                     lyrics,
@@ -965,6 +1122,12 @@ impl Shell {
                     stage: None,
                     tuning,
                     backdrop: true,
+                    title,
+                    artist,
+                    album,
+                    portrait,
+                    wash,
+                    preview: false,
                 };
                 let subtitle = self.subtitle();
                 let bottom = subtitle_bottom(self.bar_offset(), self.subtitle_presence.value(self.now_ms()));
@@ -1394,6 +1557,9 @@ impl Shell {
                 self.appearance.lyrics_font_scale = scale;
                 self.appearance_changed(&before)
             }
+            workbench::Effect::Button("uploadPortrait") => self.pick_portrait(),
+            workbench::Effect::Button("clearPortrait") => self.clear_portrait(),
+            workbench::Effect::Button(_) => Task::none(),
         }
     }
 
@@ -1909,6 +2075,28 @@ impl Shell {
         tracing::info!(language = language.code(), ?preference, "language switched");
         save(&self.store, &self.general)
     }
+}
+
+fn decode_portrait(path: String) -> Task<Message> {
+    let file = std::path::PathBuf::from(&path);
+    Task::perform(
+        crate::background::blocking(move || {
+            let bytes = std::fs::read(&file).ok()?;
+            folia_library::cover_rgba(&bytes, 512, 512).ok()
+        }),
+        move |cover| Message::PortraitDecoded(path, cover.flatten()),
+    )
+}
+
+fn copy_portrait(
+    source: std::path::PathBuf,
+    dest: std::path::PathBuf,
+) -> Option<(std::path::PathBuf, folia_library::Cover)> {
+    std::fs::create_dir_all(dest.parent()?).ok()?;
+    std::fs::copy(&source, &dest).ok()?;
+    let bytes = std::fs::read(&dest).ok()?;
+    let cover = folia_library::cover_rgba(&bytes, 512, 512).ok()?;
+    Some((dest, cover))
 }
 
 /// Reads the files' tags in the background and queues the playable ones.

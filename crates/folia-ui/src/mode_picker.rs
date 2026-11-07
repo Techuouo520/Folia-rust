@@ -366,6 +366,12 @@ impl Pickers {
                     stage: Some(Size::new(folia_visualizer::STAGE_WIDTH, folia_visualizer::STAGE_HEIGHT)),
                     tuning: folia_visualizer::Values::default(),
                     backdrop: true,
+                    title: self.preview.title.clone().unwrap_or_default(),
+                    artist: self.preview.artist.clone().unwrap_or_default(),
+                    album: String::new(),
+                    portrait: None,
+                    wash: None,
+                    preview: true,
                 };
                 if hovered {
                     canvas(scene).width(Length::Fill).height(Length::Fill).into()

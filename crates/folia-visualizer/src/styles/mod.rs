@@ -5,6 +5,7 @@ pub mod claddagh;
 pub mod classic;
 pub mod glow;
 pub mod lumiere;
+pub mod monet;
 pub mod nebbia;
 pub mod partita;
 pub mod still;

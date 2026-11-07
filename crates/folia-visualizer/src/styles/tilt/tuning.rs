@@ -3,10 +3,10 @@
 use crate::tuning::{Choice, Group, Item, Manifest};
 
 const SCHEMES: &[Choice] = &[
-    Choice { value: "default", label_key: "options.tiltColorSchemeDefault" },
-    Choice { value: "swap", label_key: "options.tiltColorSchemeSwap" },
-    Choice { value: "accentAll", label_key: "options.tiltColorSchemeAccentAll" },
-    Choice { value: "primaryAll", label_key: "options.tiltColorSchemePrimaryAll" },
+    Choice { value: "default", label_key: "options.tiltColorSchemeDefault", requires: None },
+    Choice { value: "swap", label_key: "options.tiltColorSchemeSwap", requires: None },
+    Choice { value: "accentAll", label_key: "options.tiltColorSchemeAccentAll", requires: None },
+    Choice { value: "primaryAll", label_key: "options.tiltColorSchemePrimaryAll", requires: None },
 ];
 
 const ITEMS: &[Item] = &[
@@ -40,5 +40,7 @@ const ITEMS: &[Item] = &[
 const GROUPS: &[Group] = &[Group { id: "vis-tilt", title_key: "options.tiltSettings", foot_key: None, items: ITEMS }];
 
 pub fn manifest() -> Manifest {
-    Manifest { storage_key: "tilt_tuning", older_keys: &[], groups: GROUPS }
+    let mut manifest = Manifest::plain("tilt_tuning", &[], GROUPS);
+    manifest.reset_key = Some("notifications.tiltReset");
+    manifest
 }

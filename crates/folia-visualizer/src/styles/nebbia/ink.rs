@@ -117,9 +117,36 @@ pub fn epoch() -> u64 {
     EPOCH.load(Ordering::Relaxed)
 }
 
+/// A ring drawn after a line when Nebbia's doodle roll lands. Not a lyric character.
+pub const DOODLE: char = '\u{25E6}';
+
 /// The skeleton of `ch`, once its background build has finished.
 pub fn glyph(ch: char) -> Option<std::sync::Arc<Ink>> {
+    if ch == DOODLE {
+        return Some(doodle_ink());
+    }
     glyphs().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&ch).cloned().flatten()
+}
+
+fn doodle_ink() -> std::sync::Arc<Ink> {
+    static INK: OnceLock<std::sync::Arc<Ink>> = OnceLock::new();
+    INK.get_or_init(|| {
+        let steps = 16;
+        let mut pts = Vec::with_capacity(steps + 1);
+        for i in 0..=steps {
+            let angle = i as f32 / steps as f32 * std::f32::consts::TAU;
+            pts.push((0.5 + 0.28 * angle.cos(), 0.5 + 0.28 * angle.sin()));
+        }
+        let mut cum = Vec::with_capacity(pts.len());
+        cum.push(0.0);
+        for pair in pts.windows(2) {
+            let (dx, dy) = (pair[1].0 - pair[0].0, pair[1].1 - pair[0].1);
+            cum.push(cum.last().copied().unwrap_or(0.0) + dx.hypot(dy));
+        }
+        let len = cum.last().copied().unwrap_or(0.0);
+        std::sync::Arc::new(Ink { total: len, strokes: vec![Stroke { pts, cum, len }] })
+    })
+    .clone()
 }
 
 static EPOCH: AtomicU64 = AtomicU64::new(1);

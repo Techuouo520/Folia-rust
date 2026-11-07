@@ -74,6 +74,23 @@ impl Tuning {
         };
         self.fog_octaves.clamp(2.0, cap)
     }
+
+    /// `LUMIERE_QUALITY_PROFILES`: internal scale of the graphics target.
+    pub fn graphics_scale(self) -> f32 {
+        match self.render_quality {
+            Quality::Full => 1.0,
+            Quality::Balanced => 0.7,
+            Quality::Low => 0.5,
+        }
+    }
+
+    /// Mote count multiplier from the same profile. Full and balanced stay at 1.
+    pub fn mote_scale(self) -> f32 {
+        match self.render_quality {
+            Quality::Low => 0.6,
+            Quality::Full | Quality::Balanced => 1.0,
+        }
+    }
 }
 
 impl Tuning {
@@ -129,7 +146,7 @@ const fn noted(item: Item, hint: &'static str) -> Item {
             Item::Slider { key, label_key, hint_key: Some(hint), min, max, step, default }
         }
         Item::Switch { key, label_key, default, .. } => Item::Switch { key, label_key, hint_key: Some(hint), default },
-        Item::Member { .. } | Item::Select { .. } => item,
+        Item::Member { .. } | Item::Select { .. } | Item::Button { .. } => item,
     }
 }
 
@@ -159,8 +176,8 @@ const ATMOSPHERE: &[Item] = &[
 ];
 
 const NEIGHBORS: &[Choice] = &[
-    Choice { value: "1", label_key: "options.lumiereWindowNeighborsPrev" },
-    Choice { value: "2", label_key: "options.lumiereWindowNeighborsBoth" },
+    Choice { value: "1", label_key: "options.lumiereWindowNeighborsPrev", requires: None },
+    Choice { value: "2", label_key: "options.lumiereWindowNeighborsBoth", requires: None },
 ];
 
 const TEXT: &[Item] = &[
@@ -193,9 +210,9 @@ const THEME: &[Item] = &[
 ];
 
 const QUALITY: &[Choice] = &[
-    Choice { value: "full", label_key: "options.lumiereRenderQualityFull" },
-    Choice { value: "balanced", label_key: "options.lumiereRenderQualityBalanced" },
-    Choice { value: "low", label_key: "options.lumiereRenderQualityLow" },
+    Choice { value: "full", label_key: "options.lumiereRenderQualityFull", requires: None },
+    Choice { value: "balanced", label_key: "options.lumiereRenderQualityBalanced", requires: None },
+    Choice { value: "low", label_key: "options.lumiereRenderQualityLow", requires: None },
 ];
 
 const PERFORMANCE: &[Item] = &[Item::Select {
@@ -226,5 +243,9 @@ const GROUPS: &[Group] = &[
 ];
 
 pub fn manifest() -> Manifest {
-    Manifest { storage_key: "lumiere_tuning", older_keys: &[], groups: GROUPS }
+    let mut manifest = Manifest::plain("lumiere_tuning", &[], GROUPS);
+    // Audio energy, theme word colours and lyric icons are not on the theme yet.
+    manifest.locked = &["audioResponse", "keywordColors", "themeIcons"];
+    manifest.reset_key = Some("notifications.lumiereReset");
+    manifest
 }

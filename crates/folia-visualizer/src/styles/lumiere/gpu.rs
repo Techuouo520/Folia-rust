@@ -56,6 +56,8 @@ pub struct Pass {
     /// Only the lyrics: the graphics group is the flat `base` and is not bloomed.
     pub text_only: bool,
     pub base: [f32; 3],
+    /// `LUMIERE_QUALITY_PROFILES.graphicsScale`.
+    pub graphics_scale: f32,
 }
 
 /// Foreground bokeh drawn above the lyrics.
@@ -350,7 +352,7 @@ impl ShaderPrimitive for Pass {
         let gpu = &mut pipeline.0;
         gpu.idle = 0;
         gpu.window = [bounds.width.max(1.0), bounds.height.max(1.0)];
-        let (width, height) = pixel_size(bounds, viewport);
+        let (width, height) = pixel_size(bounds, viewport, self.graphics_scale);
         let strength = if self.text_only { 0.0 } else { bloom::GRAPHICS.strength * self.bloom };
         gpu.bloom.sync(device, queue, width, height, &bloom::Preset { strength, ..bloom::GRAPHICS });
         let strength = bloom::TEXT.strength * self.text_bloom;
@@ -478,8 +480,8 @@ fn paint_text(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>, echo: u32) {
     gpu.glyphs.draw(pass, echo..gpu.sprites);
 }
 
-fn pixel_size(bounds: &Rectangle, viewport: &shader::Viewport) -> (u32, u32) {
-    let scale = viewport.scale_factor();
+fn pixel_size(bounds: &Rectangle, viewport: &shader::Viewport, graphics_scale: f32) -> (u32, u32) {
+    let scale = viewport.scale_factor() * graphics_scale.clamp(0.5, 1.0);
     let width = (bounds.width * scale).round().max(1.0) as u32;
     let height = (bounds.height * scale).round().max(1.0) as u32;
     (width, height)

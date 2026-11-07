@@ -20,8 +20,9 @@ use std::rc::Rc;
 use folia_core::{Line, Lyrics, Rgb, Theme};
 use iced::advanced::text::{self as core_text, Paragraph as _};
 use iced::widget::canvas::{self, Frame, Geometry};
+use iced::widget::image::Handle;
 use iced::widget::{shader, stack};
-use iced::{Color, Element, Font, Length, Rectangle, Renderer, Size, mouse};
+use iced::{Color, Element, Font, Length, Point, Rectangle, Renderer, Size, mouse};
 
 pub(crate) const BOLD: Font = Font { weight: iced::font::Weight::Bold, ..Font::DEFAULT };
 
@@ -42,6 +43,16 @@ pub struct Scene<'a> {
     pub tuning: Values,
     /// Fills the theme background before the style. A shader behind the canvas turns this off.
     pub backdrop: bool,
+    /// Song title, artist and album. Empty strings fall back to "Monet" inside that style.
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    /// Cover or uploaded portrait, already decoded.
+    pub portrait: Option<Handle>,
+    /// Impressionist field painted off the render thread. Absent until that paint finishes.
+    pub wash: Option<Handle>,
+    /// Style-picker and workbench pictures use Monet's static spectrum. Playback passes zeros.
+    pub preview: bool,
 }
 
 /// Per-widget state: measured line layouts survive between frames.
@@ -53,6 +64,7 @@ pub struct SceneState {
     partita: RefCell<LayoutCache<styles::partita::PartitaLayout>>,
     tilt: RefCell<LayoutCache<styles::tilt::TiltLayout>>,
     lumiere: RefCell<styles::lumiere::Cache>,
+    monet: RefCell<styles::monet::Cache>,
     still: styles::still::StillCache,
 }
 
@@ -74,6 +86,16 @@ impl<Message> canvas::Program<Message> for Scene<'_> {
         let mut frame = Frame::new(renderer, target);
         self.paint(state, &mut frame, target);
         vec![frame.into_geometry()]
+    }
+
+    fn update(
+        &self,
+        state: &mut Self::State,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        self.update_monet(state, event, bounds, cursor).then(|| canvas::Action::request_redraw())
     }
 }
 
@@ -109,7 +131,34 @@ impl Scene<'_> {
             Style::Still => styles::still::draw_stage(self, frame, size),
             Style::Classic => styles::classic::draw(self, &mut state.classic.borrow_mut(), frame, size),
             Style::Nebbia => styles::nebbia::draw(self, frame, size),
+            Style::Monet => styles::monet::draw(self, &mut state.monet.borrow_mut(), frame, size),
         }
+    }
+}
+
+impl Scene<'_> {
+    fn update_monet(
+        &self,
+        state: &SceneState,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> bool {
+        if self.style != Style::Monet {
+            return false;
+        }
+        let local = cursor.position_in(bounds);
+        let size = self.stage_size(bounds.size());
+        let scale = (bounds.width / size.width).max(bounds.height / size.height);
+        let origin = Point::new((bounds.width - size.width * scale) / 2.0, (bounds.height - size.height * scale) / 2.0);
+        let at = local.map(|point| Point::new((point.x - origin.x) / scale, (point.y - origin.y) / scale));
+        let pressed = match event {
+            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => Some(true),
+            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(false),
+            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => None,
+            _ => return false,
+        };
+        styles::monet::pointer(self, &mut state.monet.borrow_mut(), size, at, pressed)
     }
 }
 
@@ -134,7 +183,7 @@ impl<T> Default for LayoutCache<T> {
 }
 
 impl<T> LayoutCache<T> {
-    const CAPACITY: usize = 4;
+    const CAPACITY: usize = 8;
 
     pub fn get_or_insert(
         &mut self,

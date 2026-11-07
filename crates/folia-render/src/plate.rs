@@ -9,6 +9,39 @@ use crate::pipeline::{Fullscreen, Slot};
 
 const SHADER: &str = concat!(include_str!("../shaders/fullscreen.wgsl"), include_str!("../shaders/plate.wgsl"));
 
+/// sRGB byte channel to linear. The exact inverse of [`to_srgb_channel`].
+pub fn to_linear_channel(encoded: f32) -> f32 {
+    if encoded <= 0.04045 { encoded / 12.92 } else { ((encoded + 0.055) / 1.055).powf(2.4) }
+}
+
+/// Linear channel to sRGB. The exact inverse of [`to_linear_channel`].
+pub fn to_srgb_channel(linear: f32) -> f32 {
+    let linear = linear.max(0.0);
+    if linear <= 0.0031308 { linear * 12.92 } else { 1.055 * linear.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// CSS `saturate()` in sRGB: the SVG matrix with weights 0.213, 0.715 and 0.072.
+pub fn css_saturate(rgb: [f32; 3], amount: f32) -> [f32; 3] {
+    let s = amount;
+    let dot = |row: [f32; 3]| row[0] * rgb[0] + row[1] * rgb[1] + row[2] * rgb[2];
+    [
+        dot([0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s]),
+        dot([0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s]),
+        dot([0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s]),
+    ]
+}
+
+/// Straight-alpha source-over in one color space. `src` is rgba.
+pub fn source_over(dst: [f32; 3], src: [f32; 4]) -> [f32; 3] {
+    let a = src[3];
+    [src[0] * a + dst[0] * (1.0 - a), src[1] * a + dst[1] * (1.0 - a), src[2] * a + dst[2] * (1.0 - a)]
+}
+
+/// Browser glass: `saturate()` the sRGB backdrop, then paint the element's background over it.
+pub fn glass_over(backdrop: [f32; 3], fill: [f32; 4], saturate: f32) -> [f32; 3] {
+    source_over(css_saturate(backdrop, saturate), fill)
+}
+
 /// Builds both plate pipelines and waits until the device reports shader errors.
 pub fn compile_plate(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) {
     let _gpu = <PlateGpu as shader::Pipeline>::new(device, queue, format);

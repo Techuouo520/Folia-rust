@@ -75,6 +75,15 @@ impl Tokens {
         }
     }
 
+    /// `panelTokens`: the kit's colours, with the dark `--st-raise` replaced by a white veil.
+    pub fn for_panel(theme: &Theme, daylight: bool) -> Self {
+        let mut tokens = Self::new(theme, daylight);
+        if !daylight {
+            tokens.raise = Color { r: 1.0, g: 1.0, b: 1.0, a: 0.18 };
+        }
+        tokens
+    }
+
     /// Every colour at `alpha` of its opacity: iced cannot fade a whole subtree, so the window fades its paints.
     pub fn faded(self, alpha: f32) -> Self {
         let fade = |color: Color| Color { a: color.a * alpha, ..color };
@@ -200,6 +209,32 @@ fn tint(color: Color, a: f32, alpha: f32) -> Color {
     Color { a: a * alpha, ..color }
 }
 
+/// `--pn-glass`: the player panel's own background, laid over the saturated backdrop.
+pub fn panel_glass(daylight: bool) -> [f32; 4] {
+    if daylight {
+        [244.0 / 255.0, 244.0 / 255.0, 245.0 / 255.0, 0.8]
+    } else {
+        [28.0 / 255.0, 28.0 / 255.0, 31.0 / 255.0, 0.8]
+    }
+}
+
+/// The wall-tools panel fill: daylight white 62%, otherwise black 40%. No extra saturation.
+pub fn tools_glass(daylight: bool) -> [f32; 4] {
+    if daylight { [1.0, 1.0, 1.0, 0.62] } else { [0.0, 0.0, 0.0, 0.40] }
+}
+
+/// `QuickTile`: lit sits on `--st-raise`, otherwise `--st-fill` (hover `--st-fill2`). Disabled is the whole control at 40%.
+pub fn quick_tile_fill(tokens: Tokens, lit: bool, enabled: bool, hovered: bool) -> Color {
+    let fill = if lit {
+        tokens.raise
+    } else if hovered && enabled {
+        tokens.fill2
+    } else {
+        tokens.fill
+    };
+    if enabled { fill } else { Color { a: fill.a * 0.4, ..fill } }
+}
+
 /// A list entry whose label is already translated.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Choice<T> {
@@ -290,6 +325,33 @@ pub fn toggle<'a, M: Clone + 'a>(tokens: Tokens, position: f32, on_press: M) -> 
             ..container::Style::default()
         });
     button(track).padding(0).style(|_, _| button::Style::default()).on_press(on_press).into()
+}
+
+/// The same switch, drawn and not clickable.
+pub fn toggle_fixed<'a, M: 'a>(tokens: Tokens, position: f32) -> Element<'a, M> {
+    let knob_color = mix(tokens.knob, tokens.on_accent, position);
+    let knob = container(space()).width(18).height(18).style(move |_| container::Style {
+        background: Some(knob_color.into()),
+        border: Border { radius: 9.0.into(), ..Border::default() },
+        shadow: Shadow {
+            color: Color { a: 0.15 * tokens.shadow.a, ..Color::BLACK },
+            offset: Vector::new(0.0, 1.0),
+            blur_radius: 2.0,
+        },
+        ..container::Style::default()
+    });
+    let track_color = mix(tokens.track, tokens.accent, position);
+    let track_color = Color { a: track_color.a * 0.45, ..track_color };
+    container(knob)
+        .width(40)
+        .height(24)
+        .padding(Padding { top: 3.0, left: 3.0 + 16.0 * position, ..Padding::ZERO })
+        .style(move |_| container::Style {
+            background: Some(track_color.into()),
+            border: Border { radius: 12.0.into(), ..Border::default() },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// Two to five short options side by side; the raised mark sits at `mark`, a fractional index while it slides.

@@ -44,7 +44,8 @@ fn shade_a(t: f32, kind: f32) -> f32 {
 }
 
 fn to_linear(rgb: vec3<f32>) -> vec3<f32> {
-    return pow(max(rgb, vec3<f32>(0.0)), vec3<f32>(2.2));
+    let hi = pow((rgb + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(hi, rgb / 12.92, rgb <= vec3<f32>(0.04045));
 }
 
 @vertex

@@ -40,6 +40,15 @@ const WRITING: &[Item] = &[
         default: 0.6,
     },
     Item::Slider {
+        key: "doodle",
+        label_key: "options.nebbiaDoodle",
+        hint_key: None,
+        min: 0.0,
+        max: 1.0,
+        step: 0.05,
+        default: 0.3,
+    },
+    Item::Slider {
         key: "mist",
         label_key: "options.nebbiaMist",
         hint_key: None,
@@ -119,7 +128,7 @@ const WINDOW: &[Item] = &[
     Item::Slider {
         key: "bump",
         label_key: "options.nebbiaBump",
-        hint_key: Some("options.nebbiaBumpIdle"),
+        hint_key: None,
         min: 0.0,
         max: 2.5,
         step: 0.05,
@@ -196,7 +205,9 @@ const GROUPS: &[Group] = &[
 ];
 
 pub fn manifest() -> Manifest {
-    Manifest { storage_key: "nebbia_tuning", older_keys: &[], groups: GROUPS }
+    let mut manifest = Manifest::plain("nebbia_tuning", &[], GROUPS);
+    manifest.reset_key = Some("notifications.nebbiaReset");
+    manifest
 }
 
 /// Early saves used a single `appearMode` / `fadeMode` string. Both become the list the panel stores now.

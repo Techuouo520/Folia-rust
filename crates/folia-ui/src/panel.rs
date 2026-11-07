@@ -440,11 +440,7 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     let visual_bottom = view.height - view.bottom - under;
     let visual_left = visual_right - panel_w;
     let visual_top = visual_bottom - visual_h;
-    let glass = if view.daylight {
-        [244.0 / 255.0, 244.0 / 255.0, 245.0 / 255.0, 0.8]
-    } else {
-        [28.0 / 255.0, 28.0 / 255.0, 31.0 / 255.0, 0.8]
-    };
+    let glass = settings_kit::panel_glass(view.daylight);
     // `--pn-shadow`: `0 30px 80px` and a 1px ring. `open` fades the blur and the fill together.
     let (shadow, ring) = if view.daylight {
         ([0.0, 0.0, 0.0, 0.24], [0.0, 0.0, 0.0, 0.06])
@@ -895,16 +891,33 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
     ]
     .align_y(Alignment::Center)
     .height(Length::Fixed(44.0));
+    let track = tokens.fill;
+    let choices = container(
+        row![
+            source_seg(tokens, ink, view.i18n.t("ui.default"), true, None),
+            source_seg(tokens, ink, view.i18n.t("ui.aiTheme"), false, None),
+            source_seg(
+                tokens,
+                ink,
+                view.i18n.t("options.customTheme"),
+                false,
+                Some(view.i18n.t("options.customThemeUnavailable"))
+            ),
+        ]
+        .spacing(0)
+        .width(Length::Fill)
+        .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fixed(32.0))
+    .padding(2)
+    .style(move |_theme: &IcedTheme| container::Style {
+        background: Some(track.into()),
+        border: Border { radius: 8.0.into(), ..Border::default() },
+        ..container::Style::default()
+    });
     let sources = row![
-        source_seg(tokens, ink, view.i18n.t("ui.default"), true, None),
-        source_seg(tokens, ink, view.i18n.t("ui.aiTheme"), false, None),
-        source_seg(
-            tokens,
-            ink,
-            view.i18n.t("options.customTheme"),
-            false,
-            Some(view.i18n.t("options.customThemeUnavailable"))
-        ),
+        choices,
         icon_btn(
             tokens,
             Icon::Palette,
@@ -1343,12 +1356,15 @@ fn cover_box<'a>(
 }
 
 fn tile<'a>(tokens: Faded, lucide: Icon, label: &'a str, lit: bool, on_press: Option<Message>) -> Element<'a, Message> {
-    let color = if lit { tokens.accent } else { fade(tokens.t3, if on_press.is_some() { 1.0 } else { 0.4 }) };
-    let bg = if lit { tokens.raise } else { tokens.fill };
+    let enabled = on_press.is_some();
+    let (icon_color, label_color) = if lit { (tokens.accent, tokens.t1) } else { (tokens.t3, tokens.t2) };
+    let icon_color = if enabled { icon_color } else { fade(icon_color, 0.4) };
+    let label_color = if enabled { label_color } else { fade(label_color, 0.4) };
+    let paint = tokens.tokens();
     button(
         column![
-            container(icon(lucide, 18.0, color)).width(Length::Fill).align_x(Alignment::Start),
-            text(label).size(12).color(if lit { tokens.t1 } else { Color { a: color.a, ..tokens.t2 } }),
+            container(icon(lucide, 18.0, icon_color)).width(Length::Fill).align_x(Alignment::Start),
+            text(label).size(12).color(label_color),
         ]
         .spacing(8)
         .padding(pad(10.0, 10.0, 9.0, 10.0)),
@@ -1357,10 +1373,13 @@ fn tile<'a>(tokens: Faded, lucide: Icon, label: &'a str, lit: bool, on_press: Op
     .height(Length::Fixed(64.0))
     .padding(0)
     .on_press_maybe(on_press)
-    .style(move |_theme: &IcedTheme, _status| button::Style {
-        background: Some(Background::Color(bg)),
-        border: Border { radius: 10.0.into(), ..Border::default() },
-        ..button::Style::default()
+    .style(move |_theme: &IcedTheme, status| {
+        let hot = enabled && matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(Background::Color(settings_kit::quick_tile_fill(paint, lit, enabled, hot))),
+            border: Border { radius: 10.0.into(), ..Border::default() },
+            ..button::Style::default()
+        }
     })
     .into()
 }
@@ -1453,12 +1472,15 @@ fn chip<'a>(tokens: Faded, alpha: f32, tip: &str, label: &'a str, on_press: Opti
 }
 
 fn source_seg<'a>(tokens: Faded, ink: Color, label: &'a str, on: bool, tip: Option<&'a str>) -> Element<'a, Message> {
-    let button = button(text(label).size(13).color(if on { ink } else { fade(tokens.t2, ink.a * 0.4) }))
-        .padding(pad(6.0, 10.0, 6.0, 10.0))
+    let label = text(label).size(13).color(if on { ink } else { fade(tokens.t2, ink.a * 0.4) });
+    let button = button(container(label).center_x(Length::Fill).center_y(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(0)
         .on_press_maybe(None)
         .style(move |_theme: &IcedTheme, _status| button::Style {
             background: on.then_some(Background::Color(tokens.raise)),
-            border: Border { radius: 8.0.into(), ..Border::default() },
+            border: Border { radius: 6.0.into(), ..Border::default() },
             ..button::Style::default()
         });
     match tip {
@@ -1468,24 +1490,34 @@ fn source_seg<'a>(tokens: Faded, ink: Color, label: &'a str, on: bool, tip: Opti
 }
 
 fn day_night<'a>(tokens: Faded, ink: Color, daylight: bool) -> Element<'a, Message> {
+    let track = tokens.fill;
     let one = |lucide: Icon, on: bool, message: Message| {
         button(container(icon(lucide, 15.0, if on { ink } else { fade(tokens.t2, ink.a) })).center(Length::Fill))
-            .width(Length::Fixed(28.0))
-            .height(Length::Fixed(28.0))
+            .width(Length::Fixed(30.0))
+            .height(Length::Fill)
             .padding(0)
             .on_press(message)
             .style(move |_theme: &IcedTheme, _status| button::Style {
                 background: on.then_some(Background::Color(tokens.raise)),
-                border: Border { radius: 8.0.into(), ..Border::default() },
+                border: Border { radius: 6.0.into(), ..Border::default() },
                 ..button::Style::default()
             })
     };
-    row![
+    let choices = row![
         one(Icon::Sun, daylight, Message::Theme(ThemeMode::Light)),
         one(Icon::Moon, !daylight, Message::Theme(ThemeMode::Dark))
     ]
-    .spacing(4)
-    .into()
+    .spacing(0)
+    .height(Length::Fill);
+    container(choices)
+        .height(Length::Fixed(28.0))
+        .padding(2)
+        .style(move |_theme: &IcedTheme| container::Style {
+            background: Some(track.into()),
+            border: Border { radius: 8.0.into(), ..Border::default() },
+            ..container::Style::default()
+        })
+        .into()
 }
 
 fn off_switch<'a>(tokens: Faded) -> Element<'a, Message> {
@@ -1559,11 +1591,7 @@ fn queue_list_h(width: f32, height: f32, bottom: f32, chrome: bool, len: usize) 
 }
 
 fn tokens_of(view: &View<'_>) -> Tokens {
-    let mut tokens = Tokens::new(view.theme, view.daylight);
-    if !view.daylight {
-        tokens.raise = Color { r: 1.0, g: 1.0, b: 1.0, a: 0.18 };
-    }
-    tokens
+    Tokens::for_panel(view.theme, view.daylight)
 }
 
 fn pad(top: f32, right: f32, bottom: f32, left: f32) -> iced::Padding {

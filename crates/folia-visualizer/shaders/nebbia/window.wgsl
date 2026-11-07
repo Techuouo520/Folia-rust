@@ -304,7 +304,15 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let aspect = u.resolution.x / max(u.resolution.y, 1.0);
-    let q = vec2<f32>(in.uv.x * aspect, in.uv.y);
+    // `sky0.w` is the bump slider. Without drum analysis the bus uses this idle sway, scaled by it.
+    let sway = sin(u.time * 1.7) * 0.008 * u.sky0.w;
+    var uv = in.uv;
+    let res = u.sky1.w;
+    if res < 0.99 || res > 1.01 {
+        let cells = max(u.resolution * max(res, 0.5), vec2<f32>(1.0, 1.0));
+        uv = (floor(in.uv * cells) + vec2<f32>(0.5, 0.5)) / cells;
+    }
+    let q = vec2<f32>(uv.x * aspect, uv.y + sway);
     // Noise runs in canvas pixels as the original; breath lobes are placed in CSS pixels.
     let px = in.uv * u.resolution * u.scale;
     let css = in.uv * u.resolution;

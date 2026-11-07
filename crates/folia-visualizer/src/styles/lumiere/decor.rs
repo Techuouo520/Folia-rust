@@ -326,7 +326,7 @@ fn fill_rain(out: &mut Vec<f32>, program: &Program, view: &View, time: f64) {
 
 fn fill_dust(out: &mut Vec<f32>, program: &Program, view: &View, time: f64, tuning: Tuning, mode: f32) {
     let lead = &PROFILES[unit_lead(program, time)];
-    let count = (f32::from(lead.mote_count) * tuning.mote_amount).round().max(0.0) as usize;
+    let count = (f32::from(lead.mote_count) * tuning.mote_amount * tuning.mote_scale()).round().max(0.0) as usize;
     fill_dust_profile(
         out,
         lead,

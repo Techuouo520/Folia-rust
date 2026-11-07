@@ -26,8 +26,17 @@ struct PlateUniform {
 
 @group(0) @binding(0) var<uniform> u: PlateUniform;
 
+// Exact sRGB EOTF. The inverse of `to_srgb`, and the same curve the sRGB framebuffer uses.
 fn to_linear(c: vec3<f32>) -> vec3<f32> {
-    return pow(c, vec3<f32>(2.2));
+    let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(hi, c / 12.92, c <= vec3<f32>(0.04045));
+}
+
+// Exact sRGB OETF, the inverse of `to_linear`.
+fn to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let x = max(c, vec3<f32>(0.0));
+    let hi = 1.055 * pow(x, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055);
+    return select(hi, x * 12.92, x <= vec3<f32>(0.0031308));
 }
 
 fn sd_round(p: vec2<f32>, half: vec2<f32>, radius: f32) -> f32 {
@@ -111,9 +120,13 @@ fn fs_plate(input: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(rgb, a);
 }
 
+// CSS `saturate()`: the SVG feColorMatrix, with the spec's 0.213 / 0.715 / 0.072 weights. Not an HSL saturation.
 fn sat(rgb: vec3<f32>, amount: f32) -> vec3<f32> {
-    let gray = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    return mix(vec3<f32>(gray), rgb, amount);
+    let s = amount;
+    let r = vec3<f32>(0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s);
+    let g = vec3<f32>(0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s);
+    let b = vec3<f32>(0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s);
+    return vec3<f32>(dot(r, rgb), dot(g, rgb), dot(b, rgb));
 }
 
 @fragment
@@ -141,8 +154,10 @@ fn fs_plate_blur(input: VsOut) -> @location(0) vec4<f32> {
     let window = max(u.window, vec2<f32>(1.0));
     let uv = (u.widget + px) / window;
     var blurred = textureSample(blur_tex, blur_samp, uv).rgb;
+    // The backdrop is linear in an sRGB target. CSS runs the filter and the translucent fill in sRGB:
+    // saturate the backdrop first, then paint the element's own background over it.
     if (u.encode > 0.5) {
-        blurred = pow(max(blurred, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+        blurred = to_srgb(blurred);
     }
     blurred = sat(blurred, u.saturate);
     let tinted = mix(blurred, u.fill.rgb, u.fill.a);

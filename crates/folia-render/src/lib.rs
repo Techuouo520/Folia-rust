@@ -14,7 +14,7 @@ pub use backdrop::{
 };
 pub use blur::{Pyramid, levels_for_radius, pyramid_bytes};
 pub use frame::grain_frame;
-pub use plate::{Plate, compile_plate};
+pub use plate::{Plate, compile_plate, css_saturate, glass_over, source_over, to_linear_channel, to_srgb_channel};
 pub use wash::{Glow, Veil, Wash};
 
 use pipeline::{Fullscreen, Slot};

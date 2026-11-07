@@ -1023,7 +1023,14 @@ fn sources(lyrics: &Lyrics, tuning: &Values, list: Manifest) -> Vec<Source> {
         .lines
         .iter()
         .enumerate()
-        .map(|(i, line)| source_line(line, lyrics.lines.get(i + 1).map_or(f64::INFINITY, |next| next.start), false))
+        .map(|(i, line)| {
+            source_line(
+                line,
+                lyrics.lines.get(i + 1).map_or(f64::INFINITY, |next| next.start),
+                false,
+                tuning.number(list, "doodle"),
+            )
+        })
         .collect();
     let title = lyrics.title.as_deref().map(str::trim).filter(|text| !text.is_empty());
     if !tuning.flag(list, "credits") || out.is_empty() {
@@ -1045,7 +1052,7 @@ fn sources(lyrics: &Lyrics, tuning: &Values, list: Manifest) -> Vec<Source> {
 
 /// Words come from the shared word segmenter, as the original `segmentLyricWords`; the characters of
 /// one timed word split its time evenly.
-fn source_line(line: &Line, next: f64, credits: bool) -> Source {
+fn source_line(line: &Line, next: f64, credits: bool, doodle: f32) -> Source {
     let mut chars = Vec::new();
     let mut times = Vec::new();
     let mut owner = Vec::new();
@@ -1058,6 +1065,17 @@ fn source_line(line: &Line, next: f64, credits: bool) -> Source {
             chars.push(ch);
             times.push((word.start + step * i as f64, step));
             owner.push(w);
+        }
+    }
+    if !credits && !chars.is_empty() && doodle > 0.0 {
+        let roll = {
+            let x = (line.start + 17.0).sin() * 10000.0;
+            x - x.floor()
+        };
+        if roll < f64::from(doodle) {
+            chars.push(super::ink::DOODLE);
+            times.push((line.end, 0.45));
+            owner.push(owner.last().copied().unwrap_or(0));
         }
     }
     let mut words: Vec<Vec<usize>> = Vec::new();
@@ -1086,7 +1104,7 @@ fn credit_line(text: &str, at: f64) -> Source {
         })
         .collect();
     let end = words.last().map_or(at, |word| word.end);
-    source_line(&Line { words, start: at, end, text: text.to_owned(), ..Line::default() }, f64::INFINITY, true)
+    source_line(&Line { words, start: at, end, text: text.to_owned(), ..Line::default() }, f64::INFINITY, true, 0.0)
 }
 
 fn members(tuning: &Values, list: Manifest, key: &str) -> Vec<String> {

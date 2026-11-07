@@ -4,5 +4,7 @@
 use crate::tuning::Manifest;
 
 pub fn manifest() -> Manifest {
-    Manifest { storage_key: "cadenza_tuning", older_keys: &["cadenze_tuning"], groups: &[] }
+    let mut manifest = Manifest::plain("cadenza_tuning", &["cadenze_tuning"], &[]);
+    manifest.reset_key = Some("notifications.cadenzaReset");
+    manifest
 }

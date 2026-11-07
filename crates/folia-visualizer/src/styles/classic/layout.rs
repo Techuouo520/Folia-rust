@@ -10,11 +10,13 @@ pub struct ClassicTuning {
     pub word_rotation: bool,
     pub breathing: f64,
     pub word_spacing: f64,
+    /// Original `useLegacyLayout`: raw words and a fixed gap, instead of the semantic spacing.
+    pub legacy: bool,
 }
 
 impl Default for ClassicTuning {
     fn default() -> Self {
-        Self { word_rotation: true, breathing: 1.0, word_spacing: 0.7 }
+        Self { word_rotation: true, breathing: 1.0, word_spacing: 0.7, legacy: false }
     }
 }
 
@@ -88,6 +90,20 @@ pub fn word_configs(
             }
             let scale = scale_of(word_seed);
             let x = x_of(word_seed);
+            if tuning.legacy {
+                let margin = if chaotic { random(word_seed, 5.0) * 1.5 * 16.0 } else { 0.8 * 16.0 };
+                let rotation = |offset: f64, range: f64| {
+                    if tuning.word_rotation { (random(word_seed, offset) - 0.5) * range } else { 0.0 }
+                };
+                return WordConfig {
+                    x,
+                    y: (random(word_seed, 2.0) - 0.5) * spread * 2.0,
+                    rotate: rotation(3.0, rotate * 2.0),
+                    scale,
+                    passed_rotate: rotation(8.0, 45.0),
+                    margin_right: margin,
+                };
+            }
 
             // Leave room for this word and the next one growing to their active scale.
             let (next_width, next_scale, next_x) = match widths.get(i + 1) {

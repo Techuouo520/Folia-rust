@@ -34,6 +34,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<LineLayout>, frame: &mut 
         word_rotation: scene.tuning.flag(manifest, "enableWordRotation"),
         breathing: f64::from(scene.tuning.number(manifest, "breathingFloatMultiplier")),
         word_spacing: f64::from(scene.tuning.number(manifest, "wordSpacing")),
+        legacy: scene.tuning.choice(manifest, "useLegacyLayout") == "true",
     };
     let salt = scene.tuning.fingerprint();
     let theme = scene.theme;
@@ -63,7 +64,11 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<LineLayout>, frame: &mut 
 
 fn build(line: &Line, scene: &Scene<'_>, size: Size, tuning: ClassicTuning) -> Rc<LineLayout> {
     let font_px = font_px(size.width, scene.font_scale);
-    let words = folia_lyrics::display_words(line, &folia_lyrics::layout_units(line, true));
+    let words = if tuning.legacy {
+        line.words.clone()
+    } else {
+        folia_lyrics::display_words(line, &folia_lyrics::layout_units(line, true))
+    };
     let widths: Vec<f32> =
         words.iter().map(|word| measure(&word.text, font_px, crate::BOLD, f32::INFINITY).width).collect();
     let seed = line.start;

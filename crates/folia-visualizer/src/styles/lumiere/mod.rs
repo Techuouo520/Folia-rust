@@ -152,6 +152,7 @@ fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning)
         echo,
         text_only: tuning.text_only,
         base: view.base,
+        graphics_scale: tuning.graphics_scale(),
     }
 }
 

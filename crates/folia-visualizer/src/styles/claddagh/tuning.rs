@@ -46,5 +46,7 @@ const GROUPS: &[Group] =
     &[Group { id: "vis-claddagh", title_key: "options.claddaghSettings", foot_key: None, items: ITEMS }];
 
 pub fn manifest() -> Manifest {
-    Manifest { storage_key: "claddagh_tuning", older_keys: &[], groups: GROUPS }
+    let mut manifest = Manifest::plain("claddagh_tuning", &[], GROUPS);
+    manifest.reset_key = Some("notifications.claddaghReset");
+    manifest
 }

@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 pub struct Choice {
     pub value: &'static str,
     pub label_key: &'static str,
+    /// The choice stays unselectable until this saved path is non-empty.
+    pub requires: Option<&'static str>,
 }
 
 /// One row. Keys are the original tuning's field names and never change.
@@ -42,6 +44,12 @@ pub enum Item {
         options: &'static [Choice],
         default: &'static str,
     },
+    /// A button. `path_key` shows that saved path's file name as the hint.
+    Button {
+        key: &'static str,
+        label_key: &'static str,
+        path_key: Option<&'static str>,
+    },
 }
 
 impl Item {
@@ -50,7 +58,8 @@ impl Item {
             Item::Slider { key, .. }
             | Item::Switch { key, .. }
             | Item::Member { key, .. }
-            | Item::Select { key, .. } => key,
+            | Item::Select { key, .. }
+            | Item::Button { key, .. } => key,
         }
     }
 }
@@ -71,6 +80,47 @@ pub struct Manifest {
     /// Read when `storage_key` holds nothing. Never written.
     pub older_keys: &'static [&'static str],
     pub groups: &'static [Group],
+    /// Shown, but not editable: the effect needs a module that is not ported.
+    pub locked: &'static [&'static str],
+    /// Hide `item` while the gate flag is on, or its choice is `"true"`.
+    pub hidden_when: &'static [(&'static str, &'static str)],
+    /// Stored and read, never drawn. Monet's portrait offset is set by dragging.
+    pub concealed: &'static [&'static str],
+    /// Free strings kept in the table beside the rows, such as an uploaded path.
+    pub paths: &'static [&'static str],
+    /// Original reset toast, `notifications.*Reset`.
+    pub reset_key: Option<&'static str>,
+}
+
+impl Manifest {
+    pub const fn plain(
+        storage_key: &'static str,
+        older_keys: &'static [&'static str],
+        groups: &'static [Group],
+    ) -> Self {
+        Self {
+            storage_key,
+            older_keys,
+            groups,
+            locked: &[],
+            hidden_when: &[],
+            concealed: &[],
+            paths: &[],
+            reset_key: None,
+        }
+    }
+
+    pub fn locked(self, key: &str) -> bool {
+        self.locked.contains(&key)
+    }
+
+    pub fn hidden(self, values: &Values, key: &str) -> bool {
+        self.concealed.contains(&key)
+            || self
+                .hidden_when
+                .iter()
+                .any(|(item, gate)| *item == key && (values.flag(self, gate) || values.choice(self, gate) == "true"))
+    }
 }
 
 impl Manifest {
@@ -93,6 +143,7 @@ pub struct Values {
     flags: BTreeMap<String, bool>,
     choices: BTreeMap<String, String>,
     lists: BTreeMap<String, Vec<String>>,
+    paths: BTreeMap<String, String>,
 }
 
 impl Values {
@@ -191,6 +242,24 @@ impl Values {
         true
     }
 
+    pub fn path<'a>(&'a self, key: &str) -> Option<&'a str> {
+        self.paths.get(key).map(String::as_str).filter(|text| !text.is_empty())
+    }
+
+    pub fn set_path(&mut self, manifest: Manifest, key: &str, value: Option<&str>) {
+        if !manifest.paths.contains(&key) {
+            return;
+        }
+        match value.map(str::trim).filter(|text| !text.is_empty()) {
+            Some(text) => {
+                self.paths.insert(key.to_owned(), text.to_owned());
+            }
+            None => {
+                self.paths.remove(key);
+            }
+        }
+    }
+
     pub fn reset(&mut self, manifest: Manifest) {
         for item in manifest.items() {
             match item {
@@ -206,7 +275,11 @@ impl Values {
                 Item::Member { key, .. } => {
                     self.lists.remove(key);
                 }
+                Item::Button { .. } => {}
             }
+        }
+        for key in manifest.paths {
+            self.paths.remove(*key);
         }
     }
 
@@ -232,6 +305,10 @@ impl Values {
                 hash = mix(hash, entry);
             }
         }
+        for (key, value) in &self.paths {
+            hash = mix(hash, key);
+            hash = mix(hash, value);
+        }
         hash
     }
 
@@ -253,12 +330,18 @@ impl Values {
                     }
                 }
                 Item::Select { key, options, .. } => {
-                    if let Some(toml::Value::String(text)) = table.get(key)
+                    let text = match table.get(key) {
+                        Some(toml::Value::String(text)) => Some(text.clone()),
+                        Some(toml::Value::Boolean(flag)) => Some(if *flag { "true" } else { "false" }.to_owned()),
+                        _ => None,
+                    };
+                    if let Some(text) = text
                         && options.iter().any(|choice| choice.value == text)
                     {
-                        values.choices.insert(key.to_owned(), text.clone());
+                        values.choices.insert(key.to_owned(), text);
                     }
                 }
+                Item::Button { .. } => {}
                 Item::Member { key, .. } => {
                     if values.lists.contains_key(key) {
                         continue;
@@ -283,6 +366,13 @@ impl Values {
                 }
             }
         }
+        for key in manifest.paths {
+            if let Some(toml::Value::String(text)) = table.get(*key)
+                && !text.is_empty()
+            {
+                values.paths.insert((*key).to_owned(), text.clone());
+            }
+        }
         values
     }
 
@@ -298,9 +388,18 @@ impl Values {
                 Item::Switch { key, .. } => {
                     table.insert(key.to_owned(), toml::Value::Boolean(self.flag(manifest, key)));
                 }
-                Item::Select { key, .. } => {
-                    table.insert(key.to_owned(), toml::Value::String(self.choice(manifest, key).to_owned()));
+                Item::Select { key, options, .. } => {
+                    let value = self.choice(manifest, key);
+                    let boolean = options.iter().any(|choice| choice.value == "true")
+                        && options.iter().any(|choice| choice.value == "false");
+                    let stored = if boolean {
+                        toml::Value::Boolean(value == "true")
+                    } else {
+                        toml::Value::String(value.to_owned())
+                    };
+                    table.insert(key.to_owned(), stored);
                 }
+                Item::Button { .. } => {}
                 Item::Member { key, option, .. } => {
                     if self.member(manifest, key, option) {
                         lists.entry(key).or_default().push(option.to_owned());
@@ -311,6 +410,11 @@ impl Values {
         for (key, list) in lists {
             let entries = list.into_iter().map(toml::Value::String).collect();
             table.insert(key.to_owned(), toml::Value::Array(entries));
+        }
+        for key in manifest.paths {
+            if let Some(path) = self.path(key) {
+                table.insert((*key).to_owned(), toml::Value::String(path.to_owned()));
+            }
         }
         table
     }

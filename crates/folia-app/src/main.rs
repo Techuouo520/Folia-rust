@@ -60,6 +60,7 @@ fn main() -> anyhow::Result<()> {
         visualizer: store.load_or_default::<folia_store::VisualizerSettings>(),
         library_db: dirs.data.join("library.db"),
         cache_dir: dirs.cache.clone(),
+        data_dir: dirs.data.clone(),
         keyring_service: APP_DIR.to_owned(),
         open_files: std::env::args_os().skip(1).map(std::path::PathBuf::from).collect(),
         store,

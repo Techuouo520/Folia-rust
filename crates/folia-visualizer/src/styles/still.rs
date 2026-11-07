@@ -140,7 +140,7 @@ fn font(weight: Weight) -> Font {
 }
 
 pub fn manifest() -> crate::tuning::Manifest {
-    crate::tuning::Manifest { storage_key: "still_tuning", older_keys: &[], groups: &[] }
+    crate::tuning::Manifest::plain("still_tuning", &[], &[])
 }
 
 /// `radial-gradient(ellipse at center, transparent, #000)` at 65% opacity, drawn as thin elliptical rings.
