@@ -1,11 +1,12 @@
 // Spotify's catalogue and the account's library through pathfinder and spclient, as the original's adapter reads them.
 
-use folia_core::{Lyrics, Track};
+use folia_core::Track;
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
 use super::api::{Client, SPCLIENT_URL, User};
 use super::{album_of, playlist_of, song_of, spotify_id};
+use crate::ProviderLyrics;
 use crate::{
     Account, Collection, CollectionDetail, CollectionKind, ExploreEntry, ExploreSection, OmniError, Page, RadioFeed,
     Shelf,
@@ -118,7 +119,8 @@ pub async fn account(client: &Client) -> Result<Option<Account>, OmniError> {
 }
 
 /// `color-lyrics`: line-synced lyrics as LRC; Spotify's unsynced lyrics have no times to show them by.
-pub async fn lyrics(client: &Client, id: &str) -> Result<Option<Lyrics>, OmniError> {
+/// Chorus detection reads the LRC built from the lines (`mainText`).
+pub async fn lyrics(client: &Client, id: &str) -> Result<Option<ProviderLyrics>, OmniError> {
     let url = format!("{SPCLIENT_URL}/color-lyrics/v2/track/{id}?format=json&vocalRemoval=false&market=from_token");
     let Some(answer) = client.call(&url, None, None, &[("app-platform", "WebPlayer")]).await? else { return Ok(None) };
     let lyrics = answer.get("lyrics").unwrap_or(&Value::Null);
@@ -137,7 +139,7 @@ pub async fn lyrics(client: &Client, id: &str) -> Result<Option<Lyrics>, OmniErr
         })
         .collect();
     let parsed = folia_lyrics::parse(Format::Lrc, &lrc, "", "");
-    Ok((!parsed.lines.is_empty()).then_some(parsed))
+    Ok((!parsed.lines.is_empty()).then_some(ProviderLyrics { lyrics: parsed, source: Some(lrc) }))
 }
 
 /// `getUserPlaylists`: the liked songs first, then `libraryV3`'s playlists page by page.

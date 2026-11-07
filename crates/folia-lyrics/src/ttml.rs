@@ -25,6 +25,8 @@ struct DraftLine {
     plain: String,
     translation: String,
     romanization: String,
+    song_part: Option<String>,
+    block_index: Option<u32>,
 }
 
 /// Where text inside the document currently goes.
@@ -50,6 +52,11 @@ struct Document {
     lines: Vec<DraftLine>,
     head_translations: HashMap<String, String>,
     head_romanizations: HashMap<String, String>,
+    /// Stack depth of `<body>` once it opens.
+    body_depth: Option<usize>,
+    /// `<body>` children seen so far and the song part of the current `<div>`, as AMLL's `parseBody` counts them.
+    block: u32,
+    part: Option<String>,
 }
 
 pub fn parse(content: &str) -> Lyrics {
@@ -72,10 +79,12 @@ fn read(content: &str) -> Result<Document, quick_xml::Error> {
     loop {
         match reader.read_event()? {
             Event::Start(element) => {
+                enter_block(&element, &mut document, stack.len());
                 let target = open(&element, &mut document, &mut line, &mut head_kind, stack.last());
                 stack.push(target);
             }
             Event::Empty(element) => {
+                enter_block(&element, &mut document, stack.len());
                 open(&element, &mut document, &mut line, &mut head_kind, stack.last());
             }
             Event::End(element) => {
@@ -100,6 +109,29 @@ fn read(content: &str) -> Result<Document, quick_xml::Error> {
         }
     }
     Ok(document)
+}
+
+/// Counts `<body>` children: each `<div>` or `<p>` directly under it starts a block; a `<div>` carries its song part.
+fn enter_block(element: &BytesStart<'_>, document: &mut Document, depth: usize) {
+    let name = element.local_name();
+    if name.as_ref() == "body" {
+        document.body_depth = Some(depth);
+        return;
+    }
+    if document.body_depth.map(|body| body + 1) != Some(depth) {
+        return;
+    }
+    match name.as_ref() {
+        "div" => {
+            document.block += 1;
+            document.part = attribute(element, "song-part").or_else(|| attribute(element, "songPart"));
+        }
+        "p" => {
+            document.block += 1;
+            document.part = None;
+        }
+        _ => {}
+    }
 }
 
 /// Handles an opening tag and returns where the text inside it goes.
@@ -133,6 +165,8 @@ fn open(
                 key: attr("key"),
                 start: attr("begin").and_then(|t| time(&t)),
                 end: attr("end").and_then(|t| time(&t)),
+                song_part: document.part.clone().filter(|part| !part.is_empty()),
+                block_index: document.body_depth.map(|_| document.block),
                 ..DraftLine::default()
             });
             Target::Line
@@ -212,6 +246,7 @@ fn build(document: Document) -> Lyrics {
                 if draft.syllables.is_empty() { words::spread(&text, start, end) } else { group(&draft.syllables) };
             let from_head = |map: &HashMap<String, String>| draft.key.as_ref().and_then(|key| map.get(key)).cloned();
             let non_empty = |text: String| Some(text.trim().to_owned()).filter(|text| !text.is_empty());
+            let is_chorus = draft.song_part.as_ref().is_some_and(|part| part.trim().eq_ignore_ascii_case("chorus"));
             Some(Line {
                 words,
                 start,
@@ -219,6 +254,9 @@ fn build(document: Document) -> Lyrics {
                 text,
                 translation: non_empty(draft.translation).or_else(|| from_head(&document.head_translations)),
                 romanization: non_empty(draft.romanization).or_else(|| from_head(&document.head_romanizations)),
+                song_part: draft.song_part,
+                block_index: draft.block_index,
+                is_chorus,
             })
         })
         .collect();

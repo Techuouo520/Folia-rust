@@ -3,12 +3,12 @@
 mod client;
 mod library;
 
-use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, OnlineId, Track};
 use serde_json::Value;
 
 use crate::{
     Account, AudioSource, BoxFuture, Collection, CollectionDetail, CollectionKind, ExploreSection, LoginCode,
-    LoginState, OmniError, Page, Provider, RadioFeed,
+    LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
 };
 
 const ID: &str = "qishui";
@@ -55,7 +55,7 @@ impl Provider for Qishui {
         Box::pin(library::audio_source(&self.client, &song.id, quality))
     }
 
-    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>> {
+    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<ProviderLyrics>, OmniError>> {
         Box::pin(library::lyrics(&self.client, &song.id))
     }
 

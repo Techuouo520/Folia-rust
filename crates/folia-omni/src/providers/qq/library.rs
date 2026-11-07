@@ -2,12 +2,13 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use folia_core::{AudioQuality, Lyrics, Track};
+use folia_core::{AudioQuality, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
 use super::musicu::{self, Client};
 use super::{SongKey, album, pick, playlist, qrc, text, track, tracks};
+use crate::ProviderLyrics;
 use crate::{
     Account, AudioSource, Collection, CollectionDetail, CollectionKind, ExploreEntry, ExploreSection, OmniError, Page,
     RadioFeed, Shelf,
@@ -205,7 +206,8 @@ fn stream_domain(data: &Value) -> String {
 }
 
 /// `fetchQQLyrics`: `GetPlayLyricInfo` with the song's names, QRC when it is word-timed, translation and romaji.
-pub async fn lyrics(client: &Client, key: SongKey) -> Result<Option<Lyrics>, OmniError> {
+/// `fetchQQLyrics`: marks the most repeated lines of the decrypted text itself; the facade gets no raw text.
+pub async fn lyrics(client: &Client, key: SongKey) -> Result<Option<ProviderLyrics>, OmniError> {
     if key.id.is_empty() || key.mid.is_empty() {
         tracing::warn!("qq lyrics need both the song id and mid");
         return Ok(None);
@@ -238,8 +240,9 @@ pub async fn lyrics(client: &Client, key: SongKey) -> Result<Option<Lyrics>, Omn
     let romanization = hex("roma").and_then(|value| qrc::decrypt(value).ok()).unwrap_or_default();
     let is_qrc = lyric.contains('(') && lyric.contains(')') && has_qrc_line(&lyric);
     let format = if is_qrc { Format::Qrc } else { Format::detect(&lyric) };
-    let parsed = folia_lyrics::parse(format, &lyric, &translation, &romanization);
-    Ok((!parsed.lines.is_empty()).then_some(parsed))
+    let mut parsed = folia_lyrics::parse(format, &lyric, &translation, &romanization);
+    folia_lyrics::mark_chorus_text(&mut parsed, &lyric);
+    Ok((!parsed.lines.is_empty()).then_some(ProviderLyrics { lyrics: parsed, source: None }))
 }
 
 /// `/\[\d+,\d+\]/`.

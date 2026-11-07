@@ -5,7 +5,7 @@ mod eapi;
 mod explore;
 mod library;
 
-use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, ChorusRange, OnlineId, Track};
 use folia_lyrics::Format;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::{
     Account, AudioSource, BoxFuture, Collection, CollectionDetail, CollectionKind, ExploreSection, LoginCode,
-    LoginState, OmniError, Page, Provider, RadioFeed,
+    LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
 };
 
 const ID: &str = "netease";
@@ -21,6 +21,8 @@ const ID: &str = "netease";
 pub struct Netease {
     client: eapi::Client,
     explore: std::sync::Mutex<explore::Memory>,
+    /// `neteaseChorusRangesCache`: answers by song id, an empty one after a failed request too.
+    chorus: std::sync::Mutex<std::collections::HashMap<String, Vec<ChorusRange>>>,
 }
 
 #[derive(Deserialize)]
@@ -95,7 +97,11 @@ struct LyricText {
 
 impl Netease {
     pub fn new(http: reqwest::Client) -> Self {
-        Self { client: eapi::Client::new(http), explore: std::sync::Mutex::default() }
+        Self {
+            client: eapi::Client::new(http),
+            explore: std::sync::Mutex::default(),
+            chorus: std::sync::Mutex::default(),
+        }
     }
 
     /// Posts to the client API with the session, so signed-in songs resolve, and decodes a code-200 answer.
@@ -155,13 +161,33 @@ impl Provider for Netease {
         })
     }
 
-    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>> {
+    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<ProviderLyrics>, OmniError>> {
         Box::pin(async move {
             // `lyric_new`, as `getLyric` asks for it.
             let params =
                 json!({ "id": song.id, "cp": false, "tv": 0, "lv": 0, "rv": 0, "kv": 0, "yv": 0, "ytv": 0, "yrv": 0 });
             let response: LyricResponse = self.post("/api/song/lyric/v1", params).await?;
             Ok(lyrics(response))
+        })
+    }
+
+    /// `getNeteaseChorusRanges`: `/song/chorus`, kept per song.
+    fn chorus_ranges<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Vec<ChorusRange>, OmniError>> {
+        Box::pin(async move {
+            let cache = || self.chorus.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(kept) = cache().get(&song.id) {
+                return Ok(kept.clone());
+            }
+            let ids = Value::from(json!([song.id]).to_string());
+            let ranges = match self.client.post("/api/song/chorus", account::object(json!({ "ids": ids }))).await {
+                Ok(answer) => chorus_ranges(&answer.body),
+                Err(err) => {
+                    tracing::warn!(song = %song.id, error = &err as &dyn std::error::Error, "netease chorus ranges unavailable");
+                    Vec::new()
+                }
+            };
+            cache().insert(song.id.clone(), ranges.clone());
+            Ok(ranges)
         })
     }
 
@@ -237,19 +263,47 @@ impl Provider for Netease {
 
 /// Prefers word-timed YRC, falling back to LRC; translations and romanizations are LRC tracks.
 /// Instrumentals only carry a placeholder line, so they get no lyrics.
-fn lyrics(response: LyricResponse) -> Option<Lyrics> {
+/// The parsed lyrics; chorus detection reads the LRC (`mainLrc`), else the YRC.
+fn lyrics(response: LyricResponse) -> Option<ProviderLyrics> {
     if response.pure_music {
         return None;
     }
     let text = |track: Option<LyricText>| track.and_then(|t| t.lyric).filter(|lyric| !lyric.trim().is_empty());
     let translation = text(response.tlyric).unwrap_or_default();
     let romanization = text(response.romalrc).unwrap_or_default();
-    let parsed = match (text(response.yrc), text(response.lrc)) {
-        (Some(yrc), _) => folia_lyrics::parse(Format::Yrc, &yrc, &translation, &romanization),
-        (None, Some(lrc)) => folia_lyrics::parse(Format::detect(&lrc), &lrc, &translation, &romanization),
+    let (yrc, lrc) = (text(response.yrc), text(response.lrc));
+    let parsed = match (&yrc, &lrc) {
+        (Some(yrc), _) => folia_lyrics::parse(Format::Yrc, yrc, &translation, &romanization),
+        (None, Some(lrc)) => folia_lyrics::parse(Format::detect(lrc), lrc, &translation, &romanization),
         (None, None) => return None,
     };
-    (!parsed.lines.is_empty()).then_some(parsed)
+    (!parsed.lines.is_empty()).then_some(ProviderLyrics { lyrics: parsed, source: lrc.or(yrc) })
+}
+
+/// `parseNeteaseChorusRanges`: `chorus` (or `data`) in milliseconds, kept when finite and not empty.
+fn chorus_ranges(answer: &Value) -> Vec<ChorusRange> {
+    if answer.get("code").and_then(Value::as_i64) != Some(200) {
+        return Vec::new();
+    }
+    let rows = answer.get("chorus").filter(|rows| truthy(rows)).or_else(|| answer.get("data"));
+    let seconds = |row: &Value, key: &str| row.get(key).and_then(Value::as_f64).unwrap_or(0.0) / 1000.0;
+    rows.and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|row| ChorusRange { start: seconds(row, "startTime"), end: seconds(row, "endTime") })
+        .filter(|range| range.start.is_finite() && range.end.is_finite() && range.end > range.start)
+        .collect()
+}
+
+/// JavaScript truthiness of a JSON value, for `a || b`.
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(_) | Value::Object(_) => true,
+    }
 }
 
 fn track(song: Song) -> Track {

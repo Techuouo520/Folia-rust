@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use folia_core::{AudioQuality, Lyrics, OnlineId, Track, UNLISTED_AUDIO_QUALITY_LEVELS};
+use folia_core::{AudioQuality, ChorusRange, Lyrics, OnlineId, Track, UNLISTED_AUDIO_QUALITY_LEVELS};
+use folia_lyrics::{ChorusSource, resolve_chorus};
 
 pub use qr::LoginQr;
 
@@ -221,6 +222,13 @@ pub struct ExploreSection {
     pub entries: Vec<ExploreEntry>,
 }
 
+/// A platform's lyrics and the raw text chorus detection reads (`mainText`, else `wordByWordText`); `None` reads
+/// the lines themselves.
+pub struct ProviderLyrics {
+    pub lyrics: Lyrics,
+    pub source: Option<String>,
+}
+
 /// What one platform can do. Search results are tracks whose `online` id points back at the platform.
 pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
@@ -249,7 +257,11 @@ pub trait Provider: Send + Sync {
     ) -> Option<BoxFuture<'a, Result<AudioFile, OmniError>>> {
         None
     }
-    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>>;
+    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<ProviderLyrics>, OmniError>>;
+    /// The stretches the platform marks as chorus (`getChorusRanges`); none where the platform has no such data.
+    fn chorus_ranges<'a>(&'a self, _song: &'a OnlineId) -> BoxFuture<'a, Result<Vec<ChorusRange>, OmniError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     fn login_code(&self) -> BoxFuture<'_, Result<LoginCode, OmniError>>;
     fn check_login<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<LoginState, OmniError>>;
     /// The signed-in account, or `None` when the session is missing or ran out.
@@ -330,8 +342,31 @@ impl Omni {
         self.provider(provider)?.search_songs(query, limit, offset).await
     }
 
+    /// The song's lyrics with chorus marks resolved as `getLyrics` does: existing marks, the platform's ranges, or
+    /// the most repeated lines.
     pub async fn lyrics(&self, song: &OnlineId) -> Result<Option<Lyrics>, OmniError> {
-        self.provider(&song.provider)?.lyrics(song).await
+        let Some(found) = self.provider(&song.provider)?.lyrics(song).await? else {
+            log_chorus(song, ChorusSource::None, 0);
+            return Ok(None);
+        };
+        let ProviderLyrics { mut lyrics, source } = found;
+        let ranges = self.chorus_ranges(song).await.unwrap_or_else(|err| {
+            tracing::warn!(
+                provider = %song.provider,
+                song = %song.id,
+                error = &err as &dyn std::error::Error,
+                "native chorus request failed; falling back to text detection"
+            );
+            Vec::new()
+        });
+        let mode = resolve_chorus(Some(&mut lyrics), &ranges, source.as_deref());
+        log_chorus(song, mode, ranges.len());
+        Ok(Some(lyrics))
+    }
+
+    /// The stretches the song's platform marks as chorus (`getChorusRanges`).
+    pub async fn chorus_ranges(&self, song: &OnlineId) -> Result<Vec<ChorusRange>, OmniError> {
+        self.provider(&song.provider)?.chorus_ranges(song).await
     }
 
     /// Asks for a sign-in code and draws it as a QR matrix.
@@ -511,6 +546,18 @@ impl Omni {
             .find(|provider| provider.id() == id)
             .map(|provider| provider.as_ref())
             .ok_or_else(|| OmniError::UnknownProvider(id.to_owned()))
+    }
+}
+
+fn log_chorus(song: &OnlineId, mode: ChorusSource, ranges: usize) {
+    let (provider, id) = (&song.provider, &song.id);
+    match mode {
+        ChorusSource::None => tracing::info!(provider, song = id, "no lyrics to mark chorus on"),
+        ChorusSource::Existing => tracing::info!(provider, song = id, "using existing chorus markers"),
+        ChorusSource::Native => tracing::info!(provider, song = id, ranges, "applied native chorus ranges"),
+        ChorusSource::Text => {
+            tracing::info!(provider, song = id, "native chorus unavailable or empty; applied text fallback")
+        }
     }
 }
 

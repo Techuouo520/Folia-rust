@@ -20,12 +20,28 @@ pub struct Line {
     pub text: String,
     pub translation: Option<String>,
     pub romanization: Option<String>,
+    /// The TTML `itunes:song-part` of the line's `<div>`, such as `Verse` or `Chorus`.
+    #[serde(default)]
+    pub song_part: Option<String>,
+    /// 1-based index of the TTML `<body>` child (`<div>` or `<p>`) holding the line.
+    #[serde(default)]
+    pub block_index: Option<u32>,
+    /// The song part is `chorus`.
+    #[serde(default)]
+    pub is_chorus: bool,
 }
 
 impl Line {
     pub fn is_interlude(&self) -> bool {
         self.text == INTERLUDE_TEXT
     }
+}
+
+/// A stretch of the song a platform marks as chorus, in seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ChorusRange {
+    pub start: f64,
+    pub end: f64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

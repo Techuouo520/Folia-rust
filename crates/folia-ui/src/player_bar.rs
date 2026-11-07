@@ -100,6 +100,8 @@ pub struct PlayerBar {
     /// On home the bar only opens under the pointer and sits in a wider row (`currentView === 'home'`).
     home: bool,
     forced: bool,
+    /// `isHidden` is false. Pointer handlers drop as soon as this is false; the fade still draws.
+    present: bool,
 }
 
 /// What the bar needs from the shell.
@@ -145,6 +147,7 @@ impl PlayerBar {
             enter: None,
             home: false,
             forced: false,
+            present: true,
         }
     }
 
@@ -226,7 +229,14 @@ impl PlayerBar {
     }
 
     pub fn set_shown(&mut self, shown: bool, now: Instant) {
+        self.present = shown;
         self.shown.set(if shown { 1.0 } else { 0.0 }, now);
+    }
+
+    /// Where the hide transition is: 1 fully up, 0 gone. Opacity, y and scale all read this.
+    /// The shell eases it over [`CAPSULE_FADE_MS`] with `easeOut` when playing-page chrome hides.
+    pub fn shown(&self, now: Instant) -> f32 {
+        self.shown.value(now)
     }
 
     pub fn animating(&self, now: Instant) -> bool {
@@ -299,7 +309,7 @@ impl PlayerBar {
     }
 
     pub fn view<'a>(&'a self, playback: &'a Playback, look: Look<'a>, now: Instant) -> Element<'a, Message> {
-        let shown = self.shown.value(now);
+        let shown = self.shown(now);
         if shown <= 0.0 {
             return space().into();
         }
@@ -346,26 +356,46 @@ impl PlayerBar {
         let lift = 24.0 * (1.0 - shown);
         let scale = 0.97 + 0.03 * shown;
         let plate = shadow_plate(width, height, radius, fill, look.daylight, open, shown);
-        let plate_layer = float_in(plate.element, lift, scale);
-        let plate_layer =
-            container(plate_layer).width(Length::Fill).height(Length::Fill).align_x(Alignment::Center).padding(
-                iced::Padding {
-                    top: (window.height - look.bottom - height - plate.top).max(0.0),
-                    ..iced::Padding::ZERO
-                },
-            );
-        let capsule = mouse_area(capsule).on_press(Message::Open);
+        let capsule: Element<'a, Message> =
+            if self.present { mouse_area(capsule).on_press(Message::Open).into() } else { capsule.into() };
         let row = container(capsule).width(Length::Fixed(row_w)).align_x(Alignment::Center);
         // The hover area spans the whole row and the buffer below it, even under a collapsed bar.
         // `HOVER_HITBOX_BOTTOM_BUFFER_PX` shrinks as the bar is lifted; below it nothing takes the pointer.
         let hitbox = (HITBOX_BUFFER - (look.bottom - folia_store::BOTTOM_BAR_BASE)).max(0.0);
-        let row = mouse_area(column![float_in(row.into(), lift, scale), space().height(Length::Fixed(hitbox))])
-            .on_enter(Message::Inside(true))
-            .on_exit(Message::Inside(false));
-        let row = column![row, space().height(Length::Fixed((look.bottom - hitbox).max(0.0)))];
-        let row_layer =
-            container(row).width(Length::Fill).height(Length::Fill).align_x(Alignment::Center).align_y(Alignment::End);
-        stack![plate_layer, row_layer].width(Length::Fill).height(Length::Fill).into()
+        let hover = column![row, space().height(Length::Fixed(hitbox))];
+        // `pointerEvents: none` while hidden: the fade still draws, but the bar stops taking the pointer.
+        let hover: Element<'a, Message> = if self.present {
+            mouse_area(hover).on_enter(Message::Inside(true)).on_exit(Message::Inside(false)).into()
+        } else {
+            hover.into()
+        };
+        // One float: glass and controls share the 24px drop and the 0.97 scale. Separate floats
+        // each become an overlay and scale around their own center, so the pill and the controls split.
+        let group_w = row_w.max(width + 2.0 * plate.reach);
+        let group_h = plate.top + height + plate.bottom.max(hitbox);
+        let plate_layer = container(plate.element)
+            .width(Length::Fixed(group_w))
+            .height(Length::Fixed(group_h))
+            .align_x(Alignment::Center);
+        let controls = container(hover)
+            .width(Length::Fixed(group_w))
+            .height(Length::Fixed(group_h))
+            .align_x(Alignment::Center)
+            .padding(iced::Padding { top: plate.top, ..iced::Padding::ZERO });
+        let mut group = stack![plate_layer, controls];
+        if !self.present {
+            // Covers the buttons for the fade. A press is ignored, matching `pointerEvents: none`.
+            group = group.push(mouse_area(space().width(Length::Fill).height(Length::Fill)).on_press(Message::Frame));
+        }
+        let group = group.width(Length::Fixed(group_w)).height(Length::Fixed(group_h));
+        let group = float_in(group.into(), lift, scale);
+        let top = (window.height - look.bottom - height - plate.top).max(0.0);
+        container(group)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Alignment::Center)
+            .padding(iced::Padding { top, ..iced::Padding::ZERO })
+            .into()
     }
 
     fn expanded<'a>(
@@ -681,6 +711,8 @@ fn slot_button<'a>(
 struct ShadowPlate<'a> {
     element: Element<'a, Message>,
     top: f32,
+    bottom: f32,
+    reach: f32,
 }
 
 /// `shadow-2xl` in the dark; daylight lists `shadow-xl` open and `shadow-lg` collapsed after it, so
@@ -715,11 +747,11 @@ fn shadow_plate<'a>(
     };
     let element =
         shader(plate).width(Length::Fixed(width + 2.0 * reach)).height(Length::Fixed(height + top + bottom)).into();
-    ShadowPlate { element, top }
+    ShadowPlate { element, top, bottom, reach }
 }
 
-/// The hiding transition: `y: 24, scale: 0.97` as the bar fades. Always a `float`, so the tree keeps its shape
-/// when the transition ends and a press in flight is not dropped.
+/// The hiding transition: `y: 24, scale: 0.97` on the whole capsule. Always a `float`, so the tree keeps its
+/// shape when the transition ends and a press in flight is not dropped.
 fn float_in<'a>(element: Element<'a, Message>, lift: f32, scale: f32) -> Element<'a, Message> {
     iced::widget::float(element).translate(move |_, _| Vector::new(0.0, lift)).scale(scale).into()
 }

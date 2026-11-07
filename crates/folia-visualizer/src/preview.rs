@@ -90,7 +90,7 @@ fn line(start: f64, end: f64, text: &str, tokens: Option<&[&str]>, translation: 
             end: start + span * (index + 1) as f64 / count,
         })
         .collect();
-    Line { words, start, end, text: text.to_owned(), translation: Some(translation.to_owned()), romanization: None }
+    Line { words, start, end, text: text.to_owned(), translation: Some(translation.to_owned()), ..Line::default() }
 }
 
 /// What a kept picture shows, as `pictureImages.ts` names it: the style, the theme, the settings and the moment.

@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use folia_core::{AudioQuality, Lyrics, Queue, Repeat, Track};
+use folia_core::{AudioQuality, ChorusRange, Lyrics, Queue, Repeat, Track};
+use folia_lyrics::{ChorusSource, chorus_ranges_of, resolve_chorus};
 use folia_omni::{Collection, Omni};
 use folia_player::{Player, PlayerState, Status};
 use folia_store::{PlaybackSettings, Store};
@@ -32,6 +33,8 @@ pub struct Playback {
     notice: Option<(String, Instant)>,
     notice_serial: u64,
     request: u64,
+    /// `cachedNeteaseChorusRanges`: the chorus ranges kept for one song, from lyrics that came marked.
+    kept_chorus: Option<(i64, Vec<ChorusRange>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +70,7 @@ pub enum Message {
     /// Moves the queue item at the first index so that it ends up at the second (a drag in the queue list).
     Reorder(usize, usize),
     Tick,
-    LyricsLoaded(u64, i64, Option<Lyrics>),
+    LyricsLoaded(u64, i64, Option<Lyrics>, Option<Vec<ChorusRange>>),
     AudioReady(u64, i64, Result<PathBuf, AudioFailure>),
     Started(u64),
     NoticeLeaving(u64),
@@ -112,6 +115,7 @@ impl Playback {
             notice: None,
             notice_serial: 0,
             request: 0,
+            kept_chorus: None,
         }
     }
 
@@ -285,9 +289,10 @@ impl Playback {
                 Task::none()
             }
             Message::Tick => self.tick(),
-            Message::LyricsLoaded(request, id, lyrics) => {
+            Message::LyricsLoaded(request, id, lyrics, kept) => {
                 if request == self.request && self.current().is_some_and(|track| track.id == id) {
                     self.lyrics = lyrics;
+                    self.kept_chorus = kept.map(|ranges| (id, ranges));
                 }
                 Task::none()
             }
@@ -421,28 +426,33 @@ impl Playback {
         self.seeking = None;
         tracing::info!(track = %track.display_name(), "playing");
         let id = track.id;
+        let kept = self.kept_chorus.as_ref().filter(|(song, _)| *song == id).map(|(_, ranges)| ranges.clone());
         let (Some(online), Some(omni)) = (track.online.clone(), self.omni.clone()) else {
             self.with_player(|player| player.load(&track.path));
             self.refresh();
-            let lyrics = Task::perform(blocking(move || folia_library::lyrics_for(&track.path)), move |lyrics| {
-                Message::LyricsLoaded(request, id, lyrics.flatten())
-            });
+            let lyrics = Task::perform(
+                blocking(move || settle_chorus(folia_library::lyrics_for(&track.path), kept)),
+                move |settled| {
+                    let (lyrics, kept) = settled.unwrap_or_default();
+                    Message::LyricsLoaded(request, id, lyrics, kept)
+                },
+            );
             return Task::batch([lyrics, Task::done(Message::Started(request))]);
         };
 
         self.with_player(Player::stop);
         self.refresh();
         let (lyrics_omni, lyrics_id) = (omni.clone(), online.clone());
-        let lyrics = Task::perform(async move { lyrics_omni.lyrics(&lyrics_id).await }, move |result| {
-            Message::LyricsLoaded(
-                request,
-                id,
-                result.unwrap_or_else(|err| {
+        let lyrics = Task::perform(
+            async move {
+                let lyrics = lyrics_omni.lyrics(&lyrics_id).await.unwrap_or_else(|err| {
                     tracing::warn!(error = &err as &dyn std::error::Error, "online lyrics unavailable");
                     None
-                }),
-            )
-        });
+                });
+                settle_chorus(lyrics, kept)
+            },
+            move |(lyrics, kept)| Message::LyricsLoaded(request, id, lyrics, kept),
+        );
         let quality = self.settings.audio_quality;
         let audio = Task::perform(async move { omni.fetch_audio(&online, quality).await }, move |result| {
             Message::AudioReady(
@@ -483,4 +493,17 @@ impl Playback {
             action(player);
         }
     }
+}
+
+/// `createLyricsSetter`'s chorus step for every song's lyrics: marked lyrics become the song's kept ranges;
+/// otherwise the kept ranges mark them, otherwise the most repeated lines do.
+fn settle_chorus(
+    mut lyrics: Option<Lyrics>,
+    kept: Option<Vec<ChorusRange>>,
+) -> (Option<Lyrics>, Option<Vec<ChorusRange>>) {
+    let Some(found) = lyrics.as_mut() else { return (lyrics, kept) };
+    let mode = resolve_chorus(Some(found), kept.as_deref().unwrap_or_default(), None);
+    tracing::info!(?mode, lines = found.lines.iter().filter(|line| line.is_chorus).count(), "song chorus settled");
+    let kept = if mode == ChorusSource::Existing { Some(chorus_ranges_of(found)) } else { kept };
+    (lyrics, kept)
 }

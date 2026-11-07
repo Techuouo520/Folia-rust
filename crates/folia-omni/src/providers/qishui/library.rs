@@ -4,12 +4,13 @@ use std::sync::{Mutex, PoisonError};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use folia_core::{AudioQuality, Lyrics, Track};
+use folia_core::{AudioQuality, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
 use super::client::{self, Body, CLIENT_KEY, Client, Credential, PREFIX};
 use super::{collection, image, text, track, tracks};
+use crate::ProviderLyrics;
 use crate::{
     Account, AudioSource, Collection, CollectionDetail, CollectionKind, ExploreEntry, ExploreSection, LoginCode,
     LoginState, OmniError, Page, QrContent, RadioFeed, Shelf,
@@ -397,7 +398,8 @@ fn extension_of(url: &str) -> String {
 }
 
 /// `parseQishuiLyrics`: the track's lyric entity (KRC or LRC) with the Chinese translation.
-pub async fn lyrics(client: &Client, id: &str) -> Result<Option<Lyrics>, OmniError> {
+/// Chorus detection reads the lyric content (`mainText`).
+pub async fn lyrics(client: &Client, id: &str) -> Result<Option<ProviderLyrics>, OmniError> {
     let entity = track_entity(client, id).await?;
     let info = entity.pointer("/display_info/lyric_info").unwrap_or(&Value::Null);
     let lyric = info.get("lyric_entity").unwrap_or(&Value::Null);
@@ -414,7 +416,7 @@ pub async fn lyrics(client: &Client, id: &str) -> Result<Option<Lyrics>, OmniErr
         .unwrap_or_default();
     let format = if lyric.get("type").and_then(Value::as_str) == Some("krc") { Format::Krc } else { Format::Lrc };
     let parsed = folia_lyrics::parse(format, &content, &translated, "");
-    Ok((!parsed.lines.is_empty()).then_some(parsed))
+    Ok((!parsed.lines.is_empty()).then_some(ProviderLyrics { lyrics: parsed, source: Some(content) }))
 }
 
 /// `user_playlists`: the account's own lists and the saved ones, behind the recent-played entry the original adds.

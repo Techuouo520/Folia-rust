@@ -5,9 +5,10 @@ mod audio;
 mod library;
 mod signin;
 
-use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, OnlineId, Track};
 use serde_json::Value;
 
+use crate::ProviderLyrics;
 use crate::{
     Account, AudioFile, AudioSource, BoxFuture, Collection, CollectionDetail, CollectionKind, ExploreSection,
     LoginCode, LoginState, OmniError, Page, Provider, QrContent, RadioFeed,
@@ -86,7 +87,7 @@ impl Provider for Spotify {
         }))
     }
 
-    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>> {
+    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<ProviderLyrics>, OmniError>> {
         Box::pin(library::lyrics(&self.client, &song.id))
     }
 

@@ -1,20 +1,29 @@
 // Lyric parsing: detects a lyric file's format and turns it into `folia_core::Lyrics`.
 
 mod align;
+mod chorus;
 mod clock;
 mod graphemes;
 mod hints;
 mod layout;
 mod lrc;
+mod paragraphs;
 mod sentences;
 mod tagged;
 mod ttml;
 mod vtt;
 mod words;
 
+pub use chorus::{
+    ChorusSource, chorus_ranges_of, detect_chorus_lines, mark_chorus_ranges, mark_chorus_text, resolve_chorus,
+};
 pub use graphemes::{GraphemeTiming, WordSpan, grapheme_timeline, graphemes, word_spans};
 pub use hints::{LinePhases, RenderHints, Reveal, Transition, active_line};
 pub use layout::{LayoutUnit, display_words, layout_units};
+pub use paragraphs::{
+    ParagraphBoundary, ParagraphDraft, ParagraphKind, ParagraphParams, StructureLine, classify, count_word_like,
+    draft_paragraphs, gap_threshold, metadata_changed, split_oversized, structure_lines,
+};
 pub use sentences::{is_js_space, split_sentences};
 
 use folia_core::Lyrics;

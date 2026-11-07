@@ -5,12 +5,12 @@ mod gateway;
 mod library;
 mod lyrics;
 
-use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, ChorusRange, OnlineId, Track};
 use serde_json::Value;
 
 use crate::{
     Account, AudioSource, BoxFuture, Collection, CollectionDetail, CollectionKind, ExploreSection, LoginCode,
-    LoginState, OmniError, Page, Provider, RadioFeed,
+    LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
 };
 
 const ID: &str = "kugou";
@@ -21,11 +21,17 @@ pub struct Kugou {
     client: gateway::Client,
     /// Keywords whose signed-in first page came back empty: later pages search anonymously too.
     anonymous: std::sync::Mutex<std::collections::VecDeque<String>>,
+    /// `kugouChorusRangesCache`: answers by song hash, an empty one after a failed request too.
+    chorus: std::sync::Mutex<std::collections::HashMap<String, Vec<ChorusRange>>>,
 }
 
 impl Kugou {
     pub fn new(http: reqwest::Client) -> Self {
-        Self { client: gateway::Client::new(http), anonymous: std::sync::Mutex::default() }
+        Self {
+            client: gateway::Client::new(http),
+            anonymous: std::sync::Mutex::default(),
+            chorus: std::sync::Mutex::default(),
+        }
     }
 }
 
@@ -55,8 +61,28 @@ impl Provider for Kugou {
         Box::pin(library::audio_source(&self.client, SongKey::parse(&song.id), quality))
     }
 
-    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>> {
+    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<ProviderLyrics>, OmniError>> {
         Box::pin(lyrics::lyrics(&self.client, SongKey::parse(&song.id)))
+    }
+
+    /// `getKugouChorusRanges`: `song_climax` by the song's hash, kept per hash.
+    fn chorus_ranges<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Vec<ChorusRange>, OmniError>> {
+        Box::pin(async move {
+            let hash = SongKey::parse(&song.id).hash.trim().to_owned();
+            if hash.is_empty() {
+                return Ok(Vec::new());
+            }
+            let cache = || self.chorus.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(kept) = cache().get(&hash) {
+                return Ok(kept.clone());
+            }
+            let ranges = lyrics::chorus_ranges(&self.client, &hash).await.unwrap_or_else(|err| {
+                tracing::warn!(song = %hash, error = &err as &dyn std::error::Error, "kugou chorus ranges unavailable");
+                Vec::new()
+            });
+            cache().insert(hash, ranges.clone());
+            Ok(ranges)
+        })
     }
 
     fn login_code(&self) -> BoxFuture<'_, Result<LoginCode, OmniError>> {

@@ -2,12 +2,13 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use folia_core::{AudioQuality, Lyrics, Track};
+use folia_core::{AudioQuality, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
 use super::api::{Call, Client, Session};
 use super::{collection, text, track, tracks};
+use crate::ProviderLyrics;
 use crate::{AudioSource, Collection, CollectionDetail, CollectionKind, LoginState, OmniError, Page, RadioFeed};
 
 const PAGE: u32 = 100;
@@ -99,7 +100,8 @@ fn quality_format(quality: AudioQuality) -> (&'static str, &'static str, AudioQu
 }
 
 /// `lyrics` with `parseBodianLyrics`: the word timing decoded and read as KRC, else the plain LRC.
-pub async fn lyrics(client: &Client, id: &str) -> Result<Option<Lyrics>, OmniError> {
+/// Word-timed lyrics when there are any, else the LRC; chorus detection reads the LRC (`mainText`).
+pub async fn lyrics(client: &Client, id: &str) -> Result<Option<ProviderLyrics>, OmniError> {
     let query = format!("type=lyric&req=2&lrcx=1&rid={id}&songname=&artist=&corp=kuwo&fromchannel=bodian");
     let call = Call {
         params: vec![("f", "bodian".to_owned()), ("q", STANDARD.encode(query))],
@@ -117,11 +119,11 @@ pub async fn lyrics(client: &Client, id: &str) -> Result<Option<Lyrics>, OmniErr
     if let Some(krc) = word_timing(&content).map(|timed| awlrc_to_krc(&timed)) {
         let parsed = folia_lyrics::parse(Format::Krc, &krc, "", "");
         if !parsed.lines.is_empty() {
-            return Ok(Some(parsed));
+            return Ok(Some(ProviderLyrics { lyrics: parsed, source: Some(main) }));
         }
     }
     let parsed = folia_lyrics::parse(Format::Lrc, &main, "", "");
-    Ok((!parsed.lines.is_empty()).then_some(parsed))
+    Ok((!parsed.lines.is_empty()).then_some(ProviderLyrics { lyrics: parsed, source: Some(main) }))
 }
 
 fn strip_kuwo_tag(content: &str) -> String {

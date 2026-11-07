@@ -54,6 +54,8 @@ pub use overlay::{
 pub use platform_highlight::ProviderHighlight;
 pub use platform_rows::{ProviderRowStatus, order_provider_rows};
 pub use playback_navigation::PlaybackNavigation;
+/// The floating capsule. `shown` is its 0.26s ease-out hide, shared by opacity, offset and scale.
+pub use player_bar::PlayerBar;
 pub use typeface::install as install_fonts;
 pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, seam_on_axis, wider_span};
 pub use wall_pan::{Glide as WallGlide, Inertia as WallInertia, Release as WallRelease};
@@ -1204,6 +1206,11 @@ impl Shell {
         self.page != Page::NowPlaying || self.clock.visible(self.now_ms(), self.pointer_held)
     }
 
+    /// Surfaces that take the keyboard the way an open sheet does: settings, sign-in, the workbench, search.
+    fn blocks_space(&self) -> bool {
+        self.settings.is_some() || self.workbench.is_some() || self.login.is_open() || self.page == Page::Search
+    }
+
     /// The original back button only appears inside the top-left 120px square.
     fn back_hotspot(&self) -> bool {
         self.clock.pointer.is_some_and(|(x, y)| x <= HOTSPOT && y <= HOTSPOT)
@@ -1228,6 +1235,9 @@ impl Shell {
             // The release must reach every page, or a press that ends off the drag strip leaves the drag armed.
             iced::event::listen_with(chrome_pointer),
         ];
+        if self.playback.current().is_some() && !self.blocks_space() {
+            parts.push(iced::event::listen_with(space_key));
+        }
         if self.page == Page::NowPlaying && self.clock.until_ms.is_some() {
             parts.push(iced::time::every(std::time::Duration::from_millis(200)).map(|_| Message::ChromeTick));
         }
@@ -1899,6 +1909,27 @@ const SUBTITLE_BOTTOM_HIDDEN: f32 = 32.0;
 
 fn pin<'a>(button: Element<'a, Message>, x: Alignment, y: Alignment, pad: iced::Padding) -> Element<'a, Message> {
     container(button).width(Length::Fill).height(Length::Fill).align_x(x).align_y(y).padding(pad).into()
+}
+
+/// Space toggles play. Subscribed only when a track is loaded and no sheet is open.
+fn space_key(event: iced::Event, status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    space_toggle(event, status)
+}
+
+/// Maps Space to the player's play/pause toggle; a captured event (a text field, the focused seam title) and a
+/// held key's repeats are ignored, so holding Space does not toggle on every repeat as the original does.
+pub fn space_toggle(event: iced::Event, status: iced::event::Status) -> Option<Message> {
+    if status == iced::event::Status::Captured {
+        return None;
+    }
+    match event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Space),
+            repeat: false,
+            ..
+        }) => Some(Message::Playback(playback::Message::Toggle)),
+        _ => None,
+    }
 }
 
 /// F11 toggles fullscreen, the shortcut listed in the original help.

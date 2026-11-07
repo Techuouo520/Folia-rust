@@ -3,7 +3,7 @@
 
 mod innertube;
 
-use folia_core::{AudioQuality, Lyrics, OnlineId, Track};
+use folia_core::{AudioQuality, OnlineId, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
@@ -11,7 +11,7 @@ use innertube::{find_all, find_first, runs_text};
 
 use crate::{
     Account, AudioSource, BoxFuture, Collection, CollectionDetail, CollectionKind, ExploreSection, LoginCode,
-    LoginState, OmniError, Page, Provider, RadioFeed,
+    LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
 };
 
 const ID: &str = "ytm";
@@ -75,7 +75,7 @@ impl Provider for Ytm {
     }
 
     /// `lyrics`: the watch page names the lyrics page; the mobile app's copy of it carries the line times.
-    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<Lyrics>, OmniError>> {
+    fn lyrics<'a>(&'a self, song: &'a OnlineId) -> BoxFuture<'a, Result<Option<ProviderLyrics>, OmniError>> {
         Box::pin(async move {
             if !is_video_id(&song.id) {
                 return Err(OmniError::Response("Invalid track id".to_owned()));
@@ -85,7 +85,7 @@ impl Provider for Ytm {
             let page = self.client.mobile_browse(&browse_id).await?;
             let Some(lrc) = innertube::lrc_from_lyrics_page(&page) else { return Ok(None) };
             let parsed = folia_lyrics::parse(Format::Lrc, &lrc, "", "");
-            Ok((!parsed.lines.is_empty()).then_some(parsed))
+            Ok((!parsed.lines.is_empty()).then_some(ProviderLyrics { lyrics: parsed, source: Some(lrc) }))
         })
     }
 

@@ -25,6 +25,7 @@ use iced::{Color, Point, Radians, Rectangle, Size, Vector, mouse};
 
 use crate::Scene;
 
+pub use program::{Program, Shot, Span};
 pub use tuning::{Quality, Tuning, manifest};
 
 use field::View;
