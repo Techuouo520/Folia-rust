@@ -1,24 +1,28 @@
 // Monet (莫奈): a poster with the lyric rail on the left and a portrait on the right.
 
+mod ink;
+mod layout;
 mod motion;
-mod paint;
 mod poster;
+mod rail;
+mod text;
 mod tuning;
 
-pub use paint::{HEIGHT, WIDTH, Wash, paint};
-pub use poster::{Cache, interact, take_offset};
+pub use layout::{Layout, layout};
+pub use poster::{Cache, interaction, update};
+pub use text::{Shaped, shape};
 pub use tuning::manifest;
 
+use iced::Size;
 use iced::widget::canvas::Frame;
-use iced::{Point, Size};
 
-use crate::Scene;
+use crate::{Place, Scene};
 
-pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size) {
-    poster::draw(scene, cache, frame, size, scene.portrait.as_ref(), scene.wash.as_ref());
-}
+/// The portrait's horizontal offset after a drag on the hanger, `-150..=0` pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PortraitOffset(pub f32);
 
-/// `cursor` is in the same coordinates as `size` (the stage, after the picture scale).
-pub fn pointer(scene: &Scene<'_>, cache: &mut Cache, size: Size, cursor: Option<Point>, pressed: Option<bool>) -> bool {
-    interact(scene, cache, size, cursor, pressed)
+/// Draws the poster on a stage of `size`; `place` maps the stage onto the canvas for clipped parts.
+pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size, place: Place) {
+    poster::draw(scene, cache, frame, size, place);
 }

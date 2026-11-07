@@ -170,12 +170,19 @@ pub enum Message {
     PortraitPicked(Option<std::path::PathBuf>),
     PortraitDecoded(String, Option<folia_library::Cover>),
     PortraitStored(std::path::PathBuf, folia_library::Cover),
-    MonetWash(i64, Option<Vec<u8>>),
+    /// The Monet portrait was dragged to this horizontal offset.
+    MonetOffset(f32),
     Login(login::Message),
     /// Escape on the player page: leave fullscreen, close the panel, or go back to the wall.
     PlayerEscape,
     /// An input method is composing on the player page; Escape belongs to it.
     PlayerComposing(bool),
+}
+
+impl From<folia_visualizer::styles::monet::PortraitOffset> for Message {
+    fn from(moved: folia_visualizer::styles::monet::PortraitOffset) -> Self {
+        Message::MonetOffset(moved.0)
+    }
 }
 
 /// Settings id of the random lyric style choice, as in the original app.
@@ -240,8 +247,6 @@ pub struct Shell {
     data_dir: std::path::PathBuf,
     /// Uploaded Monet portrait, keyed by its saved path.
     monet_portrait: Option<(String, iced::widget::image::Handle)>,
-    /// Painted Monet field for one track.
-    monet_wash: Option<(i64, iced::widget::image::Handle)>,
 }
 
 impl Shell {
@@ -303,7 +308,6 @@ impl Shell {
             visualizer_seed: "lumiere".to_owned(),
             data_dir: init.data_dir,
             monet_portrait: None,
-            monet_wash: None,
         };
         let open = if init.open_files.is_empty() { Task::none() } else { open_files(init.open_files) };
         let window = iced::window::oldest().map(Message::WindowReady);
@@ -321,8 +325,7 @@ impl Shell {
         id.and_then(|id| self.art.peek(&id)).and_then(Option::as_ref)
     }
 
-    fn take_monet_offset(&mut self) -> Task<Message> {
-        let Some(offset) = folia_visualizer::styles::monet::take_offset() else { return Task::none() };
+    fn store_monet_offset(&mut self, offset: f32) -> Task<Message> {
         let manifest = Style::Monet.manifest();
         let mut values = Style::Monet.load(&self.visualizer.tables);
         values.set_number(manifest, "portraitOffsetX", offset);
@@ -332,11 +335,6 @@ impl Shell {
             window.values = values.clone();
         }
         self.store_tuning(Style::Monet, values)
-    }
-
-    fn wash_handle(&self, id: Option<i64>) -> Option<&iced::widget::image::Handle> {
-        let id = id?;
-        self.monet_wash.as_ref().filter(|(held, _)| *held == id).map(|(_, handle)| handle)
     }
 
     fn load_portrait(&self) -> Task<Message> {
@@ -687,7 +685,7 @@ impl Shell {
                 if self.page == Page::NowPlaying {
                     self.reveal_chrome();
                 }
-                if held { Task::none() } else { self.take_monet_offset() }
+                Task::none()
             }
             Message::WindowUnfocused => {
                 self.drag_armed = false;
@@ -754,29 +752,12 @@ impl Shell {
                 }
                 let bytes = cover.as_ref().map_or(0, |cover| cover.rgba.len());
                 tracing::debug!(bytes, held = self.art.used_bytes() + bytes, "panel cover decoded");
-                let painted =
-                    cover.as_ref().map(|cover| (cover.width, cover.height, cover.rgba.clone(), self.theme.clone()));
                 let handle =
                     cover.map(|cover| iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba));
                 self.art.insert(id, handle, bytes);
-                let Some((width, height, rgba, theme)) = painted else { return Task::none() };
-                Task::perform(
-                    crate::background::blocking(move || {
-                        folia_visualizer::styles::monet::paint(&rgba, width, height, &theme, Default::default())
-                    }),
-                    move |pixels| Message::MonetWash(id, pixels),
-                )
-            }
-            Message::MonetWash(id, Some(pixels)) => {
-                let handle = iced::widget::image::Handle::from_rgba(
-                    folia_visualizer::styles::monet::WIDTH,
-                    folia_visualizer::styles::monet::HEIGHT,
-                    pixels,
-                );
-                self.monet_wash = Some((id, handle));
                 Task::none()
             }
-            Message::MonetWash(_, None) => Task::none(),
+            Message::MonetOffset(offset) => self.store_monet_offset(offset),
             Message::PortraitPicked(Some(path)) => self.store_portrait(path),
             Message::PortraitPicked(None) => Task::none(),
             Message::PortraitDecoded(path, Some(cover)) => {
@@ -787,14 +768,10 @@ impl Shell {
             Message::PortraitDecoded(_, None) => Task::none(),
             Message::PortraitStored(path, cover) => self.remember_portrait(path, cover),
             Message::Chrome(message) => self.chrome(message),
-            Message::Pointer(window, at) if self.window == Some(window) => {
-                let saved = self.take_monet_offset();
-                let moved = match at {
-                    Some(at) => self.chrome(chrome::Message::Activity { x: at.x, y: at.y }),
-                    None => self.chrome(chrome::Message::Left),
-                };
-                Task::batch([moved, saved])
-            }
+            Message::Pointer(window, at) if self.window == Some(window) => match at {
+                Some(at) => self.chrome(chrome::Message::Activity { x: at.x, y: at.y }),
+                None => self.chrome(chrome::Message::Left),
+            },
             Message::Pointer(..) => Task::none(),
             // `resolvePlayerEscapeAction`: fullscreen leaves the key to the system, then the panel closes,
             // and only with neither does the player go back.
@@ -1109,7 +1086,6 @@ impl Shell {
                     None => (String::new(), String::new(), String::new(), None),
                 };
                 let portrait = self.portrait_handle(track_id).cloned();
-                let wash = self.wash_handle(track_id).cloned();
                 let tuning = self.tuning_of(self.style());
                 let lyrics = self.playback.lyrics.as_ref().unwrap_or(&self.empty_lyrics);
                 let scene = Scene {
@@ -1126,7 +1102,6 @@ impl Shell {
                     artist,
                     album,
                     portrait,
-                    wash,
                     preview: false,
                 };
                 let subtitle = self.subtitle();
@@ -1394,7 +1369,7 @@ impl Shell {
     }
 
     fn subtitle(&self) -> overlay::Subtitle<'_> {
-        if self.style() == Style::Still {
+        if !self.style().shared_subtitle() {
             return overlay::Subtitle { translation: None, upcoming: None };
         }
         let Some(lyrics) = self.playback.lyrics.as_ref() else {

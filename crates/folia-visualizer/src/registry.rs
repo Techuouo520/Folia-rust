@@ -155,4 +155,10 @@ impl Style {
             Style::Still => Some(10),
         }
     }
+
+    /// Whether the shared bottom subtitle shows under this style. Still has none; Monet sets the translation
+    /// inside its own rail (`VisualizerMonet.tsx:86`).
+    pub fn shared_subtitle(self) -> bool {
+        !matches!(self, Style::Still | Style::Monet)
+    }
 }

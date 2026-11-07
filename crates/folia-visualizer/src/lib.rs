@@ -8,7 +8,7 @@ mod tuning;
 
 pub use anim::{Ease, keyframes, spring, tween};
 pub use preview::{
-    Frozen, POSTER_TIME, PREVIEW_LOOP, Pictures, RESERVED_LOOP, STAGE_HEIGHT, STAGE_WIDTH, preview_lyrics,
+    Frozen, POSTER_TIME, PREVIEW_LOOP, Pictures, Playing, RESERVED_LOOP, STAGE_HEIGHT, STAGE_WIDTH, preview_lyrics,
     preview_reserved,
 };
 pub use registry::Style;
@@ -49,8 +49,6 @@ pub struct Scene<'a> {
     pub album: String,
     /// Cover or uploaded portrait, already decoded.
     pub portrait: Option<Handle>,
-    /// Impressionist field painted off the render thread. Absent until that paint finishes.
-    pub wash: Option<Handle>,
     /// Style-picker and workbench pictures use Monet's static spectrum. Playback passes zeros.
     pub preview: bool,
 }
@@ -68,7 +66,8 @@ pub struct SceneState {
     still: styles::still::StillCache,
 }
 
-impl<Message> canvas::Program<Message> for Scene<'_> {
+/// Monet publishes the dragged portrait offset, so the message type must take one.
+impl<Message: From<styles::monet::PortraitOffset>> canvas::Program<Message> for Scene<'_> {
     type State = SceneState;
 
     fn draw(
@@ -79,13 +78,7 @@ impl<Message> canvas::Program<Message> for Scene<'_> {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let target = bounds.size();
-        if self.style == Style::Still {
-            return vec![styles::still::draw(self, state, renderer, target)];
-        }
-        let mut frame = Frame::new(renderer, target);
-        self.paint(state, &mut frame, target);
-        vec![frame.into_geometry()]
+        self.render(state, renderer, bounds.size())
     }
 
     fn update(
@@ -95,7 +88,21 @@ impl<Message> canvas::Program<Message> for Scene<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        self.update_monet(state, event, bounds, cursor).then(|| canvas::Action::request_redraw())
+        if self.style != Style::Monet || self.stage.is_some() {
+            return None;
+        }
+        let (size, place) = self.placement(bounds.size());
+        let at = cursor.position_in(bounds).map(|point| place.to_stage(point));
+        styles::monet::update(self, &mut state.monet.borrow_mut(), event, size, at)
+    }
+
+    fn mouse_interaction(&self, state: &SceneState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
+        if self.style != Style::Monet || self.stage.is_some() {
+            return mouse::Interaction::None;
+        }
+        let (size, place) = self.placement(bounds.size());
+        let at = cursor.position_in(bounds).map(|point| place.to_stage(point));
+        styles::monet::interaction(self, &state.monet.borrow(), size, at)
     }
 }
 
@@ -108,19 +115,33 @@ impl Scene<'_> {
         }
     }
 
+    /// The stage size and how it maps onto a widget of `target`: scaled to cover it, centred.
+    fn placement(&self, target: Size) -> (Size, Place) {
+        let size = self.stage_size(target);
+        let scale = (target.width / size.width).max(target.height / size.height);
+        let offset =
+            iced::Vector::new((target.width - size.width * scale) / 2.0, (target.height - size.height * scale) / 2.0);
+        (size, Place { offset, scale })
+    }
+
+    pub(crate) fn render(&self, state: &SceneState, renderer: &Renderer, target: Size) -> Vec<Geometry> {
+        if self.style == Style::Still {
+            return vec![styles::still::draw(self, state, renderer, target)];
+        }
+        let mut frame = Frame::new(renderer, target);
+        self.paint(state, &mut frame, target);
+        vec![frame.into_geometry()]
+    }
+
     /// Fills `target` with the theme background, then draws the stage scaled down to cover it.
     pub(crate) fn paint(&self, state: &SceneState, frame: &mut Frame, target: Size) {
-        let size = self.stage_size(target);
+        let (size, place) = self.placement(target);
         if self.backdrop {
             frame.fill_rectangle(iced::Point::ORIGIN, target, color(self.theme.background, 1.0));
         }
-        let scale = (target.width / size.width).max(target.height / size.height);
-        if (scale - 1.0).abs() > f32::EPSILON {
-            frame.translate(iced::Vector::new(
-                (target.width - size.width * scale) / 2.0,
-                (target.height - size.height * scale) / 2.0,
-            ));
-            frame.scale(scale);
+        if (place.scale - 1.0).abs() > f32::EPSILON {
+            frame.translate(place.offset);
+            frame.scale(place.scale);
         }
         match self.style {
             Style::Partita => styles::partita::draw(self, &mut state.partita.borrow_mut(), frame, size),
@@ -131,34 +152,40 @@ impl Scene<'_> {
             Style::Still => styles::still::draw_stage(self, frame, size),
             Style::Classic => styles::classic::draw(self, &mut state.classic.borrow_mut(), frame, size),
             Style::Nebbia => styles::nebbia::draw(self, frame, size),
-            Style::Monet => styles::monet::draw(self, &mut state.monet.borrow_mut(), frame, size),
+            Style::Monet => styles::monet::draw(self, &mut state.monet.borrow_mut(), frame, size, place),
         }
     }
 }
 
-impl Scene<'_> {
-    fn update_monet(
-        &self,
-        state: &SceneState,
-        event: &canvas::Event,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> bool {
-        if self.style != Style::Monet {
-            return false;
+/// Stage-to-widget transform of a scene's frame. `Frame::with_clip` drafts start untransformed, so a style that clips
+/// maps its regions through this and applies it again inside.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Place {
+    pub offset: iced::Vector,
+    pub scale: f32,
+}
+
+impl Place {
+    pub fn to_widget(self, rect: Rectangle) -> Rectangle {
+        Rectangle {
+            x: self.offset.x + rect.x * self.scale,
+            y: self.offset.y + rect.y * self.scale,
+            width: rect.width * self.scale,
+            height: rect.height * self.scale,
         }
-        let local = cursor.position_in(bounds);
-        let size = self.stage_size(bounds.size());
-        let scale = (bounds.width / size.width).max(bounds.height / size.height);
-        let origin = Point::new((bounds.width - size.width * scale) / 2.0, (bounds.height - size.height * scale) / 2.0);
-        let at = local.map(|point| Point::new((point.x - origin.x) / scale, (point.y - origin.y) / scale));
-        let pressed = match event {
-            canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => Some(true),
-            canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(false),
-            canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => None,
-            _ => return false,
-        };
-        styles::monet::pointer(self, &mut state.monet.borrow_mut(), size, at, pressed)
+    }
+
+    pub fn to_stage(self, point: Point) -> Point {
+        Point::new((point.x - self.offset.x) / self.scale, (point.y - self.offset.y) / self.scale)
+    }
+
+    /// Draws `draw` in stage coordinates, clipped to the stage rectangle `region`.
+    pub fn clip(self, frame: &mut Frame, region: Rectangle, draw: impl FnOnce(&mut Frame)) {
+        frame.with_clip(self.to_widget(region), |inner| {
+            inner.translate(self.offset);
+            inner.scale(self.scale);
+            draw(inner);
+        });
     }
 }
 
@@ -214,7 +241,7 @@ impl<T> LayoutCache<T> {
 
 /// The playing picture. Canvas styles draw alone. Nebbia puts its shader under a clear lyric canvas; lumiere draws its
 /// lyrics in its own pass, then the front bokeh, then a clear canvas with the corner frame.
-pub fn lyric_view<'a, Message: 'a>(scene: Scene<'a>) -> Element<'a, Message> {
+pub fn lyric_view<'a, Message: From<styles::monet::PortraitOffset> + 'a>(scene: Scene<'a>) -> Element<'a, Message> {
     if !matches!(scene.style, Style::Nebbia | Style::Lumiere) {
         return iced::widget::canvas(scene).width(Length::Fill).height(Length::Fill).into();
     }

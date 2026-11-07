@@ -370,11 +370,10 @@ impl Pickers {
                     artist: self.preview.artist.clone().unwrap_or_default(),
                     album: String::new(),
                     portrait: None,
-                    wash: None,
                     preview: true,
                 };
                 if hovered {
-                    canvas(scene).width(Length::Fill).height(Length::Fill).into()
+                    canvas(folia_visualizer::Playing(scene)).width(Length::Fill).height(Length::Fill).into()
                 } else {
                     canvas(self.pictures.frozen(scene)).width(Length::Fill).height(Length::Fill).into()
                 }

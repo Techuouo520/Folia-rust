@@ -322,7 +322,6 @@ impl Workbench {
             artist: lyrics.artist.clone().unwrap_or_default(),
             album: String::new(),
             portrait: None,
-            wash: None,
             preview: true,
         };
         let preview =
@@ -703,7 +702,6 @@ fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
         artist: lyrics.artist.clone().unwrap_or_default(),
         album: String::new(),
         portrait: None,
-        wash: None,
         preview: true,
     };
     let picture = container(iced::widget::canvas(pictures.frozen(scene)).width(Length::Fill).height(Length::Fill))

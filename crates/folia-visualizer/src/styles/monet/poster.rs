@@ -1,550 +1,644 @@
-// Monet's poster: title column, lyric rail, portrait and the bottom spectrum.
+// Monet's poster around the rail: the heading, the description capsule, the portrait with its hanger, and the
+// bottom spectrum, plus the hanger's click-to-edit drag (`VisualizerMonet.tsx` 210-575).
 
-use folia_core::{AnimationIntensity, Line};
-use folia_lyrics::{RenderHints, active_line};
-use iced::widget::canvas::{Frame, Path, Text};
+use std::time::Instant;
+
+use folia_core::AnimationIntensity;
+use iced::widget::canvas::{self, Fill, Frame, Path, Stroke, Text, gradient};
 use iced::widget::image::Handle;
-use iced::{Point, Rectangle, Size, Vector, border::Radius};
+use iced::{Color, Point, Rectangle, Size, Vector, border::Radius, mouse};
 
-use crate::styles::monet::motion::{self, fade, intro};
-use crate::styles::monet::tuning;
-use crate::{BOLD, LayoutCache, Scene, color, measure};
+use super::PortraitOffset;
+use super::ink;
+use super::layout::{self, ITALIC, Layout, SEMIBOLD};
+use super::motion::{self, intro};
+use super::rail::{self, Rail};
+use super::text::{self, Raster};
+use super::tuning;
+use crate::{Place, Scene, color};
 
-const ITALIC: iced::Font = iced::Font { style: iced::font::Style::Italic, ..iced::Font::DEFAULT };
-const SEMI: iced::Font = iced::Font { weight: iced::font::Weight::Semibold, ..iced::Font::DEFAULT };
-
-pub struct LineBox {
-    text: String,
-    width: f32,
-}
-
+/// The canvas state of one Monet picture: measurements, the wheel, and the hanger drag preview.
 #[derive(Default)]
 pub struct Cache {
-    lines: LayoutCache<LineBox>,
-    /// Click the hanger to edit, drag while the button is down, click again to store.
-    editing: bool,
-    /// Portrait shift while editing, in pixels, `-150..=0`.
-    live_offset: Option<f32>,
-    /// Set on the click that leaves edit mode, until the saved value catches up.
+    rail: Rail,
+    artist: Option<(ArtistKey, Option<Raster>)>,
+    pin: Pin,
+    hangers: Vec<(([u32; 6], folia_core::Rgb), Handle)>,
+    /// Wall clock of the latest frame, for the hanger's pulse.
+    now: Option<Instant>,
+}
+
+/// What the artist raster was made for: label, size, colour, pixel density and the width it was cut to.
+type ArtistKey = (String, u32, [u8; 4], u32, u32);
+
+/// The hanger: a click enters edit mode, a drag moves the portrait, a click again leaves.
+#[derive(Debug, Default)]
+struct Pin {
+    editing: Option<Instant>,
+    hover: bool,
+    down: Option<Down>,
+    /// The offset shown while editing, and after a publish until the saved value catches up.
+    live: Option<f32>,
     pending: bool,
-    down: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Down {
+    grab: f32,
+    from: f32,
     moved: bool,
-    grab: Option<f32>,
 }
 
-struct Stage {
-    left: f32,
-    text_width: f32,
-    portrait: Option<Rectangle>,
-    hanger: Option<Rectangle>,
-    audio: Rectangle,
-    active_px: f32,
-    inactive_px: f32,
-    translation_px: f32,
-    title_px: f32,
-    artist_px: f32,
-    album_px: f32,
+impl Pin {
+    fn offset(&mut self, saved: f32) -> f32 {
+        if self.pending && self.live.is_some_and(|live| (live - saved).abs() < 0.5) {
+            self.pending = false;
+            self.live = None;
+        }
+        if self.editing.is_none() && !self.pending {
+            self.live = None;
+        }
+        self.live.unwrap_or(saved)
+    }
 }
 
-pub fn draw(
-    scene: &Scene<'_>,
-    cache: &mut Cache,
-    frame: &mut Frame,
-    size: Size,
-    portrait: Option<&Handle>,
-    wash: Option<&Handle>,
-) {
+pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size, place: Place) {
     let manifest = tuning::manifest();
     let values = &scene.tuning;
-    let font_scale = values.number(manifest, "fontScale") * scene.font_scale;
-    let shift = cache.resolve(values);
-    let stage = stage(size, font_scale, values.choice(manifest, "portraitStyle") == "square", shift);
-    if let Some(image) = wash {
-        frame.draw_image(Rectangle::new(Point::ORIGIN, size), iced::widget::canvas::Image::new(image.clone()));
+    let saved = tuning::offset(values);
+    let offset = cache.pin.offset(saved);
+    let layout = layout::layout(scene, size, offset);
+    let time = scene.time;
+    heading(frame, scene, cache, &layout, place);
+    let rail_p = intro(time, 0.65, 1.2);
+    rail::draw(frame, place, scene, &layout, &mut cache.rail, rail_p, 20.0 * (1.0 - rail_p));
+    if let Some(capsule) = layout.capsule {
+        description(frame, scene, &layout, capsule, intro(time, 0.95, 1.0));
     }
-    let theme = scene.theme;
-    let artist = if scene.artist.is_empty() { "Monet" } else { scene.artist.as_str() };
-    let title = if scene.title.is_empty() { "Monet" } else { scene.title.as_str() };
-    let album = if scene.album.is_empty() { "Monet" } else { scene.album.as_str() };
-    let artist_p = intro(scene.time, 0.15, 1.2);
-    let title_p = intro(scene.time, 0.3, 1.3);
-    let rule_p = intro(scene.time, 0.5, 1.5);
-    let rail_p = intro(scene.time, 0.65, 1.2);
-    let audio_p = intro(scene.time, 0.8, 1.2);
-    let desc_p = intro(scene.time, 0.95, 1.0);
-    let portrait_p = intro(scene.time, 0.25, 1.6);
-    let decor = fade(scene.time, 2.2);
-    dots(frame, size, theme, decor);
-    let mut y = 48.0;
-    text_at(
-        frame,
-        artist,
-        Point::new(stage.left - 30.0 * (1.0 - artist_p), y),
-        stage.artist_px,
-        ITALIC,
-        color(theme.primary, 0.96 * artist_p),
-        stage.text_width,
-    );
-    y += stage.artist_px * 1.3 + 8.0;
-    let rule = Path::line(Point::new(stage.left, y), Point::new(stage.left, y + 56.0 * rule_p));
-    frame.stroke(
-        &rule,
-        iced::widget::canvas::Stroke::default().with_width(1.0).with_color(color(theme.primary, 0.72 * rule_p)),
-    );
-    y += 56.0 + 12.0;
-    let title = crate::clamp_lines(title, stage.title_px, SEMI, stage.text_width, 2);
-    text_at(
-        frame,
-        &title,
-        Point::new(stage.left - 40.0 * (1.0 - title_p), y),
-        stage.title_px,
-        SEMI,
-        color(theme.primary, title_p),
-        stage.text_width,
-    );
-    y += stage.title_px * 1.06 * 2.0;
-    let album = album.to_uppercase();
-    text_at(
-        frame,
-        &album,
-        Point::new(stage.left, y),
-        stage.album_px,
-        iced::Font::DEFAULT,
-        color(theme.secondary, 0.84 * title_p),
-        stage.text_width,
-    );
-    y += stage.album_px + 18.0;
-    stage_lyrics(scene, cache, frame, &stage, y, rail_p);
-    if values.flag(manifest, "showDescription") {
-        capsule(frame, scene, Point::new(stage.left, size.height - 72.0), desc_p);
-    }
-    if let Some(rect) = stage.portrait {
-        draw_portrait(frame, scene, rect, portrait, portrait_p, values.choice(manifest, "portraitStyle") == "square");
-        if values.flag(manifest, "showPortraitDragHanger")
-            && let Some(hanger) = stage.hanger
-        {
-            if cache.editing {
-                draw_range(frame, scene, rect, shift);
-                draw_reset(frame, scene, reset_button(hanger), portrait_p);
-            }
-            draw_hanger(frame, scene, hanger, cache.editing, portrait_p);
-        }
-    }
+    let square = values.choice(manifest, "portraitStyle") == "square";
+    let hanger = values.flag(manifest, "showPortraitDragHanger");
+    portrait(frame, scene, cache, &layout, place, square, hanger);
     if values.flag(manifest, "showAudioVisualization") {
-        let mode_line = values.choice(manifest, "audioStyle") == "line";
-        draw_audio(frame, stage.audio, scene, mode_line, audio_p);
+        let progress = intro(time, 0.8, 1.2);
+        let rect = Rectangle { y: layout.audio.y + 15.0 * (1.0 - progress), ..layout.audio };
+        draw_audio(frame, rect, scene, values.choice(manifest, "audioStyle") == "line", progress);
     }
 }
 
-impl Cache {
-    /// Live shift while editing or until a just-saved value lands. Otherwise the stored offset.
-    fn resolve(&mut self, values: &crate::tuning::Values) -> f32 {
-        let saved = tuning::offset(values);
-        if self.pending && self.live_offset.is_some_and(|live| (live - saved).abs() < 0.5) {
-            self.pending = false;
-            self.live_offset = None;
-            return saved;
+/// Artist (italic), the fading rule, the title and the album (`VisualizerMonet.tsx` 236-302).
+fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Layout, place: Place) {
+    let theme = scene.theme;
+    let time = scene.time;
+    let artist_p = intro(time, 0.15, 1.2);
+    if artist_p > 0.0 {
+        let label = if scene.artist.trim().is_empty() { "Monet" } else { scene.artist.trim() };
+        let ink = color(theme.primary, 0.96);
+        let density = (place.scale * 2.0).clamp(1.0, 3.0);
+        let key = (
+            label.to_owned(),
+            layout.artist_px.to_bits(),
+            ink.into_rgba8(),
+            density.to_bits(),
+            layout.header_width.to_bits(),
+        );
+        let fresh = cache.artist.as_ref().is_none_or(|(held, _)| *held != key);
+        if fresh {
+            let shown = truncate(label, layout.artist_px, ITALIC, layout.header_width);
+            let raster =
+                text::raster_italic(&shown, layout.artist_px, layout.artist.height, iced::Font::DEFAULT, ink, density);
+            if let Some(raster) = raster.as_ref().filter(|raster| raster.missing > 0) {
+                tracing::warn!(missing = raster.missing, "monet artist has glyphs no font covers");
+            }
+            cache.artist = Some((key, raster));
         }
-        if self.editing || self.pending {
-            self.live_offset.unwrap_or(saved)
-        } else {
-            self.live_offset = None;
-            saved
+        if let Some((_, Some(raster))) = &cache.artist {
+            let at = Point::new(
+                layout.artist.x - 30.0 * (1.0 - artist_p) - raster.left,
+                layout.artist.y - 10.0 * (1.0 - artist_p),
+            );
+            let bounds = Rectangle::new(at, Size::new(raster.width, raster.height));
+            place.clip(
+                frame,
+                Rectangle { x: layout.artist.x - 30.0, width: layout.header_width + 30.0, ..bounds },
+                |inner| {
+                    inner.draw_image(bounds, canvas::Image::new(raster.handle.clone()).opacity(artist_p));
+                },
+            );
         }
     }
-}
-
-/// Hanger: a click enters edit mode, a held drag moves the portrait, the next click stores the offset.
-pub fn interact(
-    scene: &Scene<'_>,
-    cache: &mut Cache,
-    size: Size,
-    cursor: Option<Point>,
-    pressed: Option<bool>,
-) -> bool {
-    let manifest = tuning::manifest();
-    if !scene.tuning.flag(manifest, "showPortraitDragHanger") {
-        cache.editing = false;
-        cache.down = false;
-        return false;
+    let rule_p = intro(time, 0.5, 1.5);
+    if rule_p > 0.0 {
+        let rule = layout.rule;
+        let length = rule.height * rule_p;
+        let fill = gradient::Linear::new(rule.position(), Point::new(rule.x, rule.y + length))
+            .add_stop(0.0, color(theme.primary, 0.72))
+            .add_stop(1.0, color(theme.primary, 0.0));
+        frame.fill_rectangle(rule.position(), Size::new(rule.width, length), Fill::from(fill));
     }
-    let saved = cache.resolve(&scene.tuning);
-    let stage = stage(
-        size,
-        scene.tuning.number(manifest, "fontScale") * scene.font_scale,
-        scene.tuning.choice(manifest, "portraitStyle") == "square",
-        saved,
-    );
-    let Some(hanger) = stage.hanger else { return false };
-    match pressed {
-        Some(true) => press(cache, hanger, cursor),
-        Some(false) => release(cache, saved),
-        None => drag(cache, cursor, saved),
-    }
-}
-
-fn press(cache: &mut Cache, hanger: Rectangle, cursor: Option<Point>) -> bool {
-    let Some(at) = cursor else { return false };
-    if cache.editing && reset_button(hanger).contains(at) {
-        cache.live_offset = Some(0.0);
-        cache.down = false;
-        cache.grab = None;
-        cache.moved = false;
-        return true;
-    }
-    if !hanger.contains(at) {
-        return false;
-    }
-    cache.down = true;
-    cache.moved = false;
-    if cache.editing {
-        cache.grab = Some(at.x);
-    }
-    true
-}
-
-fn drag(cache: &mut Cache, cursor: Option<Point>, saved: f32) -> bool {
-    if !cache.editing || !cache.down {
-        return false;
-    }
-    let (Some(at), Some(grab)) = (cursor, cache.grab) else { return false };
-    let delta = at.x - grab;
-    if !cache.moved && delta.abs() <= 3.0 {
-        return false;
-    }
-    cache.moved = true;
-    let next = (cache.live_offset.unwrap_or(saved) + delta).clamp(-150.0, 0.0);
-    cache.grab = Some(at.x);
-    cache.live_offset = Some(next);
-    true
-}
-
-fn release(cache: &mut Cache, saved: f32) -> bool {
-    let down = cache.down;
-    let moved = cache.moved;
-    cache.down = false;
-    cache.grab = None;
-    cache.moved = false;
-    if !down || moved {
-        return false;
-    }
-    if cache.editing {
-        let offset = cache.live_offset.unwrap_or(saved);
-        cache.live_offset = Some(offset);
-        cache.pending = true;
-        cache.editing = false;
-        remember(offset);
-    } else {
-        cache.editing = true;
-    }
-    true
-}
-
-fn reset_button(hanger: Rectangle) -> Rectangle {
-    Rectangle { x: hanger.x - 8.0, y: hanger.y - 30.0, width: 22.0, height: 22.0 }
-}
-
-fn remember(offset: f32) {
-    if let Ok(mut slot) = PENDING.lock() {
-        *slot = Some(offset);
-    }
-}
-
-static PENDING: std::sync::Mutex<Option<f32>> = std::sync::Mutex::new(None);
-
-pub fn take_offset() -> Option<f32> {
-    PENDING.lock().ok().and_then(|mut slot| slot.take())
-}
-
-fn stage(size: Size, font_scale: f32, square: bool, offset: f32) -> Stage {
-    let large = motion::large_screen(size.width);
-    let extra = font_scale * large;
-    let active_px = motion::clamp_font(1.34, 2.75, 2.28, size.width, extra);
-    let show_portrait = size.width >= 768.0;
-    let portrait_w = (size.width * 0.26).clamp(210.0, 380.0 * large);
-    let portrait_h = if square { portrait_w } else { portrait_w / 0.74 };
-    let column = (size.width * 0.28).clamp(220.0, 430.0 * large);
-    let left = if size.width >= 1024.0 { 56.0 } else { 32.0 };
-    let text_width =
-        if show_portrait { (size.width - column - left * 2.0).max(180.0) } else { size.width - left * 2.0 };
-    let portrait = show_portrait.then(|| {
-        let x = size.width - left - portrait_w + offset;
-        let y = (size.height - portrait_h) / 2.0;
-        Rectangle { x, y, width: portrait_w, height: portrait_h }
-    });
-    let hanger =
-        portrait.map(|rect| Rectangle { x: rect.x + rect.width - 44.0, y: rect.y - 12.0, width: 12.0, height: 56.0 });
-    Stage {
-        left,
-        text_width,
-        portrait,
-        hanger,
-        audio: Rectangle { x: left, y: size.height - 48.0, width: (size.width * 0.55).min(450.0), height: 40.0 },
-        active_px,
-        inactive_px: motion::clamp_font(1.08, 2.0, 1.48, size.width, extra),
-        translation_px: motion::clamp_font(0.94, 1.28, 1.14, size.width, extra),
-        title_px: motion::clamp_font(1.45, 3.3, 2.8 * large, size.width, 1.0),
-        artist_px: motion::clamp_font(1.0, 1.8, 1.8 * large, size.width, 1.0),
-        album_px: 14.0 * large,
-    }
-}
-
-fn stage_lyrics(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, stage: &Stage, top: f32, progress: f32) {
-    let lines = &scene.lyrics.lines;
-    let active = active_line(lines, scene.time).or_else(|| scene.lyrics.line_at(scene.time));
-    let anchor = active.unwrap_or(0);
-    let start = anchor.saturating_sub(2);
-    let end = (anchor + 2).min(lines.len().saturating_sub(1));
-    if lines.is_empty() || end < start {
+    let title_p = intro(time, 0.3, 1.3);
+    if title_p <= 0.0 {
         return;
     }
-    let mut y = top + 20.0 * (1.0 - progress);
-    for (index, line) in lines.iter().enumerate().take(end + 1).skip(start) {
-        let status = if Some(index) == active {
-            "active"
-        } else if active.is_some_and(|active| index < active) {
-            "passed"
-        } else {
-            "waiting"
+    let dx = -40.0 * (1.0 - title_p);
+    let title = if scene.title.trim().is_empty() { "Monet" } else { scene.title.trim() };
+    let rows = title_rows(title, layout.title_px, layout.header_width);
+    let line_height = layout.title_px * 1.06;
+    let shadow = ink::blur_offsets(18.0, (0.0, 14.0));
+    let shade = color(theme.background, ink::split_alpha(0.28 * title_p, shadow.len()));
+    for (index, row) in rows.iter().enumerate() {
+        let pen = ink::Line {
+            content: row,
+            at: Point::new(layout.title.x + dx, layout.title.y + index as f32 * line_height),
+            px: layout.title_px,
+            line_height,
+            font: SEMIBOLD,
         };
-        let distance = index.abs_diff(anchor).max(1);
-        let (alpha, scale) = tone(status, distance);
-        let elapsed = scene.time - line.start;
-        let settle =
-            motion::spring(14.0, 0.0, elapsed, motion::SCROLL_STIFFNESS, motion::SCROLL_DAMPING, motion::SCROLL_MASS)
-                as f32;
-        let shown = motion::spring(
-            scale as f64,
-            if status == "active" { 1.0 } else { scale as f64 },
-            elapsed,
-            motion::SCALE_STIFFNESS,
-            motion::SCALE_DAMPING,
-            motion::SCALE_MASS,
-        ) as f32;
-        let px = if status == "active" { stage.active_px } else { stage.inactive_px * shown };
-        let laid = cache.lines.get_or_insert(line, Size::new(stage.text_width, px), scene.font_scale, 0, || {
-            std::rc::Rc::new(LineBox {
-                text: line.text.clone(),
-                width: measure(&line.text, px, BOLD, stage.text_width).width,
-            })
-        });
-        if laid.text.is_empty() && laid.width == 0.0 {
-            continue;
-        }
-        draw_line(
-            frame,
-            scene,
-            line,
-            Point::new(stage.left, y + settle),
-            px,
-            color(scene.theme.primary, alpha * progress),
-            status == "active",
-        );
-        y += px * 1.25;
-        if status == "active"
-            && let Some(translation) = line.translation.as_deref().filter(|text| !text.is_empty())
-        {
-            text_at(
-                frame,
-                translation,
-                Point::new(stage.left, y),
-                stage.translation_px,
-                iced::Font::DEFAULT,
-                color(scene.theme.secondary, 0.7 * progress),
-                stage.text_width,
-            );
-            y += stage.translation_px * 1.3;
+        let band = Rectangle {
+            x: 0.0,
+            y: pen.at.y - 60.0,
+            width: frame.width() / place.scale.max(1.0e-3) + 200.0,
+            height: line_height + 120.0,
+        };
+        ink::masked_copies(frame, place, pen, shade, band, &ink::opaque, &shadow);
+        ink::masked(frame, place, pen, color(theme.primary, title_p), band, &ink::opaque);
+    }
+    let album = if scene.album.trim().is_empty() { "Monet".to_owned() } else { scene.album.trim().to_uppercase() };
+    let album = truncate(&album, 14.0, iced::Font::DEFAULT, layout.header_width);
+    put_text(
+        frame,
+        &album,
+        Point::new(layout.album.x + dx, layout.album.y),
+        14.0,
+        20.0,
+        iced::Font::DEFAULT,
+        color(theme.secondary, 0.84 * title_p),
+    );
+}
+
+/// At most two rows of the title, the second cut with an ellipsis (`line-clamp-2`, `overflow-wrap: anywhere`).
+fn title_rows(title: &str, px: f32, width: f32) -> Vec<String> {
+    let rows = text::wrap(title, px, SEMIBOLD, width);
+    let piece = |row: &text::Row| title.get(row.start..row.end).unwrap_or_default().trim_end().to_owned();
+    match rows.as_slice() {
+        [] => vec![title.to_owned()],
+        [one] => vec![piece(one)],
+        [first, second] => vec![piece(first), piece(second)],
+        [first, second, ..] => {
+            vec![
+                piece(first),
+                truncate(&format!("{}\u{2026}", title.get(second.start..).unwrap_or_default()), px, SEMIBOLD, width),
+            ]
         }
     }
 }
 
-fn tone(status: &str, distance: usize) -> (f32, f32) {
-    if status == "active" {
-        return (1.0, 1.0);
+/// `text` cut with an ellipsis to fit `width` on one line, like `truncate`.
+fn truncate(content: &str, px: f32, font: iced::Font, width: f32) -> String {
+    if text::shape(content, px, font).width <= width + 0.5 {
+        return content.to_owned();
     }
-    let distance = distance as f32;
-    let waiting = status == "waiting";
-    let alpha = if waiting {
-        (0.72 - (distance - 1.0) * 0.18).clamp(0.36, 0.72)
-    } else {
-        (0.52 - (distance - 1.0) * 0.12).clamp(0.28, 0.52)
-    };
-    let scale = (0.72 * 0.9_f32.powf(distance - 1.0)).clamp(0.68, 0.92);
-    (alpha, scale)
-}
-
-fn draw_line(frame: &mut Frame, scene: &Scene<'_>, line: &Line, at: Point, px: f32, ink: iced::Color, active: bool) {
-    let hints = RenderHints::of(line);
-    let glow = if active { motion::glow(scene.time, line.start, line.end, hints.render_end) } else { 0.0 };
-    let (sung, rest) = split_sung(line, scene.time);
-    if glow > 0.0 && !sung.is_empty() {
-        text_at(frame, &sung, at, px, BOLD, color(scene.theme.accent, glow.min(1.0)), f32::INFINITY);
-        let width = measure(&sung, px, BOLD, f32::INFINITY).width;
-        text_at(frame, &rest, Point::new(at.x + width, at.y), px, BOLD, ink, f32::INFINITY);
-    } else {
-        text_at(frame, &line.text, at, px, if active { BOLD } else { iced::Font::DEFAULT }, ink, f32::INFINITY);
-    }
-}
-
-fn split_sung(line: &Line, time: f64) -> (String, String) {
-    if line.words.is_empty() {
-        let count = line.text.chars().count();
-        let n = if line.end <= line.start {
-            0
+    let ends: Vec<usize> = content.char_indices().map(|(at, _)| at).collect();
+    let cut = |count: usize| format!("{}\u{2026}", content[..ends[count]].trim_end());
+    let (mut fitting, mut overflowing) = (0, ends.len());
+    while overflowing - fitting > 1 {
+        let middle = (fitting + overflowing) / 2;
+        if text::shape(&cut(middle), px, font).width <= width + 0.5 {
+            fitting = middle;
         } else {
-            ((time - line.start) / (line.end - line.start) * count as f64).clamp(0.0, count as f64) as usize
-        };
-        let cut = line.text.chars().take(n).collect::<String>();
-        let rest = line.text.chars().skip(n).collect::<String>();
-        return (cut, rest);
+            overflowing = middle;
+        }
     }
-    let mut sung = String::new();
-    let mut rest = String::new();
-    let mut pending = false;
-    for word in &line.words {
-        let target = if pending || time < word.start {
-            pending = true;
-            &mut rest
-        } else if time >= word.end {
-            &mut sung
-        } else {
-            let count = word.text.chars().count().max(1);
-            let n = (((time - word.start) / (word.end - word.start).max(0.001)) * count as f64) as usize;
-            let mut chars = word.text.chars();
-            sung.extend(chars.by_ref().take(n));
-            rest.extend(chars);
-            pending = true;
-            continue;
-        };
-        target.push_str(&word.text);
-    }
-    (sung, rest)
+    cut(fitting)
 }
 
-fn text_at(frame: &mut Frame, content: &str, at: Point, size: f32, font: iced::Font, color: iced::Color, width: f32) {
-    if content.is_empty() || size <= 0.0 {
+fn put_text(frame: &mut Frame, content: &str, at: Point, px: f32, line_height: f32, font: iced::Font, ink: Color) {
+    if content.is_empty() || ink.a <= 0.0 {
         return;
     }
     frame.fill_text(Text {
         content: content.to_owned(),
         position: at,
-        color,
-        size: size.into(),
+        color: ink,
+        size: px.into(),
+        line_height: iced::widget::text::LineHeight::Absolute(line_height.into()),
         font,
         align_x: iced::widget::text::Alignment::Left,
         align_y: iced::alignment::Vertical::Top,
         shaping: iced::widget::text::Shaping::Advanced,
-        max_width: width,
-        ..Text::default()
+        max_width: f32::INFINITY,
     });
 }
 
-fn capsule(frame: &mut Frame, scene: &Scene<'_>, at: Point, progress: f32) {
-    let label = scene.theme.name.as_ref();
-    let width = measure(label, 12.0, iced::Font::DEFAULT, 280.0).width + 36.0;
-    let rect = Rectangle { x: at.x, y: at.y, width, height: 28.0 };
-    frame.fill(
-        &Path::rounded_rectangle(rect.position(), rect.size(), Radius::from(14.0)),
-        color(scene.theme.background, 0.18 * progress),
-    );
-    frame.fill(&Path::circle(Point::new(rect.x + 16.0, rect.y + 14.0), 5.0), color(scene.theme.accent, progress));
-    text_at(
-        frame,
-        label,
-        Point::new(rect.x + 28.0, rect.y + 7.0),
-        12.0,
-        iced::Font::DEFAULT,
-        color(scene.theme.primary, 0.9 * progress),
-        width,
-    );
+/// The capsule: accent dot and the theme's description or name (`VisualizerMonet.tsx` 333-353).
+fn description(frame: &mut Frame, scene: &Scene<'_>, layout: &Layout, rect: Rectangle, progress: f32) {
+    if progress <= 0.0 {
+        return;
+    }
+    let theme = scene.theme;
+    let origin = layout.description.center();
+    let scale = 0.9 + 0.1 * progress;
+    frame.with_save(|frame| {
+        frame.translate(Vector::new(origin.x, origin.y + 10.0 * (1.0 - progress)));
+        frame.scale(scale);
+        frame.translate(Vector::new(-origin.x, -origin.y));
+        let pill = Path::rounded_rectangle(rect.position(), rect.size(), Radius::from(rect.height / 2.0));
+        frame.fill(&pill, color(theme.background, 0.18 * progress));
+        let edge = Rectangle { x: rect.x + 0.5, y: rect.y + 0.5, width: rect.width - 1.0, height: rect.height - 1.0 };
+        frame.stroke(
+            &Path::rounded_rectangle(edge.position(), edge.size(), Radius::from(edge.height / 2.0)),
+            Stroke::default().with_width(1.0).with_color(color(theme.primary, 0.16 * progress)),
+        );
+        let middle = rect.y + rect.height / 2.0;
+        frame.fill(&Path::circle(Point::new(rect.x + 1.0 + 16.0 + 5.0, middle), 5.0), color(theme.accent, progress));
+        let label = layout::capsule_label(scene);
+        put_text(
+            frame,
+            &label,
+            Point::new(rect.x + 1.0 + 16.0 + 10.0 + 12.0, middle - 8.0),
+            12.0,
+            16.0,
+            iced::Font::DEFAULT,
+            color(theme.primary, 0.9 * progress),
+        );
+    });
 }
 
-fn draw_portrait(
+/// The portrait frame, the hanger and, while editing, the drag range with its reset button.
+fn portrait(
     frame: &mut Frame,
     scene: &Scene<'_>,
-    rect: Rectangle,
-    image: Option<&Handle>,
-    progress: f32,
+    cache: &mut Cache,
+    layout: &Layout,
+    place: Place,
     square: bool,
+    hanger: bool,
 ) {
-    let radius = if square { 32.0 } else { 28.0 };
-    let plate = if square {
-        rect
-    } else {
-        Rectangle { x: rect.x + 6.0, y: rect.y + 6.0, width: rect.width - 12.0, height: rect.height - 12.0 }
+    let (Some(column), Some(rect), Some(wrapper)) = (layout.column, layout.portrait, layout.wrapper) else { return };
+    let time = scene.time;
+    let progress = intro(time, 0.25, 1.6);
+    if progress <= 0.0 {
+        return;
+    }
+    let theme = scene.theme;
+    let grow = 0.95 + 0.05 * progress;
+    let center = column.center();
+    let shift = Vector::new(50.0 * (1.0 - progress), 0.0);
+    let moved = |r: Rectangle| Rectangle {
+        x: center.x + (r.x - center.x) * grow + shift.x,
+        y: center.y + (r.y - center.y) * grow,
+        width: r.width * grow,
+        height: r.height * grow,
     };
-    frame.with_save(|frame| {
-        let dx = 50.0 * (1.0 - progress);
-        frame.translate(Vector::new(dx, 0.0));
-        if scene.theme.intensity == AnimationIntensity::Chaotic {
-            let (sx, sy, degrees) = motion::portrait_sway(scene.time);
-            let center = Point::new(plate.x + plate.width / 2.0, plate.y + plate.height / 2.0);
-            frame.translate(Vector::new(center.x + sx, center.y + sy));
-            frame.rotate(degrees.to_radians());
-            frame.translate(Vector::new(-center.x, -center.y));
-        }
-        frame.fill(
-            &Path::rounded_rectangle(plate.position(), plate.size(), Radius::from(radius)),
-            color(scene.theme.primary, 0.08 * progress),
-        );
-        if let Some(image) = image {
-            frame.draw_image(plate, iced::widget::canvas::Image::new(image.clone()).opacity(progress));
-        }
+    let sway = if theme.intensity == AnimationIntensity::Chaotic { motion::portrait_sway(time) } else { (0.0, 0.0) };
+    let swayed = |r: Rectangle| Rectangle { x: r.x + sway.0, y: r.y + sway.1, ..moved(r) };
+    let box_ = swayed(rect);
+    if cache.pin.editing.is_some() {
+        let left = if square { wrapper.x - wrapper.width * 0.35135 } else { wrapper.x } - 150.0;
+        let range = moved(Rectangle {
+            x: left,
+            y: wrapper.y - 12.0,
+            width: wrapper.x + wrapper.width - left,
+            height: wrapper.height + 24.0,
+        });
+        draw_range(frame, scene, range, grow);
+    }
+    if square {
+        let radius = 32.0 * grow;
+        ink::box_shadow(frame, box_, radius, 36.0 * grow, 80.0 * grow, color(theme.background, 0.45 * progress));
+        ink::box_shadow(frame, box_, radius, 20.0 * grow, 42.0 * grow, color(theme.accent, 0.22 * progress));
+        let ring = Rectangle { x: box_.x - 0.5, y: box_.y - 0.5, width: box_.width + 1.0, height: box_.height + 1.0 };
         frame.stroke(
-            &Path::rounded_rectangle(plate.position(), plate.size(), Radius::from(radius)),
-            iced::widget::canvas::Stroke::default()
-                .with_width(1.0)
-                .with_color(color(scene.theme.primary, 0.1 * progress)),
+            &Path::rounded_rectangle(ring.position(), ring.size(), Radius::from(radius + 0.5)),
+            Stroke::default().with_width(1.0).with_color(color(theme.primary, 0.06 * progress)),
         );
-    });
-}
-
-fn draw_range(frame: &mut Frame, scene: &Scene<'_>, rect: Rectangle, shift: f32) {
-    let guide = Rectangle {
-        x: rect.x - shift - 150.0,
-        y: rect.y - 12.0,
-        width: rect.width + 150.0,
-        height: rect.height + 24.0,
-    };
-    frame.stroke(
-        &Path::rounded_rectangle(guide.position(), guide.size(), Radius::from(28.0)),
-        iced::widget::canvas::Stroke::default().with_width(1.5).with_color(color(scene.theme.primary, 0.24)),
-    );
-}
-
-fn draw_reset(frame: &mut Frame, scene: &Scene<'_>, rect: Rectangle, progress: f32) {
-    let center = Point::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
-    frame.fill(&Path::circle(center, rect.width / 2.0), color(scene.theme.background, 0.86 * progress));
-    frame.stroke(
-        &Path::circle(center, rect.width / 2.0 - 1.0),
-        iced::widget::canvas::Stroke::default().with_width(1.5).with_color(color(scene.theme.primary, 0.7 * progress)),
-    );
-}
-
-fn draw_hanger(frame: &mut Frame, scene: &Scene<'_>, rect: Rectangle, editing: bool, progress: f32) {
-    let ink = if editing { scene.theme.accent } else { scene.theme.primary };
-    frame.fill(
-        &Path::rounded_rectangle(rect.position(), rect.size(), Radius::from(6.0)),
-        color(scene.theme.background, 0.86 * progress),
-    );
-    frame.stroke(
-        &Path::rounded_rectangle(rect.position(), rect.size(), Radius::from(6.0)),
-        iced::widget::canvas::Stroke::default()
-            .with_width(1.5)
-            .with_color(color(ink, if editing { 0.8 } else { 0.2 } * progress)),
-    );
-}
-
-fn dots(frame: &mut Frame, size: Size, theme: &folia_core::Theme, alpha: f32) {
-    // Themes carry no lyric icons, so the floating decor is a few soft dots in the secondary colour.
-    for i in 0..6 {
-        let x = ((i * 127 + 43) % 80 + 10) as f32 / 100.0 * size.width;
-        let y = ((i * 211 + 17) % 80 + 5) as f32 / 100.0 * size.height;
-        let radius = 3.0 + (i % 3) as f32;
+        plate(frame, scene, place, box_, radius, progress);
+    } else {
+        let radius = 34.4 * grow;
+        ink::box_shadow(frame, box_, radius, 24.0 * grow, 60.0 * grow, color(theme.background, 0.35 * progress));
         frame.fill(
-            &Path::circle(Point::new(x, y), radius),
-            color(theme.secondary, (0.06 + (i % 4) as f32 * 0.02) * alpha),
+            &Path::rounded_rectangle(box_.position(), box_.size(), Radius::from(radius)),
+            color(theme.background, 0.15 * progress),
         );
+        let edge = Rectangle { x: box_.x + 0.5, y: box_.y + 0.5, width: box_.width - 1.0, height: box_.height - 1.0 };
+        frame.stroke(
+            &Path::rounded_rectangle(edge.position(), edge.size(), Radius::from(radius - 0.5)),
+            Stroke::default().with_width(1.0).with_color(color(theme.primary, 0.1 * progress)),
+        );
+        let inset = 7.0 * grow;
+        let inner = Rectangle {
+            x: box_.x + inset,
+            y: box_.y + inset,
+            width: box_.width - inset * 2.0,
+            height: box_.height - inset * 2.0,
+        };
+        plate(frame, scene, place, inner, 29.6 * grow, progress);
+    }
+    if hanger && let Some(pin) = layout.hanger {
+        draw_hanger(frame, scene, cache, swayed(pin), progress, grow);
+    }
+}
+
+/// `primary 0.08` under the cover, and the cover itself `object-cover`, cut to the rounded corners.
+fn plate(frame: &mut Frame, scene: &Scene<'_>, place: Place, rect: Rectangle, radius: f32, progress: f32) {
+    frame.fill(
+        &Path::rounded_rectangle(rect.position(), rect.size(), Radius::from(radius)),
+        color(scene.theme.primary, 0.08 * progress),
+    );
+    let Some(handle) = scene.portrait.as_ref() else { return };
+    let (width, height) = match handle {
+        Handle::Rgba { width, height, .. } => (*width as f32, *height as f32),
+        _ => (1.0, 1.0),
+    };
+    let aspect = width / height.max(1.0);
+    let cover = if aspect > rect.width / rect.height.max(1.0) {
+        let w = rect.height * aspect;
+        Rectangle { x: rect.x + (rect.width - w) / 2.0, width: w, ..rect }
+    } else {
+        let h = rect.width / aspect.max(1.0e-3);
+        Rectangle { y: rect.y + (rect.height - h) / 2.0, height: h, ..rect }
+    };
+    let mut image = canvas::Image::new(handle.clone()).opacity(progress);
+    image.border_radius = Radius::from(radius);
+    place.clip(frame, rect, |inner| inner.draw_image(cover, image));
+}
+
+/// The dashed drag range and its reset button (`VisualizerMonet.tsx` 377-408).
+fn draw_range(frame: &mut Frame, scene: &Scene<'_>, range: Rectangle, grow: f32) {
+    let theme = scene.theme;
+    let edge = Rectangle { x: range.x + 1.0, y: range.y + 1.0, width: range.width - 2.0, height: range.height - 2.0 };
+    frame.stroke(
+        &Path::rounded_rectangle(edge.position(), edge.size(), Radius::from(39.0 * grow)),
+        Stroke { line_dash: canvas::LineDash { segments: &[6.0, 6.0], offset: 0 }, ..Stroke::default() }
+            .with_width(2.0)
+            .with_color(color(theme.primary, 0.24)),
+    );
+    let button = reset_button(range);
+    let center = button.center();
+    ink::box_shadow(frame, button, button.width / 2.0, 4.0, 12.0, Color { a: 0.12, ..Color::BLACK });
+    frame.fill(&Path::circle(center, button.width / 2.0), color(theme.background, 0.86));
+    frame.stroke(
+        &Path::circle(center, button.width / 2.0 - 0.5),
+        Stroke::default().with_width(1.0).with_color(color(theme.primary, 0.16)),
+    );
+    rotate_ccw(frame, center, color(theme.primary, 1.0));
+}
+
+/// Lucide `rotate-ccw` at 14px: `M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8` and `M3 3v5h5`.
+fn rotate_ccw(frame: &mut Frame, center: Point, ink: Color) {
+    let unit = 14.0 / 24.0;
+    let at = |x: f32, y: f32| Point::new(center.x + (x - 12.0) * unit, center.y + (y - 12.0) * unit);
+    let arc = Path::new(|path| {
+        path.arc(canvas::path::Arc {
+            center: at(12.0, 12.0),
+            radius: 9.0 * unit,
+            start_angle: iced::Radians(std::f32::consts::PI),
+            end_angle: iced::Radians(std::f32::consts::PI * 2.5),
+        });
+        path.move_to(at(12.0, 3.0));
+        path.quadratic_curve_to(at(8.1, 3.1), at(5.26, 5.74));
+        path.line_to(at(3.0, 8.0));
+        path.move_to(at(3.0, 3.0));
+        path.line_to(at(3.0, 8.0));
+        path.line_to(at(8.0, 8.0));
+    });
+    frame.stroke(&arc, Stroke::default().with_width(2.0 * unit).with_color(ink).with_line_cap(canvas::LineCap::Round));
+}
+
+/// The 12×56 hanger: a pulsing accent edge while editing, a faint one on hover (`VisualizerMonet.tsx` 457-513).
+/// Drawn as an image: canvas meshes sit under images, and the hanger hangs over the cover.
+fn draw_hanger(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, rect: Rectangle, progress: f32, grow: f32) {
+    let theme = scene.theme;
+    let pulse = cache.pin.editing.map(|since| {
+        let elapsed = cache.now.map_or(0.0, |now| now.saturating_duration_since(since).as_secs_f64());
+        let level =
+            crate::keyframes(&[0.0, 1.0, 0.0], &[0.0, 0.5, 1.0], elapsed % 1.5, 1.5, crate::Ease::IN_OUT) as f32;
+        (level * 16.0).round() / 16.0
+    });
+    let look = match pulse {
+        Some(level) => Hanger {
+            edge: Some(color(theme.accent, 0.3 + 0.7 * level)),
+            glow: Some((2.0 + 8.0 * level, color(theme.accent, 0.2 + 0.45 * level))),
+        },
+        None if cache.pin.hover => Hanger { edge: Some(color(theme.primary, 0.36)), glow: None },
+        None => Hanger { edge: None, glow: None },
+    };
+    let key = (look.key(), theme.background);
+    let handle = match cache.hangers.iter().find(|(held, _)| *held == key) {
+        Some((_, handle)) => handle.clone(),
+        None => {
+            let handle = look.paint(color(theme.background, 0.86));
+            if cache.hangers.len() >= 24 {
+                cache.hangers.remove(0);
+            }
+            cache.hangers.push((key, handle.clone()));
+            handle
+        }
+    };
+    let margin = HANGER_MARGIN * grow;
+    let bounds = Rectangle {
+        x: rect.x - margin,
+        y: rect.y - margin,
+        width: rect.width + margin * 2.0,
+        height: rect.height + margin * 2.0,
+    };
+    frame.draw_image(bounds, canvas::Image::new(handle).opacity(progress));
+}
+
+const HANGER_MARGIN: f32 = 40.0;
+const HANGER_DENSITY: f32 = 2.0;
+
+/// The hanger's look: its border colour and, while editing, the accent halo.
+struct Hanger {
+    edge: Option<Color>,
+    glow: Option<(f32, Color)>,
+}
+
+impl Hanger {
+    fn key(&self) -> [u32; 6] {
+        let pack = |color: Option<Color>| color.map_or(0, |color| u32::from_le_bytes(color.into_rgba8()));
+        [
+            pack(self.edge),
+            self.glow.map_or(0, |(blur, _)| blur.to_bits()),
+            pack(self.glow.map(|(_, color)| color)),
+            0,
+            0,
+            0,
+        ]
+    }
+
+    /// The pill with `0 8px 18px #0000003d`, the halo, the `fill` and a 1.5px edge, straight-alpha RGBA.
+    fn paint(&self, fill: Color) -> Handle {
+        let (w, h) = (12.0 + HANGER_MARGIN * 2.0, 56.0 + HANGER_MARGIN * 2.0);
+        let (pw, ph) = ((w * HANGER_DENSITY) as u32, (h * HANGER_DENSITY) as u32);
+        let pill = Rectangle { x: HANGER_MARGIN, y: HANGER_MARGIN, width: 12.0, height: 56.0 };
+        let blurred = |x: f32, y: f32, rect: Rectangle, sigma: f32| {
+            let axis = |at: f32, from: f32, to: f32| ink::edge((from - at) / sigma) - ink::edge((to - at) / sigma);
+            axis(x, rect.x, rect.x + rect.width) * axis(y, rect.y, rect.y + rect.height)
+        };
+        let mut pixels = Vec::with_capacity((pw * ph * 4) as usize);
+        for row in 0..ph {
+            for col in 0..pw {
+                let (x, y) = ((col as f32 + 0.5) / HANGER_DENSITY, (row as f32 + 0.5) / HANGER_DENSITY);
+                let shadow = blurred(x, y, Rectangle { y: pill.y + 8.0, ..pill }, 9.0) * 0.24;
+                let mut out = [0.0_f32; 4];
+                over(&mut out, Color::BLACK, shadow);
+                if let Some((blur, halo)) = self.glow {
+                    over(&mut out, halo, blurred(x, y, pill, blur / 2.0) * halo.a);
+                }
+                let distance = rounded_distance(x, y, pill, 6.0);
+                over(&mut out, fill, (0.5 - distance).clamp(0.0, 1.0) * fill.a);
+                if let Some(edge) = self.edge {
+                    let ring = (0.5 - distance).clamp(0.0, 1.0) * (distance + 1.5 + 0.5).clamp(0.0, 1.0);
+                    over(&mut out, edge, ring * edge.a);
+                }
+                let alpha = out[3];
+                let channel =
+                    |value: f32| if alpha > 0.0 { (value / alpha * 255.0).round().clamp(0.0, 255.0) as u8 } else { 0 };
+                pixels.extend([channel(out[0]), channel(out[1]), channel(out[2]), (alpha * 255.0).round() as u8]);
+            }
+        }
+        Handle::from_rgba(pw, ph, pixels)
+    }
+}
+
+/// Premultiplied source-over of `color` at coverage `alpha`.
+fn over(out: &mut [f32; 4], color: Color, alpha: f32) {
+    let keep = 1.0 - alpha;
+    out[0] = color.r * alpha + out[0] * keep;
+    out[1] = color.g * alpha + out[1] * keep;
+    out[2] = color.b * alpha + out[2] * keep;
+    out[3] = alpha + out[3] * keep;
+}
+
+/// Signed distance from `(x, y)` to a rounded rectangle, negative inside.
+fn rounded_distance(x: f32, y: f32, rect: Rectangle, radius: f32) -> f32 {
+    let (cx, cy) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+    let qx = (x - cx).abs() - rect.width / 2.0 + radius;
+    let qy = (y - cy).abs() - rect.height / 2.0 + radius;
+    (qx.max(0.0).hypot(qy.max(0.0))) + qx.max(qy).min(0.0) - radius
+}
+
+fn reset_button(range: Rectangle) -> Rectangle {
+    Rectangle { x: range.x + range.width - 32.0, y: range.y - 40.0, width: 32.0, height: 32.0 }
+}
+
+fn edit_range(scene: &Scene<'_>, layout: &Layout) -> Option<Rectangle> {
+    let wrapper = layout.wrapper?;
+    let square = scene.tuning.choice(tuning::manifest(), "portraitStyle") == "square";
+    let left = if square { wrapper.x - wrapper.width * 0.35135 } else { wrapper.x } - 150.0;
+    Some(Rectangle {
+        x: left,
+        y: wrapper.y - 12.0,
+        width: wrapper.x + wrapper.width - left,
+        height: wrapper.height + 24.0,
+    })
+}
+
+/// Pointer and wheel input on a live stage. The drag preview stays in the canvas state; letting go publishes one
+/// `PortraitOffset`.
+pub fn update<Message: From<PortraitOffset>>(
+    scene: &Scene<'_>,
+    cache: &mut Cache,
+    event: &canvas::Event,
+    size: Size,
+    at: Option<Point>,
+) -> Option<canvas::Action<Message>> {
+    let manifest = tuning::manifest();
+    let saved = tuning::offset(&scene.tuning);
+    let offset = cache.pin.offset(saved);
+    let layout = layout::layout(scene, size, offset);
+    let hanger = layout.hanger.filter(|_| scene.tuning.flag(manifest, "showPortraitDragHanger"));
+    if hanger.is_none() {
+        cache.pin = Pin::default();
+    }
+    match event {
+        canvas::Event::Window(iced::window::Event::RedrawRequested(now)) => {
+            cache.now = Some(*now);
+            if cache.pin.editing.is_some() || rail::settling(&cache.rail, *now) {
+                return Some(canvas::Action::request_redraw());
+            }
+            rail::release_due(&cache.rail).map(canvas::Action::request_redraw_at)
+        }
+        canvas::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+            if !at.is_some_and(|at| rail::over(&layout, at)) {
+                return None;
+            }
+            let (lines, pixels) = match delta {
+                mouse::ScrollDelta::Lines { y, .. } => (-*y, 0.0),
+                mouse::ScrollDelta::Pixels { y, .. } => (0.0, -*y),
+            };
+            rail::wheel(&mut cache.rail, scene, lines, pixels, Instant::now())
+                .then(|| canvas::Action::request_redraw().and_capture())
+        }
+        canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            let (hanger, at) = (hanger?, at?);
+            let pin = &mut cache.pin;
+            if pin.editing.is_some()
+                && edit_range(scene, &layout).map(reset_button).is_some_and(|button| button.contains(at))
+            {
+                pin.live = Some(0.0);
+                return Some(canvas::Action::request_redraw().and_capture());
+            }
+            if !hanger.contains(at) {
+                return None;
+            }
+            pin.down = Some(Down { grab: at.x, from: offset, moved: false });
+            Some(canvas::Action::request_redraw().and_capture())
+        }
+        canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+            let pin = &mut cache.pin;
+            let hover = hanger.zip(at).is_some_and(|(hanger, at)| hanger.contains(at));
+            let hovered = hover != pin.hover;
+            pin.hover = hover;
+            match (pin.down.as_mut(), pin.editing, at) {
+                (Some(down), Some(_), Some(at)) if down.moved || (at.x - down.grab).abs() > 3.0 => {
+                    down.moved = true;
+                    pin.live = Some((down.from + at.x - down.grab).clamp(-150.0, 0.0));
+                    Some(canvas::Action::request_redraw().and_capture())
+                }
+                _ => hovered.then(canvas::Action::request_redraw),
+            }
+        }
+        canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            let pin = &mut cache.pin;
+            let down = pin.down.take()?;
+            let finish = |pin: &mut Pin| {
+                let last = pin.live.unwrap_or(saved).round();
+                if (last - saved).abs() < 0.5 {
+                    return canvas::Action::request_redraw().and_capture();
+                }
+                pin.live = Some(last);
+                pin.pending = true;
+                canvas::Action::publish(Message::from(PortraitOffset(last))).and_capture()
+            };
+            if down.moved {
+                return Some(finish(pin));
+            }
+            if pin.editing.take().is_some() {
+                return Some(finish(pin));
+            }
+            pin.editing = Some(cache.now.unwrap_or_else(Instant::now));
+            pin.live = Some(offset);
+            Some(canvas::Action::request_redraw().and_capture())
+        }
+        _ => None,
+    }
+}
+
+/// A pointer over the hanger, or its reset button while editing.
+pub fn interaction(scene: &Scene<'_>, cache: &Cache, size: Size, at: Option<Point>) -> mouse::Interaction {
+    let Some(at) = at else { return mouse::Interaction::None };
+    if !scene.tuning.flag(tuning::manifest(), "showPortraitDragHanger") {
+        return mouse::Interaction::None;
+    }
+    let saved = tuning::offset(&scene.tuning);
+    let layout = layout::layout(scene, size, cache.pin.live.unwrap_or(saved));
+    let over_reset = cache.pin.editing.is_some()
+        && edit_range(scene, &layout).map(reset_button).is_some_and(|button| button.contains(at));
+    if over_reset || layout.hanger.is_some_and(|hanger| hanger.contains(at)) {
+        mouse::Interaction::Pointer
+    } else {
+        mouse::Interaction::None
     }
 }
 
@@ -558,8 +652,7 @@ fn draw_audio(frame: &mut Frame, rect: Rectangle, scene: &Scene<'_>, line: bool,
                 let x = rect.x + t * rect.width;
                 let envelope = (t * std::f32::consts::PI).sin();
                 let val = if scene.preview { 0.12 + ((index as f32 * 0.35).sin() * 0.5 + 0.5) * 0.42 } else { 0.02 };
-                let y = y0 + rect.height - rect.height * val * envelope;
-                let point = Point::new(x, y);
+                let point = Point::new(x, y0 + rect.height - rect.height * val * envelope);
                 if index == 0 {
                     builder.move_to(point);
                 } else {
@@ -567,7 +660,7 @@ fn draw_audio(frame: &mut Frame, rect: Rectangle, scene: &Scene<'_>, line: bool,
                 }
             }
         });
-        frame.stroke(&path, iced::widget::canvas::Stroke::default().with_width(1.5).with_color(ink));
+        frame.stroke(&path, Stroke::default().with_width(1.5).with_color(ink));
         return;
     }
     let gap = rect.width / 72.0;

@@ -15,7 +15,7 @@ pub struct Foot {
 }
 
 /// `subtitle` is the translation and the next line. `foot.bottom` is how far the block sits above the window edge.
-pub fn view<'a, M: 'a>(
+pub fn view<'a, M: From<folia_visualizer::styles::monet::PortraitOffset> + 'a>(
     scene: Scene<'a>,
     i18n: &'a I18n,
     muted: Color,

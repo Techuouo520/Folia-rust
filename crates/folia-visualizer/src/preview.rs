@@ -166,3 +166,22 @@ impl<Message> canvas::Program<Message> for Frozen<'_> {
         vec![self.image.draw(renderer, target, |frame| self.scene.paint(state, frame, target))]
     }
 }
+
+/// A small picture playing its own clock, redrawn every frame and deaf to input: the live stage's hanger and wheel
+/// stay on the player and the workbench.
+pub struct Playing<'a>(pub Scene<'a>);
+
+impl<Message> canvas::Program<Message> for Playing<'_> {
+    type State = SceneState;
+
+    fn draw(
+        &self,
+        state: &SceneState,
+        renderer: &Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        self.0.render(state, renderer, bounds.size())
+    }
+}
