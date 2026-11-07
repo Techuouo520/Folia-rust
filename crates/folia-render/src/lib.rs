@@ -1,6 +1,7 @@
 // Full-window vignette, grain, and the subtitle radial glow.
 
 mod frame;
+pub mod glyphs;
 mod pipeline;
 mod plate;
 mod wash;

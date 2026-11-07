@@ -39,18 +39,15 @@ struct FrontKey {
     flags: u32,
 }
 
+/// A visible grapheme of a line and when it is sung (`glyphTimes`).
 struct Glyph {
-    word: u16,
-    char_index: u16,
-    chars: u16,
+    grapheme: u16,
     start: f32,
 }
 
 struct Trigger {
     line: u16,
-    word: u16,
-    char_index: u16,
-    chars: u16,
+    grapheme: u16,
     time: f32,
     size: f32,
     dy: f32,
@@ -61,9 +58,7 @@ struct Trigger {
 #[derive(Clone, Copy)]
 pub(super) struct BurstRef {
     pub line: usize,
-    pub word: usize,
-    pub char_index: u16,
-    pub chars: u16,
+    pub grapheme: usize,
     pub time: f32,
     pub size: f32,
     pub dy: f32,
@@ -81,6 +76,8 @@ pub(super) struct Store {
     key: Option<GeoKey>,
     front_key: Option<FrontKey>,
     burst_seed: Option<u32>,
+    /// Where the particles change layer: starfall ends at `[0]`, the line-art nodes at `[1]`, motes follow.
+    split: [u32; 2],
 }
 
 impl Store {
@@ -105,9 +102,7 @@ impl Store {
             }
             out[slot] = Some(BurstRef {
                 line: usize::from(trigger.line),
-                word: usize::from(trigger.word),
-                char_index: trigger.char_index,
-                chars: trigger.chars,
+                grapheme: usize::from(trigger.grapheme),
                 time: trigger.time,
                 size: trigger.size,
                 dy: trigger.dy,
@@ -134,16 +129,24 @@ impl Store {
         }
         self.lines.clear();
         self.particles.clear();
+        self.split = [0, 0];
         if !tuning.text_only {
             fill_stars(&mut self.particles, program, view, time, tuning);
             fill_rain(&mut self.particles, program, view, time);
-            fill_dust(&mut self.particles, program, view, time, tuning, MOTE);
+            self.split[0] = (self.particles.len() / 12) as u32;
             if tuning.line_art {
                 self.append_art(program, view, time, tuning);
             }
+            self.split[1] = (self.particles.len() / 12) as u32;
+            fill_dust(&mut self.particles, program, view, time, tuning, MOTE);
         }
         self.key = Some(key);
         (Some(pack(&self.lines)), Some(pack(&self.particles)))
+    }
+
+    /// Particle counts that end the starfall and the line-art nodes, in buffer order.
+    pub(super) fn split(&self) -> [u32; 2] {
+        self.split
     }
 
     pub(super) fn front(&mut self, program: &Program, view: &View, time: f64, tuning: Tuning) -> Option<Vec<u8>> {
@@ -412,9 +415,7 @@ fn push_line(
         let time = if profile.burst_mode == 2 { sweep + order as f32 * 0.07 } else { glyph.start };
         out.push(Trigger {
             line: line as u16,
-            word: glyph.word,
-            char_index: glyph.char_index,
-            chars: glyph.chars,
+            grapheme: glyph.grapheme,
             time,
             size: (0.7 + rng.next() * 0.6) * profile.burst_size,
             dy: (rng.next() - 0.5) * 0.9,
@@ -424,27 +425,11 @@ fn push_line(
 }
 
 fn collect_glyphs(line: &Line, out: &mut Vec<Glyph>) {
-    if line.words.is_empty() {
-        push_word(out, 0, &line.text, line.start as f32);
-        return;
-    }
-    for (word, item) in line.words.iter().enumerate() {
-        push_word(out, word, &item.text, item.start as f32);
-    }
-}
-
-fn push_word(out: &mut Vec<Glyph>, word: usize, text: &str, start: f32) {
-    let chars = text.chars().filter(|item| !item.is_whitespace()).count();
-    if chars == 0 {
-        return;
-    }
-    let mut index = 0_u16;
-    for item in text.chars() {
-        if item.is_whitespace() {
-            continue;
+    let timings = folia_lyrics::grapheme_timeline(line);
+    for (index, (range, timing)) in folia_lyrics::graphemes(&line.text).into_iter().zip(timings).enumerate() {
+        if !line.text[range].trim().is_empty() {
+            out.push(Glyph { grapheme: index as u16, start: timing.start as f32 });
         }
-        out.push(Glyph { word: word as u16, char_index: index, chars: chars as u16, start });
-        index += 1;
     }
 }
 
@@ -577,11 +562,11 @@ fn clock_window(program: &Program, time: f64) -> Option<(f64, f64, bool)> {
     Some((span.start, span.end, span.opening))
 }
 
-fn unit_lead(program: &Program, time: f64) -> usize {
+pub(super) fn unit_lead(program: &Program, time: f64) -> usize {
     if program.seamless { program.lead() } else { lead_profile(program, paragraph_of(program, time)) }
 }
 
-fn unit_paragraph(program: &Program, time: f64) -> u16 {
+pub(super) fn unit_paragraph(program: &Program, time: f64) -> u16 {
     if program.seamless { 0 } else { paragraph_of(program, time) }
 }
 

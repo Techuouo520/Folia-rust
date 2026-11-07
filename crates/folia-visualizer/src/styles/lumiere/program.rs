@@ -43,6 +43,8 @@ pub struct Span {
     pub start: f64,
     pub end: f64,
     pub opening: bool,
+    /// The paragraph's song lines, `[first, end)`.
+    pub lines: [usize; 2],
 }
 
 #[derive(Clone, Default)]
@@ -71,7 +73,7 @@ impl Program {
                     paragraph: 0,
                     local: 0,
                 }],
-                spans: vec![Span { start: 0.0, end: 8.0, opening: true }],
+                spans: vec![Span { start: 0.0, end: 8.0, opening: true, lines: [0, 0] }],
                 seed: seed.to_owned(),
                 seamless: false,
             };
@@ -86,7 +88,9 @@ impl Program {
                 None => true,
                 Some(_) => paragraph.start - paragraph.previous_lyric_end >= REOPEN_GAP,
             };
-            spans.push(Span { start: paragraph.start, end: paragraph.end, opening });
+            let lines =
+                [paragraph.lines.first().copied().unwrap_or(0), paragraph.lines.last().map_or(0, |last| last + 1)];
+            spans.push(Span { start: paragraph.start, end: paragraph.end, opening, lines });
             let planned = plan(paragraph, lyrics, &ends);
             for (shot_index, plan) in planned.iter().enumerate() {
                 let profile = cast(seed, index, shot_index, paragraph.kind, plan.bridge, &recent, family);

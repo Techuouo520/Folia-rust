@@ -1563,6 +1563,8 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "iced",
+ "parking_lot",
+ "tracing",
  "wgpu",
 ]
 
@@ -1606,6 +1608,7 @@ dependencies = [
  "flate2",
  "folia-core",
  "folia-lyrics",
+ "folia-render",
  "iced",
  "icu_segmenter",
  "image",

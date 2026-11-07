@@ -1,5 +1,7 @@
-// The lumiere passes: the opaque light field, then lines, stars, motes and crosses. Front bokeh is its own pass.
+// The lumiere passes: the graphics group (light, echo, lines, stars, motes) and the text group (crosses, lyrics),
+// each bloomed on its own. Front bokeh is its own pass.
 
+use folia_render::glyphs::{Batch, Glyphs};
 use iced::Rectangle;
 use iced::widget::shader::{self, Primitive as ShaderPrimitive};
 
@@ -14,6 +16,8 @@ const LINE_STRIDE: u64 = 64;
 const PARTICLE_STRIDE: u64 = 48;
 pub(super) const MAX_PARTICLES: u64 = 4096;
 const BURSTS: u32 = 84;
+const MAX_SPRITES: usize = 4096;
+const IDLE_TRIMS: u32 = 120;
 
 const LINE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
@@ -32,16 +36,26 @@ const PARTICLE_ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
     wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 32, shader_location: 2 },
 ];
 
-/// Light field plus the diagrams, stars and motes under the lyrics. Geometry is uploaded only when it changes.
+/// Everything under the foreground bokeh. Geometry is uploaded only when it changes.
 #[derive(Debug)]
 pub struct Pass {
     pub bytes: [u8; UNIFORM_BYTES],
     pub decor: [u8; DECOR_BYTES],
     pub lines: Option<Vec<u8>>,
     pub particles: Option<Vec<u8>>,
+    /// Particles `..split[0]` are the starfall, `..split[1]` the line-art nodes, the rest motes.
+    pub split: [u32; 2],
     pub kind: &'static str,
     /// Multiplier on the graphics bloom preset. `1` keeps the original strength.
     pub bloom: f32,
+    /// Multiplier on the text bloom preset.
+    pub text_bloom: f32,
+    /// This frame's glyphs: the first `echo` belong to the graphics group, the rest are the lyrics.
+    pub glyphs: Batch,
+    pub echo: u32,
+    /// Only the lyrics: the graphics group is the flat `base` and is not bloomed.
+    pub text_only: bool,
+    pub base: [f32; 3],
 }
 
 /// Foreground bokeh drawn above the lyrics.
@@ -67,6 +81,11 @@ struct Targets {
     particle_count: u32,
     pending_bursts: Vec<u8>,
     bloom: bloom::Filter,
+    text_bloom: bloom::Filter,
+    glyphs: Glyphs,
+    sprites: u32,
+    /// Trims since the last prepare. Other windows trim too, so the textures go only after a long run without lumiere.
+    idle: u32,
 }
 
 struct FrontGpu {
@@ -137,7 +156,11 @@ impl Targets {
             line_verts: 0,
             particle_count: 0,
             pending_bursts: burst_instances(),
-            bloom: bloom::Filter::new(device, format),
+            bloom: bloom::Filter::new(device, format, wgpu::BlendState::REPLACE),
+            text_bloom: bloom::Filter::new(device, format, wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            glyphs: Glyphs::new(device, format, MAX_SPRITES, super::sprite_images()),
+            sprites: 0,
+            idle: 0,
         }
     }
 }
@@ -317,9 +340,16 @@ impl ShaderPrimitive for Pass {
         viewport: &shader::Viewport,
     ) {
         let gpu = &mut pipeline.0;
+        gpu.idle = 0;
         let (width, height) = pixel_size(bounds, viewport);
-        let preset = bloom::Preset { strength: bloom::GRAPHICS.strength * self.bloom, ..bloom::GRAPHICS };
-        gpu.bloom.sync(device, queue, width, height, &preset);
+        let strength = if self.text_only { 0.0 } else { bloom::GRAPHICS.strength * self.bloom };
+        gpu.bloom.sync(device, queue, width, height, &bloom::Preset { strength, ..bloom::GRAPHICS });
+        let strength = bloom::TEXT.strength * self.text_bloom;
+        gpu.text_bloom.sync(device, queue, width, height, &bloom::Preset { strength, ..bloom::TEXT });
+        let sprites = self.glyphs.lock();
+        gpu.glyphs.prepare(device, queue, &sprites, [bounds.width, bounds.height], viewport.scale_factor());
+        gpu.sprites = sprites.len().min(MAX_SPRITES) as u32;
+        drop(sprites);
         queue.write_buffer(&gpu.light_uniform, 0, &self.bytes);
         queue.write_buffer(&gpu.decor_uniform, 0, &self.decor);
         if !gpu.pending_bursts.is_empty() {
@@ -346,36 +376,59 @@ impl ShaderPrimitive for Pass {
         clip: &Rectangle<u32>,
     ) {
         let gpu = &pipeline.0;
-        let Some(scene) = gpu.bloom.scene() else { return };
+        let (Some(graphics), Some(text)) = (gpu.bloom.scene(), gpu.text_bloom.scene()) else { return };
         if clip.width == 0 || clip.height == 0 {
             return;
         }
+        let ground = if self.text_only {
+            wgpu::Color { r: f64::from(self.base[0]), g: f64::from(self.base[1]), b: f64::from(self.base[2]), a: 1.0 }
+        } else {
+            wgpu::Color::BLACK
+        };
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("folia-lumiere-scene"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: scene,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            paint(gpu, &mut pass);
+            let mut pass = scene_pass(encoder, graphics, "folia-lumiere-graphics", ground);
+            if !self.text_only {
+                paint_graphics(gpu, &mut pass, self.echo, self.split);
+            }
         }
         gpu.bloom.encode(encoder, target, clip.x, clip.y, clip.width, clip.height);
+        {
+            let mut pass = scene_pass(encoder, text, "folia-lumiere-text", wgpu::Color::TRANSPARENT);
+            paint_text(gpu, &mut pass, self.echo);
+        }
+        gpu.text_bloom.encode(encoder, target, clip.x, clip.y, clip.width, clip.height);
     }
 }
 
-fn paint(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>) {
+fn scene_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    view: &'a wgpu::TextureView,
+    label: &str,
+    clear: wgpu::Color,
+) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    })
+}
+
+/// scene.ts `graphics`: light field, echo, starfall, line art (lines, then its nodes), motes. There are no icons yet.
+fn paint_graphics(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>, echo: u32, split: [u32; 2]) {
     pass.set_pipeline(&gpu.light);
     pass.set_bind_group(0, &gpu.light_bind, &[]);
     pass.draw(0..3, 0..1);
+    gpu.glyphs.draw(pass, 0..echo);
+    let stars = split[0].min(gpu.particle_count);
+    let nodes = split[1].clamp(stars, gpu.particle_count);
+    particles(gpu, pass, 0..stars);
     if gpu.line_verts > 0 {
         pass.set_pipeline(&gpu.line);
         pass.set_bind_group(0, &gpu.light_bind, &[]);
@@ -383,15 +436,29 @@ fn paint(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_vertex_buffer(0, gpu.lines.slice(..));
         pass.draw(0..gpu.line_verts, 0..1);
     }
+    particles(gpu, pass, stars..nodes);
+    particles(gpu, pass, nodes..gpu.particle_count);
+}
+
+fn particles(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>) {
+    if range.is_empty() {
+        return;
+    }
     pass.set_pipeline(&gpu.particle);
     pass.set_bind_group(0, &gpu.light_bind, &[]);
     pass.set_bind_group(1, &gpu.decor_bind, &[]);
-    if gpu.particle_count > 0 {
-        pass.set_vertex_buffer(0, gpu.particles.slice(..));
-        pass.draw(0..6, 0..gpu.particle_count);
-    }
+    pass.set_vertex_buffer(0, gpu.particles.slice(..));
+    pass.draw(0..6, range);
+}
+
+/// Cross bursts under the lyrics (scene.ts `text`), on a clear layer.
+fn paint_text(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>, echo: u32) {
+    pass.set_pipeline(&gpu.particle);
+    pass.set_bind_group(0, &gpu.light_bind, &[]);
+    pass.set_bind_group(1, &gpu.decor_bind, &[]);
     pass.set_vertex_buffer(0, gpu.bursts.slice(..));
     pass.draw(0..6, 0..BURSTS);
+    gpu.glyphs.draw(pass, echo..gpu.sprites);
 }
 
 fn pixel_size(bounds: &Rectangle, viewport: &shader::Viewport) -> (u32, u32) {
@@ -442,7 +509,18 @@ impl shader::Pipeline for StageGpu {
         Self(Targets::new(device, format))
     }
 
-    fn trim(&mut self) {}
+    /// iced trims after every present of any window. After `IDLE_TRIMS` without lumiere, the full-size textures and
+    /// the atlas go.
+    fn trim(&mut self) {
+        let gpu = &mut self.0;
+        gpu.idle = gpu.idle.saturating_add(1);
+        if gpu.idle == IDLE_TRIMS {
+            gpu.bloom.release();
+            gpu.text_bloom.release();
+            gpu.glyphs.release();
+            tracing::debug!("lumiere textures released");
+        }
+    }
 }
 
 impl shader::Pipeline for FrontStage {

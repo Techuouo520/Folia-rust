@@ -67,7 +67,8 @@ pub struct Filter {
 }
 
 impl Filter {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    /// `output` blends the result onto the target: `REPLACE` for the opaque graphics, premultiplied for the text.
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, output: wgpu::BlendState) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("folia-lumiere-bloom"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -81,11 +82,12 @@ impl Filter {
         let sample_layout = sample_layout(device);
         let down_layout = down_layout(device);
         let add_layout = add_layout(device);
-        let down_pipe = pipeline(device, &module, "fs_down", &[&down_layout], format);
+        let replace = wgpu::BlendState::REPLACE;
+        let down_pipe = pipeline(device, &module, "fs_down", &[&down_layout], format, replace);
         Self {
             down_pipe,
-            up_pipe: pipeline(device, &module, "fs_up", &[&sample_layout, &add_layout], format),
-            combine_pipe: pipeline(device, &module, "fs_combine", &[&sample_layout, &add_layout], format),
+            up_pipe: pipeline(device, &module, "fs_up", &[&sample_layout, &add_layout], format, replace),
+            combine_pipe: pipeline(device, &module, "fs_combine", &[&sample_layout, &add_layout], format, output),
             sampler,
             down_layout,
             sample_layout,
@@ -133,6 +135,18 @@ impl Filter {
             queue.write_buffer(&up.uniform, 0, &pack(up.texel, preset.spread, 0.0, 0.0));
         }
         queue.write_buffer(&self.combine_uniform, 0, &pack([0.0, 0.0], preset.strength, 0.0, 0.0));
+    }
+
+    /// Drops the scene and pyramid textures; the next `sync` builds them again.
+    pub fn release(&mut self) {
+        self.size = (0, 0);
+        self.scene = None;
+        self.scene_bind = None;
+        self.downs.clear();
+        self.ups.clear();
+        self.combine_up = None;
+        self.combine_down = None;
+        self.passthrough = None;
     }
 
     /// Runs the pyramid and writes the combined picture into `target` at the given pixel rect.
@@ -378,6 +392,7 @@ fn pipeline(
     entry: &str,
     groups: &[&wgpu::BindGroupLayout],
     format: wgpu::TextureFormat,
+    blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(entry),
@@ -396,11 +411,7 @@ fn pipeline(
         fragment: Some(wgpu::FragmentState {
             module,
             entry_point: Some(entry),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(wgpu::BlendState::REPLACE),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
+            targets: &[Some(wgpu::ColorTargetState { format, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         }),
         primitive: wgpu::PrimitiveState::default(),

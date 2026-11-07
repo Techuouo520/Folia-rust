@@ -2,6 +2,7 @@
 
 mod align;
 mod clock;
+mod graphemes;
 mod hints;
 mod layout;
 mod lrc;
@@ -11,6 +12,7 @@ mod ttml;
 mod vtt;
 mod words;
 
+pub use graphemes::{GraphemeTiming, WordSpan, grapheme_timeline, graphemes, word_spans};
 pub use hints::{LinePhases, RenderHints, Reveal, Transition, active_line};
 pub use layout::{LayoutUnit, display_words, layout_units};
 pub use sentences::{is_js_space, split_sentences};

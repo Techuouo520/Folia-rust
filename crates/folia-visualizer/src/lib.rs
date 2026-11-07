@@ -163,18 +163,19 @@ impl<T> LayoutCache<T> {
     }
 }
 
-/// The playing picture. Canvas styles draw alone; shader styles put their GPU passes around a clear lyric canvas.
+/// The playing picture. Canvas styles draw alone. Nebbia puts its shader under a clear lyric canvas; lumiere draws its
+/// lyrics in its own pass, then the front bokeh, then a clear canvas with the corner frame.
 pub fn lyric_view<'a, Message: 'a>(scene: Scene<'a>) -> Element<'a, Message> {
     if !matches!(scene.style, Style::Nebbia | Style::Lumiere) {
         return iced::widget::canvas(scene).width(Length::Fill).height(Length::Fill).into();
     }
-    let lyrics =
+    let clear =
         iced::widget::canvas(Scene { backdrop: false, ..scene.clone() }).width(Length::Fill).height(Length::Fill);
     if scene.style == Style::Nebbia {
-        return stack![shader(styles::nebbia::view(scene)).width(Length::Fill).height(Length::Fill), lyrics].into();
+        return stack![shader(styles::nebbia::view(scene)).width(Length::Fill).height(Length::Fill), clear].into();
     }
     let front = shader(styles::lumiere::front_view(scene.clone())).width(Length::Fill).height(Length::Fill);
-    stack![shader(styles::lumiere::field_view(scene)).width(Length::Fill).height(Length::Fill), lyrics, front].into()
+    stack![shader(styles::lumiere::field_view(scene)).width(Length::Fill).height(Length::Fill), front, clear].into()
 }
 
 pub fn color(rgb: Rgb, alpha: f32) -> Color {

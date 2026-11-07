@@ -9,6 +9,8 @@ license.workspace = true
 [dependencies]
 bytemuck = { workspace = true, features = ["derive"] }
 iced.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
 wgpu.workspace = true
 
 [lints]

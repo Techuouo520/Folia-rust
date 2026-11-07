@@ -219,6 +219,7 @@ pub const BOTANY_SPROUT: Profile = {
     profile.region_h = 0.6;
     profile.hero = 0.08;
     profile.typography = Type::Vertical;
+    profile.echo = 0.28;
     profile.decay = 0.75;
     profile.decay_delay = 1.2;
     profile.camera_push = 0.03;

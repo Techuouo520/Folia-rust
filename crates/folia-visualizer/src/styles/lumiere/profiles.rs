@@ -9,7 +9,7 @@ pub enum Mood {
     Loud,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
     Horizontal,
     Vertical,
@@ -68,6 +68,8 @@ pub struct Profile {
     pub hero: f32,
     pub region_cy: f32,
     pub typography: Type,
+    /// Largest echo fragment size, as a fraction of the height (`echo.size`, default 0.34).
+    pub echo: f32,
     pub decay: f32,
     pub decay_delay: f32,
     pub burst: f32,
@@ -134,6 +136,7 @@ pub(crate) const fn base(kind: &'static str, family: &'static str, mood: Mood, b
         hero: 0.085,
         region_cy: 0.54,
         typography: Type::Horizontal,
+        echo: 0.34,
         decay: 1.0,
         decay_delay: 1.0,
         burst: 0.0,
