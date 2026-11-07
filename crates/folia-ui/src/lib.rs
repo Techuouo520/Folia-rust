@@ -1009,6 +1009,8 @@ impl Shell {
         match message {
             chrome::Message::Drag => iced::window::drag(id),
             chrome::Message::DragArm => {
+                // The press is on the strip; the subscription's `PointerHeld(true)` may come after the first move.
+                self.pointer_held = true;
                 self.drag_armed = true;
                 self.drag_from = None;
                 Task::none()
