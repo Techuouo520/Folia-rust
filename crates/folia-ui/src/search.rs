@@ -5,9 +5,10 @@ use std::time::Instant;
 use folia_core::Track;
 use folia_i18n::I18n;
 use folia_omni::Omni;
+use folia_render::Plate;
 use folia_visualizer::Ease;
 use iced::widget::scrollable::Viewport;
-use iced::widget::{button, column, container, row, space, stack, text, text_input};
+use iced::widget::{button, column, container, row, shader, space, stack, text, text_input};
 use iced::{Alignment, Background, Border, Color, Element, Length, Task, Theme};
 
 use crate::background::error_chain;
@@ -155,19 +156,33 @@ impl SearchPage {
             .spacing(12)
             .width(Length::Fixed(view.width.min(1024.0)))
             .padding(iced::Padding { top: pad_y + shift, right: pad_x, bottom: pad_y, left: pad_x });
-        let page = container(page).width(Length::Fill).align_x(Alignment::Center);
-        let veil = if view.daylight {
-            Color { r: 250.0 / 255.0, g: 250.0 / 255.0, b: 250.0 / 255.0, a: 0.96 * shown }
+        let page = container(page).width(Length::Fill).height(Length::Fill).align_x(Alignment::Center);
+        if shown <= 0.0 {
+            return page.into();
+        }
+        // `SearchWorkspace` `backdropFilter: blur(24px)`. `shown` fades the blur and the veil together.
+        let fill = if view.daylight {
+            [250.0 / 255.0, 250.0 / 255.0, 250.0 / 255.0, 0.96]
         } else {
-            Color { r: 8.0 / 255.0, g: 8.0 / 255.0, b: 10.0 / 255.0, a: 0.94 * shown }
+            [8.0 / 255.0, 8.0 / 255.0, 10.0 / 255.0, 0.94]
         };
-        container(page)
+        let plate = Plate {
+            radius: 0.0,
+            fill_origin: [0.0, 0.0],
+            fill_size: [0.0, 0.0],
+            fill,
+            shadow: [0.0; 4],
+            shadow_blur: 0.0,
+            shadow_y: 0.0,
+            shadow_spread: 0.0,
+            ring: [0.0; 4],
+            backdrop: 24.0,
+            fade: shown,
+            saturate: 1.0,
+        };
+        stack![shader(plate).width(Length::Fill).height(Length::Fill), page]
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(move |_theme: &Theme| container::Style {
-                background: Some(Background::Color(veil)),
-                ..container::Style::default()
-            })
             .into()
     }
 

@@ -1072,8 +1072,11 @@ impl Shell {
                     queued,
                     playing: self.playback.is_playing(),
                     window_width: self.window_size.width,
+                    // The tools button is always glass. Search, the title bar and a toast claim a source too.
                     glass: self.page == Page::Library
-                        && (self.home.tools(now) > 0.02 || self.home.island(now) > 0.005 || self.bar.shown(now) > 0.0),
+                        || self.search.fade(now) > 0.0
+                        || self.titlebar.frost(now) > 0.0
+                        || self.notice_visible(now),
                 };
                 self.library.view(&self.i18n, &self.theme, daylight, muted, playing, look).map(Message::Library)
             }
@@ -1110,8 +1113,14 @@ impl Shell {
                 let bottom = subtitle_bottom(self.bar_offset(), self.subtitle_presence.value(self.now_ms()));
                 let background = folia_visualizer::color(self.theme.background, 1.0);
                 let now = std::time::Instant::now();
-                let foot =
-                    now_playing::Foot { bottom, glass: self.bar.shown(now) > 0.0 || self.panel.glass(now) > 0.0 };
+                let foot = now_playing::Foot {
+                    bottom,
+                    glass: self.bar.shown(now) > 0.0
+                        || self.panel.glass(now) > 0.0
+                        || self.panel.handle_amount(now) > 0.0
+                        || self.back_hotspot()
+                        || self.notice_visible(now),
+                };
                 now_playing::view(scene, &self.i18n, muted, background, self.window_size, subtitle, foot)
             }
         };
@@ -1154,15 +1163,20 @@ impl Shell {
             layers
         };
         if playing && self.back_hotspot() {
-            let back = chrome::round_button(
-                Icon::ChevronLeft,
-                20.0,
-                40.0,
-                Color { a: 0.2, ..Color::BLACK },
-                Color { r: 1.0, g: 1.0, b: 1.0, a: 0.6 },
-                self.i18n.t("ui.back"),
-                Message::Navigate(Page::Library),
-            );
+            // `VisualizerShell` back: `backdrop-blur-md` (12px) under `bg-black/20`.
+            let back = iced::widget::stack![
+                chrome::glass_disc(40.0, [0.0; 4], 12.0, 1.0),
+                chrome::round_button(
+                    Icon::ChevronLeft,
+                    20.0,
+                    40.0,
+                    Color { a: 0.2, ..Color::BLACK },
+                    Color { r: 1.0, g: 1.0, b: 1.0, a: 0.6 },
+                    self.i18n.t("ui.back"),
+                    Message::Navigate(Page::Library),
+                )
+            ]
+            .into();
             frame = frame.push(pin(
                 back,
                 Alignment::Start,
@@ -1368,6 +1382,12 @@ impl Shell {
     /// The original back button only appears inside the top-left 120px square.
     fn back_hotspot(&self) -> bool {
         self.clock.pointer.is_some_and(|(x, y)| x <= HOTSPOT && y <= HOTSPOT)
+    }
+
+    /// A status toast is on screen, so the page under it has to feed the blur.
+    fn notice_visible(&self, now: std::time::Instant) -> bool {
+        self.playback.subscription_notice(now).is_some_and(|(_, opacity, _)| opacity > 0.0)
+            || self.library.online.sync_notice(now).is_some_and(|(_, _, _, opacity, _)| opacity > 0.0)
     }
 
     fn subtitle(&self) -> overlay::Subtitle<'_> {

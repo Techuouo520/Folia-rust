@@ -35,7 +35,7 @@ flate2 = "=1.1.10"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 icu_segmenter = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
 lyon_path = "1.0.19"
-iced = { version = "0.14.0", features = ["advanced", "canvas", "image-without-codecs", "svg", "tokio"] }
+iced = { version = "0.14.0", features = ["advanced", "canvas", "image-without-codecs", "svg", "tokio", "web-colors"] }
 keyring = "=4.2.0"
 librespot-audio = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
 librespot-core = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }

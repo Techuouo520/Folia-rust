@@ -182,7 +182,7 @@ pub struct CardLook {
     pub queued: bool,
     pub playing: bool,
     pub window_width: f32,
-    /// Tools, the queue island, or the home capsule is on screen, so the wall feeds the blur.
+    /// A glass plate is on screen (tools button, panels, search, title bar, toast), so the wall feeds the blur.
     pub glass: bool,
 }
 

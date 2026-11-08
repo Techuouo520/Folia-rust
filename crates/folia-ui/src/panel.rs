@@ -303,6 +303,11 @@ impl PlayerPanel {
         self.surface.value(now)
     }
 
+    /// How visible the handle is. The playing page keeps a blur source while this is above zero.
+    pub fn handle_amount(&self, now: Instant) -> f32 {
+        self.handle.value(now)
+    }
+
     pub fn view<'a>(&'a self, view: View<'a>, now: Instant) -> Element<'a, Message> {
         let open = self.surface.value(now);
         let shown = self.handle.value(now);
@@ -1281,12 +1286,28 @@ fn handle_button<'a>(view: View<'a>, look: HandleLook) -> Element<'a, Message> {
     };
     let alpha = look.shown * opacity;
     let fill = mix_color(rest_fill, Color::WHITE, look.tone);
-    let fill = Color { a: fill.a * alpha, ..fill };
     let ink = mix_color(rest_ink, Color::BLACK, look.tone);
-    let mark = container(icon(if look.open { Icon::X } else { Icon::Settings2 }, 20.0, Color { a: alpha, ..ink }))
-        .center(Length::Fixed(48.0))
-        .style(move |_theme: &IcedTheme| container::Style {
-            background: Some(Background::Color(fill)),
+    // `backdrop-blur-md` is 12px in Tailwind 4. `alpha` fades the blur and the fill together.
+    let glass = shader(Plate {
+        radius: 24.0,
+        fill_origin: [0.0, 0.0],
+        fill_size: [48.0, 48.0],
+        fill: [fill.r, fill.g, fill.b, fill.a],
+        shadow: [0.0; 4],
+        shadow_blur: 0.0,
+        shadow_y: 0.0,
+        shadow_spread: 0.0,
+        ring: [0.0; 4],
+        backdrop: 12.0,
+        fade: alpha,
+        saturate: 1.0,
+    })
+    .width(Length::Fixed(48.0))
+    .height(Length::Fixed(48.0));
+    let glyph = container(icon(if look.open { Icon::X } else { Icon::Settings2 }, 20.0, Color { a: alpha, ..ink }))
+        .center(Length::Fixed(48.0));
+    let mark = container(stack![glass, glyph]).width(Length::Fixed(48.0)).height(Length::Fixed(48.0)).style(
+        move |_theme: &IcedTheme| container::Style {
             border: Border { radius: 24.0.into(), ..Border::default() },
             shadow: iced::Shadow {
                 color: Color { a: 0.1 * alpha, ..Color::BLACK },
@@ -1294,7 +1315,8 @@ fn handle_button<'a>(view: View<'a>, look: HandleLook) -> Element<'a, Message> {
                 blur_radius: 15.0,
             },
             ..container::Style::default()
-        });
+        },
+    );
     let button = button(mark).padding(0).on_press(Message::Toggle).style(|_, _| button::Style::default());
     // `group w-20`: the hover reaches 32px left of the button.
     let group = container(button).width(Length::Fixed(80.0)).align_x(Alignment::End);

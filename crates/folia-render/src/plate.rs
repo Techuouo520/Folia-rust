@@ -49,8 +49,8 @@ pub fn compile_plate(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::T
 }
 
 /// A rounded rectangle of `fill` at `fill_origin` / `fill_size` with `0 shadow_y shadow_blur shadow_spread shadow`
-/// and `0 0 0 1px ring` around it. A non-positive `fill_size.y` uses the widget height. The widget must be
-/// large enough to hold the shadow; it fades out over the last 1.5px of the widget.
+/// and `0 0 0 1px ring` around it. A non-positive `fill_size` axis uses the widget's size on that axis. The widget
+/// must be large enough to hold the shadow; it fades out over the last 1.5px of the widget.
 /// `backdrop` is the CSS `blur()` radius in pixels (0 keeps the flat fill). `fade` multiplies the whole
 /// plate, blur included, so a closing panel does not leave the blur behind. `saturate` is the CSS
 /// `backdrop-saturate` multiplier (1 leaves the blur's colour).
@@ -86,6 +86,9 @@ impl<Message> shader::Program<Message> for Plate {
     fn draw(&self, _state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
         let resolution = [bounds.width.max(1.0), bounds.height.max(1.0)];
         let mut size = self.fill_size;
+        if size[0] <= 0.0 {
+            size[0] = resolution[0];
+        }
         if size[1] <= 0.0 {
             size[1] = resolution[1];
         }

@@ -2,8 +2,9 @@
 
 use folia_i18n::I18n;
 use folia_omni::Platform;
-use iced::widget::{container, row, text};
-use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Shadow, Theme, Vector};
+use folia_render::Plate;
+use iced::widget::{container, row, shader, stack, text};
+use iced::{Alignment, Color, Element, Length, Padding};
 
 use crate::platform_icon::mark_faded;
 
@@ -57,49 +58,65 @@ fn plate<'a, M: 'a>(
 ) -> Element<'a, M> {
     let ink = if daylight { Color::from_rgb8(0x27, 0x27, 0x2a) } else { Color::WHITE };
     let ink = Color { a: opacity, ..ink };
+    let font = crate::typeface::font(iced::font::Weight::Medium);
     let content = row![
         mark,
-        text(title)
+        text(title.clone())
             .size(14)
-            .font(crate::typeface::font(iced::font::Weight::Medium))
+            .font(font)
             .color(ink)
             .line_height(iced::widget::text::LineHeight::Absolute(24.0.into()))
     ]
     .spacing(10)
     .align_y(Alignment::Center);
-    let plate = container(row![content, iced::widget::space().width(0).height(26)].align_y(Alignment::Center))
-        .padding([9.0, 16.0])
-        .max_width(640.0_f32.min((width - 32.0).max(1.0)))
-        .style(move |_: &Theme| container::Style {
-            background: Some(Background::Color(Color::from_rgba(
-                1.0,
-                1.0,
-                1.0,
-                opacity * if daylight { 0.72 } else { 0.1 },
-            ))),
-            border: Border {
-                radius: 22.0.into(),
-                width: 1.0,
-                color: if daylight {
-                    Color::from_rgba(0.0, 0.0, 0.0, 0.05 * opacity)
-                } else {
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.08 * opacity)
-                },
-            },
-            shadow: Shadow {
-                color: if daylight {
-                    Color::from_rgba8(15, 15, 30, 0.12 * opacity)
-                } else {
-                    Color::from_rgba(0.0, 0.0, 0.0, 0.38 * opacity)
-                },
-                offset: Vector::new(0.0, 12.0),
-                blur_radius: 32.0,
-            },
-            ..container::Style::default()
-        });
-    container(plate)
-        .width(Length::Fill)
-        .align_x(Alignment::Center)
-        .padding(Padding::ZERO.top(30.0 + shift).left(16.0).right(16.0))
-        .into()
+    // `statusToast.css`: `blur(14px) saturate(1.3)`. Opacity fades the blur, the fill, the ring and the shadow.
+    let max_body = 640.0_f32.min((width - 32.0).max(1.0));
+    let measured = folia_visualizer::measure(&title, 14.0, font, (max_body - 62.0).max(1.0));
+    let body_w = (measured.width + 62.0).min(max_body).max(1.0);
+    let body_h = measured.height.max(26.0) + 18.0;
+    let body_x = ((width - body_w) * 0.5).max(0.0);
+    let body_y = 30.0 + shift;
+    let reach = 48.0;
+    let shadow_y = 12.0;
+    let x0 = (body_x - reach).max(0.0);
+    let y0 = (body_y - (reach - shadow_y)).max(0.0);
+    let x1 = (body_x + body_w + reach).min(width.max(1.0));
+    let y1 = body_y + body_h + reach + shadow_y;
+    let (fill, ring, shadow) = if daylight {
+        ([1.0, 1.0, 1.0, 0.72], [0.0, 0.0, 0.0, 0.05], [15.0 / 255.0, 15.0 / 255.0, 30.0 / 255.0, 0.12])
+    } else {
+        ([1.0, 1.0, 1.0, 0.1], [1.0, 1.0, 1.0, 0.08], [0.0, 0.0, 0.0, 0.38])
+    };
+    let plate = Plate {
+        radius: 22.0,
+        fill_origin: [body_x - x0, body_y - y0],
+        fill_size: [body_w, body_h],
+        fill,
+        shadow,
+        shadow_blur: 32.0,
+        shadow_y,
+        shadow_spread: 0.0,
+        ring,
+        backdrop: if opacity > 0.0 { 14.0 } else { 0.0 },
+        fade: opacity,
+        saturate: 1.3,
+    };
+    let glass = shader(plate).width(Length::Fixed((x1 - x0).max(1.0))).height(Length::Fixed((y1 - y0).max(1.0)));
+    let glass = container(glass).width(Length::Fill).height(Length::Fill).padding(Padding {
+        top: y0,
+        right: 0.0,
+        bottom: 0.0,
+        left: x0,
+    });
+    let body = container(row![content, iced::widget::space().width(0).height(26)].align_y(Alignment::Center))
+        .width(Length::Fixed(body_w))
+        .height(Length::Fixed(body_h))
+        .padding([9.0, 16.0]);
+    let body = container(body).width(Length::Fill).height(Length::Fill).padding(Padding {
+        top: body_y,
+        right: 0.0,
+        bottom: 0.0,
+        left: body_x,
+    });
+    stack![glass, body].width(Length::Fill).height(Length::Fixed(y1.max(1.0))).into()
 }

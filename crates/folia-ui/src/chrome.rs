@@ -3,8 +3,9 @@
 use std::time::Instant;
 
 use folia_i18n::I18n;
+use folia_render::Plate;
 use folia_visualizer::Ease;
-use iced::widget::{button, container, mouse_area, row, space, stack};
+use iced::widget::{button, container, mouse_area, row, shader, space, stack};
 use iced::{Alignment, Background, Border, Color, Element, Length, Shadow, Theme, Vector};
 use lucide_static_svg::Icon;
 
@@ -142,13 +143,19 @@ impl Titlebar {
         self.backdrop.running(now) || self.reveal.running(now) || self.hover.iter().any(|tween| tween.running(now))
     }
 
+    /// Backdrop amount, 0 when the bar has finished hiding. The page keeps a blur source while this is above zero.
+    pub fn frost(&self, now: Instant) -> f32 {
+        self.backdrop.value(now)
+    }
+
     /// The 32px bar: a backdrop off the player page, the drag zone, and the buttons on the right.
     pub fn view<'a>(&self, look: TitlebarLook<'a>, now: Instant) -> Element<'a, Message> {
         let mut layers = stack![].width(Length::Fill).height(Length::Fixed(BAR));
         let backdrop = self.backdrop.value(now);
-        // `titlebarBackdropClassName` with default settings: none on the player page, only a blur on dark pages.
-        if !look.player && look.daylight && backdrop > 0.0 {
-            layers = layers.push(daylight_backdrop(backdrop));
+        // Default settings: no bar on the player page. Elsewhere Tailwind 4 `backdrop-blur-sm` is 8px.
+        // Daylight adds `bg-white/12` and a bottom `border-white/15`. Dark pages are the blur alone.
+        if !look.player && backdrop > 0.0 {
+            layers = layers.push(bar_glass(look.daylight, backdrop));
         }
         layers = layers.push(drag_area(space().width(Length::Fill).height(Length::Fill).into(), |message| message));
         let reveal = self.reveal.value(now);
@@ -199,20 +206,53 @@ struct ButtonLook {
     close: bool,
 }
 
-/// `bg-white/[0.12] border-b border-white/15`, faded by the backdrop's opacity.
-fn daylight_backdrop<'a>(opacity: f32) -> Element<'a, Message> {
-    let fill = Color { a: 0.12 * opacity, ..Color::WHITE };
-    let line = Color { a: 0.15 * opacity, ..Color::WHITE };
-    let body = container(space()).width(Length::Fill).height(Length::Fixed(BAR - 1.0));
+/// `backdrop-blur-sm` (8px). Daylight paints `bg-white/12` and a 1px `border-white/15`; dark pages leave the fill clear.
+fn bar_glass<'a>(daylight: bool, fade: f32) -> Element<'a, Message> {
+    let fill = if daylight { [1.0, 1.0, 1.0, 0.12] } else { [0.0; 4] };
+    let plate = Plate {
+        radius: 0.0,
+        fill_origin: [0.0, 0.0],
+        fill_size: [0.0, BAR],
+        fill,
+        shadow: [0.0; 4],
+        shadow_blur: 0.0,
+        shadow_y: 0.0,
+        shadow_spread: 0.0,
+        ring: [0.0; 4],
+        backdrop: 8.0,
+        fade,
+        saturate: 1.0,
+    };
+    let glass = shader(plate).width(Length::Fill).height(Length::Fixed(BAR));
+    if !daylight {
+        return glass.into();
+    }
+    let line = Color { a: 0.15 * fade, ..Color::WHITE };
     let edge = container(space())
         .width(Length::Fill)
         .height(Length::Fixed(1.0))
         .style(move |_| container::Style { background: Some(Background::Color(line)), ..container::Style::default() });
-    container(iced::widget::column![body, edge])
-        .width(Length::Fill)
-        .height(Length::Fixed(BAR))
-        .style(move |_| container::Style { background: Some(Background::Color(fill)), ..container::Style::default() })
-        .into()
+    let edge = container(edge).width(Length::Fill).height(Length::Fixed(BAR)).align_y(Alignment::End);
+    stack![glass, edge].width(Length::Fill).height(Length::Fixed(BAR)).into()
+}
+
+/// A round glass plate. `blur` is the CSS radius; `fade` multiplies the blur and the fill together.
+pub fn glass_disc<'a, M: 'a>(diameter: f32, fill: [f32; 4], blur: f32, fade: f32) -> Element<'a, M> {
+    let plate = Plate {
+        radius: diameter * 0.5,
+        fill_origin: [0.0, 0.0],
+        fill_size: [diameter, diameter],
+        fill,
+        shadow: [0.0; 4],
+        shadow_blur: 0.0,
+        shadow_y: 0.0,
+        shadow_spread: 0.0,
+        ring: [0.0; 4],
+        backdrop: blur,
+        fade,
+        saturate: 1.0,
+    };
+    shader(plate).width(Length::Fixed(diameter)).height(Length::Fixed(diameter)).into()
 }
 
 /// A 44×32 title-bar button. Shown it rests at 0.75 opacity (daylight 0.85) and hover lifts it to 1.

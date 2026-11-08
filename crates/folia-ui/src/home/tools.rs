@@ -125,16 +125,17 @@ pub fn dock<'a>(home: &'a HomeChrome, host: &Host<'a>, now: Instant) -> Element<
 
 /// `WallBackButton` concealed: 40px round at `top: 20px; left: 24px` of the wall (`left: 16px` below 640px).
 /// Hidden it is `opacity: 0; translateX(-6px) scale(0.92)` and takes no pointer; hover grows it to 105%.
+/// `backdrop-filter: blur(8px)` shares `shown` with the fill.
 pub fn back<'a>(host: &Host<'a>, shown: f32, hover: f32) -> Element<'a, Message> {
     if shown <= 0.0 {
         return space().into();
     }
-    let fill = if host.daylight { Color { a: 0.05, ..Color::BLACK } } else { Color { a: 0.08, ..Color::WHITE } };
-    let fill = Color { a: fill.a * shown, ..fill };
-    let face = container(icon(Icon::ChevronLeft, 20.0, Color { a: host.text.a * shown, ..host.text }))
-        .center(Length::Fixed(40.0))
-        .style(move |_theme: &Theme| container::Style {
-            background: Some(Background::Color(fill)),
+    let fill = if host.daylight { [0.0, 0.0, 0.0, 0.05] } else { [1.0, 1.0, 1.0, 0.08] };
+    let glass = crate::chrome::glass_disc(40.0, fill, 8.0, shown);
+    let glyph = container(icon(Icon::ChevronLeft, 20.0, Color { a: host.text.a * shown, ..host.text }))
+        .center(Length::Fixed(40.0));
+    let face = container(stack![glass, glyph]).width(Length::Fixed(40.0)).height(Length::Fixed(40.0)).style(
+        move |_theme: &Theme| container::Style {
             border: Border { radius: 20.0.into(), ..Border::default() },
             shadow: iced::Shadow {
                 color: Color { a: 0.24 * shown, ..Color::BLACK },
@@ -142,7 +143,8 @@ pub fn back<'a>(host: &Host<'a>, shown: f32, hover: f32) -> Element<'a, Message>
                 blur_radius: 30.0,
             },
             ..container::Style::default()
-        });
+        },
+    );
     let revealed = host.has_track && shown > 0.5;
     let button = button(face)
         .padding(0)
@@ -761,7 +763,9 @@ fn tool_button<'a>(host: &Host<'a>, open: bool) -> Element<'a, Message> {
         (Color { a: 0.4, ..Color::BLACK }, Color::WHITE)
     };
     let icon = if open { Icon::X } else { Icon::Settings2 };
-    round_button(icon, 20.0, BUTTON, fill, icon_color, Some(Message::Tools))
+    // `SlideActionButton`: `backdrop-blur-md` (12px) under the fill. The fill stays on the button so hover can lift it.
+    let glass = crate::chrome::glass_disc(BUTTON, [0.0; 4], 12.0, 1.0);
+    stack![glass, round_button(icon, 20.0, BUTTON, fill, icon_color, Some(Message::Tools))].into()
 }
 
 fn quick<'a>(lucide: Icon, cell: f32, paint: Faded, on_press: Option<Message>, tip: String) -> Element<'a, Message> {
