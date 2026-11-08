@@ -2,8 +2,10 @@
 
 use std::sync::LazyLock;
 
+use iced::advanced::widget::Tree;
+use iced::advanced::{Layout, Widget, layout, mouse, renderer};
 use iced::widget::svg;
-use iced::{Color, Element, Length};
+use iced::{Color, Element, Length, Radians, Rectangle, Size};
 use lucide_static_svg::Icon;
 
 pub fn icon<'a, M: 'a>(icon: Icon, size: f32, color: Color) -> Element<'a, M> {
@@ -49,12 +51,44 @@ fn patched(icon: Icon, from: &str, to: &str) -> svg::Handle {
 }
 
 fn tinted<'a, M: 'a>(handle: svg::Handle, size: f32, color: Color) -> Element<'a, M> {
-    // The SVG tint replaces RGB and keeps the source alpha, so Color.a has to be the widget opacity.
-    let opaque = Color { a: 1.0, ..color };
-    svg(handle)
-        .width(Length::Fixed(size))
-        .height(Length::Fixed(size))
-        .opacity(color.a)
-        .style(move |_, _| svg::Style { color: Some(opaque) })
-        .into()
+    Element::new(Glyph { handle, size, color })
+}
+
+// iced rounds image edges half-to-even, so an icon at x.5 shrinks a pixel and loses 1px dots; snap the origin first.
+struct Glyph {
+    handle: svg::Handle,
+    size: f32,
+    color: Color,
+}
+
+impl<M, Theme, Renderer: iced::advanced::svg::Renderer> Widget<M, Theme, Renderer> for Glyph {
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fixed(self.size), Length::Fixed(self.size))
+    }
+
+    fn layout(&mut self, _tree: &mut Tree, _renderer: &Renderer, _limits: &layout::Limits) -> layout::Node {
+        layout::Node::new(Size::new(self.size, self.size))
+    }
+
+    fn draw(
+        &self,
+        _tree: &Tree,
+        renderer: &mut Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+        _viewport: &Rectangle,
+    ) {
+        let bounds = layout.bounds();
+        let snapped = Rectangle { x: bounds.x.round(), y: bounds.y.round(), ..bounds };
+        // The SVG tint replaces RGB and keeps the source alpha, so Color.a has to be the opacity.
+        let glyph = iced::advanced::svg::Svg {
+            handle: self.handle.clone(),
+            color: Some(Color { a: 1.0, ..self.color }),
+            rotation: Radians(0.0),
+            opacity: self.color.a,
+        };
+        renderer.draw_svg(glyph, snapped, snapped);
+    }
 }
