@@ -184,6 +184,8 @@ pub struct CardLook {
     pub window_width: f32,
     /// A glass plate is on screen (tools button, panels, search, title bar, toast), so the wall feeds the blur.
     pub glass: bool,
+    /// Settings, the workbench or sign-in is open, so the empty-wall hint does not float above it.
+    pub modal: bool,
 }
 
 /// What the shell does after a page message.
@@ -1499,8 +1501,15 @@ impl LibraryPage {
         if let (false, Some((title, body)), true) =
             (local_error, self.hint_text(i18n), self.wall.viewport().width > 1.0)
         {
-            layers =
-                layers.push(hint(title, body, theme, self.wall.seam(), self.wall.viewport(), hint_fade(self.hint_at)));
+            layers = layers.push(hint(
+                title,
+                body,
+                theme,
+                self.wall.seam(),
+                self.wall.viewport(),
+                hint_fade(self.hint_at),
+                look.modal,
+            ));
         }
         layers = layers.push(veil(daylight));
         if let (true, Some(error)) = (local_error, &self.error) {
@@ -1682,6 +1691,7 @@ fn hint<'a>(
     seam: wall::Seam,
     view: iced::Size,
     fade: f32,
+    modal: bool,
 ) -> Element<'a, Message> {
     let (origin, size, pad) = hint_frame(seam, view);
     let title_size = (view.width * 0.032).clamp(24.0, 48.0);
@@ -1702,7 +1712,7 @@ fn hint<'a>(
         .align_x(Alignment::Center)
         .width(Length::Fill);
     let block = column![title, body].spacing(title_size * 0.9).width(Length::Fixed(448.0)).align_x(Alignment::Center);
-    let block = iced::widget::float(block).translate(move |_, _| iced::Vector::new(0.0, rise));
+    let block = crate::float_layer::place(block, modal, iced::Vector::new(0.0, rise), 1.0);
     let area = container(block)
         .width(Length::Fixed(size.0.max(1.0)))
         .height(Length::Fixed(size.1.max(1.0)))

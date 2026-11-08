@@ -131,7 +131,10 @@ impl Provider for Netease {
             let params = json!({ "s": query, "type": 1, "limit": limit, "offset": offset, "total": true });
             let response: SearchResponse = self.post("/api/cloudsearch/pc", params).await?;
             let result = response.result.unwrap_or(SearchResult { songs: Vec::new(), song_count: Some(0) });
-            Ok(Page { items: result.songs.into_iter().map(track).collect(), total: result.song_count })
+            let items: Vec<Track> = result.songs.into_iter().map(track).collect();
+            let (has_more, next_offset, total) =
+                crate::netease_search_page(offset, items.len() as u32, result.song_count);
+            Ok(Page { items, total: Some(total), has_more, next_offset })
         })
     }
 

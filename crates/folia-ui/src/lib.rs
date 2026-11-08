@@ -7,6 +7,7 @@ mod chrome;
 mod cover_flight;
 mod design_size;
 mod drag_capture;
+mod float_layer;
 mod focus_card;
 mod home;
 mod icons;
@@ -31,12 +32,13 @@ mod poster;
 mod poster_motion;
 mod quality_select;
 mod queue_island;
+mod scrollbar;
 mod search;
+pub mod search_results;
 mod settings;
 mod settings_kit;
 mod splash;
 mod status_toast;
-mod track_list;
 mod typeface;
 mod wall;
 mod wall_pan;
@@ -54,11 +56,13 @@ pub use overlay::{
     glow_ellipse, row_gap, subtitle_at, subtitle_bottom, subtitle_line_width, translation_px, upcoming_look,
     upcoming_px,
 };
+pub use panel::PlayerPanel;
 pub use platform_highlight::ProviderHighlight;
 pub use platform_rows::{ProviderRowStatus, order_provider_rows};
 pub use playback_navigation::PlaybackNavigation;
 /// The floating capsule. `shown` is its 0.26s ease-out hide, shared by opacity, offset and scale.
 pub use player_bar::{CapsuleBox, PlayerBar, capsule_box};
+pub use search_results::format_duration;
 pub use settings_kit::{Faded, Tokens, panel_glass, quick_tile_fill, tools_glass};
 pub use typeface::install as install_fonts;
 pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, seam_on_axis, wider_span};
@@ -223,6 +227,8 @@ pub struct Shell {
     /// Origin for [`ChromeClock`] milliseconds.
     started: std::time::Instant,
     clock: ChromeClock,
+    /// The playing-page back hotspot as it was when no modal covered it.
+    back_latched: bool,
     /// `controlBarPresence`: the subtitle's room for the capsule, sprung as the chrome shows and hides.
     subtitle_presence: ChromeSpring,
     bar: player_bar::PlayerBar,
@@ -244,6 +250,8 @@ pub struct Shell {
     composing: bool,
     /// Song id string the original visualizer uses as its geometry seed.
     visualizer_seed: String,
+    /// Latest spectrum for the playing page and the style preview. Other pages leave it alone.
+    audio: folia_core::AudioFrame,
     data_dir: std::path::PathBuf,
     /// Uploaded Monet portrait, keyed by its saved path.
     monet_portrait: Option<(String, iced::widget::image::Handle)>,
@@ -289,6 +297,7 @@ impl Shell {
             fullscreen: false,
             started: std::time::Instant::now(),
             clock: ChromeClock::shown(0),
+            back_latched: false,
             subtitle_presence: ChromeSpring::settled(1.0, 0, SUBTITLE_PRESENCE_SPRING),
             bar: player_bar::PlayerBar::new(std::time::Instant::now()),
             window_size: INITIAL_WINDOW,
@@ -306,6 +315,7 @@ impl Shell {
             login: login::Login::new(std::time::Instant::now()),
             composing: false,
             visualizer_seed: "lumiere".to_owned(),
+            audio: folia_core::AudioFrame::SILENT,
             data_dir: init.data_dir,
             monet_portrait: None,
         };
@@ -439,6 +449,11 @@ impl Shell {
         let seam_before = self.seam_before(&message);
         let opens_search = matches!(&message, Message::Home(home::Message::Search));
         let focus_title = matches!(message, Message::Home(home::Message::TitleToggle { keyboard: true, .. }));
+        // The original analyser is read once per animation frame; its 0.6 smoothing assumes that rate.
+        let frame_tick = matches!(
+            message,
+            Message::Playback(playback::Message::Tick) | Message::Workbench(workbench::Message::Frame)
+        );
         let task = self.handle(message);
         self.refresh_visualizer_seed();
         if self.page != before || self.playback.current().is_none() {
@@ -498,9 +513,13 @@ impl Shell {
         self.library.sync_hint(&self.i18n, now);
         self.bar.set_forced(self.positioning.is_some());
         self.bar.sync(&self.playback, self.window_size.width, now);
-        self.bar.set_shown(self.chrome_visible(), now);
-        let presence = if self.chrome_visible() { 1.0 } else { 0.0 };
-        self.subtitle_presence = self.subtitle_presence.retarget(self.now_ms(), presence);
+        self.bar.set_modal(self.modal_open());
+        self.panel.set_modal(self.modal_open());
+        if !self.modal_open() {
+            self.bar.set_shown(self.chrome_visible(), now);
+            let presence = if self.chrome_visible() { 1.0 } else { 0.0 };
+            self.subtitle_presence = self.subtitle_presence.retarget(self.now_ms(), presence);
+        }
         let (quality_levels, quality) = self.audio_quality();
         let room = panel::Room {
             width: self.window_size.width,
@@ -519,6 +538,10 @@ impl Shell {
             focus_card::REVEAL_PAD
         };
         self.library.playing_id = self.playback.current().map(|track| track.id);
+        let reads_audio = self.page == Page::NowPlaying || self.workbench.is_some();
+        if reads_audio && (frame_tick || !self.playback.is_playing()) {
+            self.audio = self.playback.audio_frame(wall_ms());
+        }
         task
     }
 
@@ -598,10 +621,10 @@ impl Shell {
                     self.page = Page::Library;
                 }
                 let provider = self.library.online.provider();
-                let (task, play) = self.search.update(message, self.omni.as_ref(), provider);
+                let (task, outcome) = self.search.update(message, self.omni.as_ref(), provider);
                 let task = task.map(Message::Search);
-                match play {
-                    Some(index) => {
+                match outcome {
+                    search::Outcome::Play(index) => {
                         let name = self.search.query();
                         let name = if name.is_empty() { self.i18n.t("search.sourceNetease") } else { name };
                         let origin = folia_core::Origin { name: name.to_owned() };
@@ -610,7 +633,14 @@ impl Shell {
                         self.await_player();
                         Task::batch([task, start, self.ensure_art()])
                     }
-                    None => task,
+                    search::Outcome::Enqueue(index) => {
+                        if let Some(track) = self.search.results.get(index).cloned() {
+                            let added = self.playback.enqueue(vec![track]);
+                            tracing::debug!(added, "search result added to the queue");
+                        }
+                        task
+                    }
+                    search::Outcome::None => task,
                 }
             }
             Message::Playback(message) => {
@@ -670,7 +700,9 @@ impl Shell {
             }
             Message::ChromeTick => {
                 self.clock = self.clock.tick(self.now_ms(), self.pointer_held);
-                self.panel.set_chrome(self.chrome_visible(), std::time::Instant::now());
+                if !self.modal_open() {
+                    self.panel.set_chrome(self.chrome_visible(), std::time::Instant::now());
+                }
                 Task::none()
             }
             Message::PointerHeld(held) => {
@@ -1035,16 +1067,22 @@ impl Shell {
                 if let Some(positioning) = self.positioning.as_mut() {
                     positioning.drag(y, height);
                 }
+                self.latch_back();
                 self.sync_home_back();
                 let now = std::time::Instant::now();
-                self.panel.set_chrome(self.chrome_visible(), now);
+                if !self.modal_open() {
+                    self.panel.set_chrome(self.chrome_visible(), now);
+                }
                 self.titlebar.pointer(Some(y), now);
                 Task::none()
             }
             chrome::Message::Left => {
                 self.clock = self.clock.leave(self.now_ms(), self.pointer_held);
+                self.latch_back();
                 let now = std::time::Instant::now();
-                self.panel.set_chrome(self.chrome_visible(), now);
+                if !self.modal_open() {
+                    self.panel.set_chrome(self.chrome_visible(), now);
+                }
                 self.titlebar.pointer(None, now);
                 Task::none()
             }
@@ -1077,6 +1115,7 @@ impl Shell {
                         || self.search.fade(now) > 0.0
                         || self.titlebar.frost(now) > 0.0
                         || self.notice_visible(now),
+                    modal: self.modal_open(),
                 };
                 self.library.view(&self.i18n, &self.theme, daylight, muted, playing, look).map(Message::Library)
             }
@@ -1108,6 +1147,7 @@ impl Shell {
                     album,
                     portrait,
                     preview: false,
+                    audio: &self.audio,
                 };
                 let subtitle = self.subtitle();
                 let bottom = subtitle_bottom(self.bar_offset(), self.subtitle_presence.value(self.now_ms()));
@@ -1141,11 +1181,11 @@ impl Shell {
                     search::View {
                         i18n: &self.i18n,
                         text: text_color,
+                        secondary: muted,
                         background: folia_visualizer::color(self.theme.background, 1.0),
                         accent: folia_visualizer::color(self.theme.accent, 1.0),
                         daylight,
                         width: self.window_size.width,
-                        playing: self.playback.current().map(|track| track.id),
                         source: search_source,
                     },
                     now,
@@ -1194,6 +1234,7 @@ impl Shell {
                 daylight,
                 window: self.window_size,
                 bottom: self.bar_offset(),
+                modal: self.modal_open(),
             };
             frame = frame.push(self.bar.view(&self.playback, look, now).map(Message::Bar));
         }
@@ -1250,6 +1291,8 @@ impl Shell {
                 syncing: self.library.online.syncing(provider),
                 quality_levels,
                 quality,
+                modal: self.modal_open(),
+                audio: &self.audio,
             };
             frame = frame.push(self.panel.view(panel_view, std::time::Instant::now()).map(Message::Panel));
         }
@@ -1269,6 +1312,7 @@ impl Shell {
                 style,
                 font_scale: self.appearance.lyrics_font_scale,
                 live,
+                audio: &self.audio,
             }));
         }
         if let Some(window) = &self.settings {
@@ -1374,14 +1418,30 @@ impl Shell {
         self.page != Page::NowPlaying || self.clock.visible(self.now_ms(), self.pointer_held)
     }
 
+    /// Settings, the lyric workbench or the sign-in window.
+    fn modal_open(&self) -> bool {
+        self.settings.is_some() || self.workbench.is_some() || self.login.is_open()
+    }
+
     /// Surfaces that take the keyboard the way an open sheet does: settings, sign-in, the workbench, search.
     fn blocks_space(&self) -> bool {
-        self.settings.is_some() || self.workbench.is_some() || self.login.is_open() || self.page == Page::Search
+        self.modal_open() || self.page == Page::Search
     }
 
     /// The original back button only appears inside the top-left 120px square.
+    /// A modal keeps whatever it was when the window opened.
     fn back_hotspot(&self) -> bool {
+        if self.modal_open() { self.back_latched } else { self.live_back_hotspot() }
+    }
+
+    fn live_back_hotspot(&self) -> bool {
         self.clock.pointer.is_some_and(|(x, y)| x <= HOTSPOT && y <= HOTSPOT)
+    }
+
+    fn latch_back(&mut self) {
+        if !self.modal_open() {
+            self.back_latched = self.live_back_hotspot();
+        }
     }
 
     /// A status toast is on screen, so the page under it has to feed the blur.
@@ -1502,7 +1562,7 @@ impl Shell {
             if self.settings.is_none() {
                 parts.push(iced::event::listen_with(search_key));
             }
-            if self.search.animating(now) {
+            if self.search.animating(now) || self.search.spinning() {
                 parts.push(iced::window::frames().map(|_| Message::Search(search::Message::Frame)));
             }
         }
@@ -1642,6 +1702,7 @@ impl Shell {
             poster_tilted: self.library.poster_tilted(),
             list_hover: self.library.layer.as_ref().and_then(|layer| layer.list_hover),
             search,
+            modal: self.modal_open(),
         };
         // The flip turns at the outgoing content's layout width until it swaps, so the old seam does not dim out.
         let layout = leaving.map_or_else(
@@ -2045,6 +2106,9 @@ impl Shell {
     }
 
     fn sync_home_back(&mut self) {
+        if self.modal_open() {
+            return;
+        }
         let inside = self.clock.pointer.is_some_and(|(x, y)| x <= HOTSPOT && y <= HOTSPOT);
         let shown = self.page == Page::Library && self.playback.current().is_some() && inside;
         self.home.set_back(shown, std::time::Instant::now());
@@ -2339,4 +2403,12 @@ fn positioner_key(event: iced::Event, _status: iced::event::Status, _id: iced::w
         iced::keyboard::key::Named::Enter => Some(Message::PositionerKey(true)),
         _ => None,
     }
+}
+
+/// Wall-clock milliseconds, the `Date.now()` the idle breath reads.
+fn wall_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
 }

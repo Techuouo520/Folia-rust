@@ -209,11 +209,11 @@ impl Store {
     }
 }
 
-pub(super) fn uniform(program: &Program, time: f64, tuning: Tuning) -> [u8; DECOR_BYTES] {
+pub(super) fn uniform(program: &Program, time: f64, tuning: Tuning, mote_lift: f32) -> [u8; DECOR_BYTES] {
     let mut out = [0_u8; DECOR_BYTES];
     let lead = &PROFILES[unit_lead(program, time)];
     write4(&mut out, 0, [lead.mote_drift[0], lead.mote_drift[1], lead.mote_swirl, lead.mote_period]);
-    write4(&mut out, 1, [lead.mote_twinkle, lead.mote_ambient, lead.mote_gain, 1.0]);
+    write4(&mut out, 1, [lead.mote_twinkle, lead.mote_ambient, lead.mote_gain, mote_lift]);
     write4(&mut out, 2, [lead.front_drift[0], lead.front_drift[1], lead.front_swirl, lead.front_period]);
     write4(&mut out, 3, [lead.front_twinkle, lead.front_ambient, lead.front_gain, 1.0]);
     let clock = star_clock(program, time, tuning);

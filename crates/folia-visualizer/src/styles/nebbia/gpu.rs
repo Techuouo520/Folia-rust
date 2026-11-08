@@ -54,6 +54,7 @@ pub fn frame(
     theme: &Theme,
     font_scale: f32,
     tuning: &crate::tuning::Values,
+    energy: f32,
 ) -> Pass {
     super::ink::warm(lyrics);
     let list = super::tuning::manifest();
@@ -66,7 +67,7 @@ pub fn frame(
         rain_hit: tuning.number(list, "rainHit"),
         rain_big: tuning.number(list, "rainBig"),
     };
-    let drive = place::paint(&scene, time, width, height, &knobs);
+    let drive = place::paint(&scene, time, width, height, &knobs, energy);
     let colors = palette(theme);
     let aspect = width / height;
     let spot_x = tuning.number(list, "spotX");

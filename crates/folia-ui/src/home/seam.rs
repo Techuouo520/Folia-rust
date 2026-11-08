@@ -73,8 +73,8 @@ fn plate_box(host: &Host<'_>) -> ([f32; 2], [f32; 2]) {
 /// Lays the content out at its own width and clips it to the opening, centred on the seam.
 fn clip_body<'a>(host: &Host<'a>, body: Element<'a, Message>) -> Element<'a, Message> {
     let (clip_origin, clip_size, layout_size, shift) = clip_frame(host);
-    let shifted = iced::widget::float(body).translate(move |_, _| shift);
-    let sized = crate::design_size::DesignSize { content: shifted.into(), size: layout_size };
+    let shifted = crate::float_layer::place(body, host.modal, shift, 1.0);
+    let sized = crate::design_size::DesignSize { content: shifted, size: layout_size };
     let clipped =
         container(Element::new(sized)).width(Length::Fixed(clip_size.0)).height(Length::Fixed(clip_size.1)).clip(true);
     let seam = mouse_area(clipped).on_press(Message::Frame).interaction(iced::mouse::Interaction::Idle);
@@ -1292,7 +1292,7 @@ fn tab_button<'a>(host: &Host<'a>) -> Element<'a, Message> {
     );
     let travel = 28.0 * (1.0 - host.tab);
     let shift = Vector::new(if host.seam.before { -travel } else { travel }, 0.0);
-    let button = iced::widget::float(button).translate(move |_, _| shift);
+    let button = crate::float_layer::place(button, host.modal, shift, 1.0);
     let side = if host.horizontal || host.seam.before { Alignment::Start } else { Alignment::End };
     container(button).width(Length::Fill).height(Length::Fill).align_x(side).align_y(Alignment::Center).into()
 }
@@ -1494,7 +1494,7 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
     // A part rising in: faded, and lifted by a float only while it moves (a float sits above everything).
     let rise = |element: Element<'a, Message>, (_, below): (f32, f32)| -> Element<'a, Message> {
         if below > 0.01 {
-            iced::widget::float(element).translate(move |_, _| Vector::new(0.0, below)).into()
+            crate::float_layer::place(element, host.modal, Vector::new(0.0, below), 1.0)
         } else {
             element
         }

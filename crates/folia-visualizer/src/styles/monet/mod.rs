@@ -5,11 +5,15 @@ mod layout;
 mod motion;
 mod poster;
 mod rail;
+mod spectrum;
 mod text;
 mod tuning;
 
 pub use layout::{Layout, layout};
 pub use poster::{Cache, interaction, update};
+pub use spectrum::{
+    active_bar_height, energy, envelope, pulse, sample_raw_spectrum_profile, sample_spectrum_profile, wave,
+};
 pub use text::{Shaped, shape};
 pub use tuning::manifest;
 

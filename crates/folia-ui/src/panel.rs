@@ -127,6 +127,8 @@ pub struct PlayerPanel {
     page: Tween,
     pickers: mode_picker::Pickers,
     quality: quality_select::Select,
+    /// A modal covers the window: handle hover does not retarget, and floats stay in the normal stack.
+    modal: bool,
 }
 
 impl PlayerPanel {
@@ -153,6 +155,7 @@ impl PlayerPanel {
             page: Tween::new(1.0, CLOSE_MS, OPEN_EASE, now),
             pickers: mode_picker::Pickers::new(now),
             quality: quality_select::Select::new(now),
+            modal: false,
         }
     }
 
@@ -162,6 +165,24 @@ impl PlayerPanel {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// While a modal is open, handle hover does not change its goal.
+    pub fn set_modal(&mut self, modal: bool) {
+        self.modal = modal;
+    }
+
+    /// The handle-hover goal: 0 at rest, 1 under the pointer.
+    pub fn handle_hover_goal(&self) -> f32 {
+        self.handle_hover.goal()
+    }
+
+    /// Records the pointer on the handle. A modal leaves the goal unchanged.
+    pub fn on_handle_hover(&mut self, hovered: bool, now: Instant) {
+        if self.modal {
+            return;
+        }
+        self.handle_hover.set(if hovered { 1.0 } else { 0.0 }, now);
     }
 
     /// Shows or hides the handle with the playing-page chrome.
@@ -236,7 +257,7 @@ impl PlayerPanel {
                 Effect::None
             }
             Message::HandleHover(hovered) => {
-                self.handle_hover.set(if *hovered { 1.0 } else { 0.0 }, now);
+                self.on_handle_hover(*hovered, now);
                 Effect::None
             }
             Message::Volume(value) => Effect::Playback(playback::Message::Volume(*value)),
@@ -416,6 +437,9 @@ pub struct View<'a> {
     /// The playing platform's levels, lowest first, and the stored preference resolved for it.
     pub quality_levels: &'static [AudioQuality],
     pub quality: AudioQuality,
+    /// Settings, the workbench or sign-in is open.
+    pub modal: bool,
+    pub audio: &'a folia_core::AudioFrame,
 }
 
 fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) -> Element<'a, Message> {
@@ -487,10 +511,11 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
             font_scale: view.font_scale,
             style_id: view.style_id,
             open,
+            audio: view.audio,
         };
         let mut place = picker_place(&view, panel.pickers.drawn(), Size::new(panel_w, visual_h), header_h);
         place.origin = (visual_left - x0, visual_top - y0);
-        picker = panel.pickers.picker(look, place, now);
+        picker = panel.pickers.picker(look, place, now, view.modal);
     }
     let mut quality = None;
     if tab == Tab::Quality {
@@ -514,7 +539,7 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
             value: view.quality,
             now,
         };
-        quality = panel.quality.menu(look, place);
+        quality = panel.quality.menu(look, place, view.modal);
     }
     let face = container(face).padding(pad(visual_top - y0, 0.0, 0.0, visual_left - x0));
     let mut layers = stack![plate, face];
@@ -530,7 +555,7 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     let origin = iced::Vector::new(visual_right - 24.0, visual_bottom + under - 24.0);
     let centre = iced::Vector::new((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let shift = (origin - centre) * (1.0 - scale);
-    let patch: Element<'a, Message> = iced::widget::float(patch).translate(move |_, _| shift).scale(scale).into();
+    let patch: Element<'a, Message> = crate::float_layer::place(patch, view.modal, shift, scale);
     // The patch stops at the window edge, which clips the shadow there as the window would.
     container(patch).width(Length::Fill).height(Length::Fill).padding(pad(y0, 0.0, 0.0, x0)).into()
 }
@@ -871,6 +896,7 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
         font_scale: view.font_scale,
         style_id: view.style_id,
         open: ink.a,
+        audio: view.audio,
     };
     let intensity = view.i18n.t(intensity_key(view.theme.intensity));
     let intensity_tip = format!("{}: {}", view.i18n.t("ui.animationIntensity"), intensity);
@@ -1323,7 +1349,7 @@ fn handle_button<'a>(view: View<'a>, look: HandleLook) -> Element<'a, Message> {
     let group = mouse_area(group).on_enter(Message::HandleHover(true)).on_exit(Message::HandleHover(false));
     let scale = (0.92 + 0.08 * look.shown) * hover_scale;
     let shift = iced::Vector::new(20.0 * (1.0 - look.shown) + tuck, 12.0 * (1.0 - look.shown));
-    let group: Element<'a, Message> = iced::widget::float(group).translate(move |_, _| shift).scale(scale).into();
+    let group: Element<'a, Message> = crate::float_layer::place(group, view.modal, shift, scale);
     container(group)
         .width(Length::Fill)
         .height(Length::Fill)

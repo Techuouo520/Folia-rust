@@ -105,6 +105,8 @@ pub struct PlayerBar {
     forced: bool,
     /// `isHidden` is false. Pointer handlers drop as soon as this is false; the fade still draws.
     present: bool,
+    /// A modal covers the window, so pointer enter and leave leave the open target alone.
+    modal: bool,
 }
 
 /// The capsule's rounded, clipping frame and the content inside it.
@@ -147,6 +149,8 @@ pub struct Look<'a> {
     pub window: Size,
     /// The bar's `bottom`: `PLAYER_BOTTOM_BAR_BASE_OFFSET_PX` lifted by the user's offset.
     pub bottom: f32,
+    /// Settings, the workbench or sign-in is open: hover does not retarget the capsule.
+    pub modal: bool,
 }
 
 impl PlayerBar {
@@ -178,6 +182,7 @@ impl PlayerBar {
             home: false,
             forced: false,
             present: true,
+            modal: false,
         }
     }
 
@@ -188,7 +193,7 @@ impl PlayerBar {
     /// Handles a bar message; a playback message is handed back for the shell to run.
     pub fn update(&mut self, message: Message, playback: &Playback, now: Instant) -> Option<playback::Message> {
         match message {
-            Message::Inside(inside) => self.hover = self.hover.set_inside(self.ms(now), inside),
+            Message::Inside(inside) => self.on_hover(inside, now),
             Message::Frame | Message::Open => {}
             Message::Playback(message) => return Some(message),
             Message::TitleHover(hovered) => {
@@ -256,6 +261,24 @@ impl PlayerBar {
 
     pub fn set_home(&mut self, home: bool) {
         self.home = home;
+    }
+
+    /// While a modal is open, `Inside` does not change the hover that opens the capsule.
+    pub fn set_modal(&mut self, modal: bool) {
+        self.modal = modal;
+    }
+
+    /// Records the pointer entering or leaving the capsule. A modal leaves the target unchanged.
+    pub fn on_hover(&mut self, inside: bool, now: Instant) {
+        if self.modal {
+            return;
+        }
+        self.hover = self.hover.set_inside(self.ms(now), inside);
+    }
+
+    /// The hover state whose `inside` flag is the open target.
+    pub fn hover(&self) -> CapsuleHover {
+        self.hover
     }
 
     pub fn set_shown(&mut self, shown: bool, now: Instant) {
@@ -422,7 +445,7 @@ impl PlayerBar {
         };
         let group = stack![plate_layer, controls, mouse_area(cover).on_press(Message::Frame)];
         let group = group.width(Length::Fixed(group_w)).height(Length::Fixed(group_h));
-        let group = float_in(group.into(), lift, scale);
+        let group = float_in(group.into(), lift, scale, look.modal);
         let top = (window.height - look.bottom - height - plate.top).max(0.0);
         container(group)
             .width(Length::Fill)
@@ -503,12 +526,12 @@ impl PlayerBar {
         now: Instant,
     ) -> Element<'a, Message> {
         let index = side as usize;
-        let (glyph, label, align, pad) = match side {
-            Side::Prev => (Variant::BoldChevronLeft, "ui.previousTrack", Alignment::Start, [0.0, 0.0, 0.0, 4.0]),
-            Side::Next => (Variant::BoldChevronRight, "ui.nextTrack", Alignment::End, [0.0, 4.0, 0.0, 0.0]),
+        let (glyph, align, pad) = match side {
+            Side::Prev => (Variant::BoldChevronLeft, Alignment::Start, [0.0, 0.0, 0.0, 4.0]),
+            Side::Next => (Variant::BoldChevronRight, Alignment::End, [0.0, 4.0, 0.0, 0.0]),
         };
         let mut zone = container(space()).width(Length::Fixed(ZONE)).height(Length::Fixed(TITLE_H));
-        if let Some(target) = neighbor(playback, side) {
+        if neighbor(playback, side).is_some() {
             let opacity = self.arrows[index].value(now) * shown;
             let hover_fill =
                 if look.daylight { Color { a: 0.10, ..Color::BLACK } } else { Color { a: 0.15, ..Color::WHITE } };
@@ -523,9 +546,6 @@ impl PlayerBar {
             let arrow = button(face).padding(0).on_press(Message::Switch(side)).style(|_, _| button::Style::default());
             let arrow =
                 mouse_area(arrow).on_enter(Message::ArrowHover(side, true)).on_exit(Message::ArrowHover(side, false));
-            let tip = if target.is_empty() { look.i18n.t(label) } else { target };
-            let arrow =
-                tooltip(arrow, text(tip.to_owned()).size(12), tooltip::Position::Top).style(container::rounded_box);
             zone = container(arrow)
                 .width(Length::Fixed(ZONE))
                 .height(Length::Fixed(TITLE_H))
@@ -789,6 +809,6 @@ fn shadow_plate<'a>(
 
 /// The hiding transition: `y: 24, scale: 0.97` on the whole capsule. Always a `float`, so the tree keeps its
 /// shape when the transition ends and a press in flight is not dropped.
-fn float_in<'a>(element: Element<'a, Message>, lift: f32, scale: f32) -> Element<'a, Message> {
-    iced::widget::float(element).translate(move |_, _| Vector::new(0.0, lift)).scale(scale).into()
+fn float_in<'a>(element: Element<'a, Message>, lift: f32, scale: f32, modal: bool) -> Element<'a, Message> {
+    crate::float_layer::place(element, modal, Vector::new(0.0, lift), scale)
 }

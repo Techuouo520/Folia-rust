@@ -1,4 +1,4 @@
-// Shot program: split the lyric into paragraphs and shots, then cast a light position. Audio energy stays 0.
+// Shot program: split the lyric into paragraphs and shots, then cast a light position.
 
 use folia_core::Lyrics;
 use folia_lyrics::{

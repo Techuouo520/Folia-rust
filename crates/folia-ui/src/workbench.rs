@@ -94,6 +94,7 @@ pub struct Look<'a> {
     pub style: Style,
     pub font_scale: f32,
     pub live: Option<(&'a Lyrics, f64)>,
+    pub audio: &'a folia_core::AudioFrame,
 }
 
 pub struct Workbench {
@@ -234,7 +235,7 @@ impl Workbench {
     }
 
     pub fn view<'a>(&'a self, look: Look<'a>) -> Element<'a, crate::Message> {
-        let Look { i18n, theme, daylight, window, style, font_scale, live } = look;
+        let Look { i18n, theme, daylight, window, style, font_scale, live, .. } = look;
         let tokens = Tokens::new(theme, daylight);
         let now = Instant::now();
         let (lyrics, time, empty) = self.shown(now, live);
@@ -307,7 +308,7 @@ impl Workbench {
         time: f64,
         empty: bool,
     ) -> Element<'a, crate::Message> {
-        let Look { i18n, theme, window, style, font_scale, .. } = look;
+        let Look { i18n, theme, style, font_scale, .. } = look;
         let scene = Scene {
             style,
             lyrics,
@@ -323,6 +324,7 @@ impl Workbench {
             album: String::new(),
             portrait: None,
             preview: true,
+            audio: look.audio,
         };
         let preview =
             container(lyric_view(scene)).width(Length::Fill).height(Length::Fill).clip(true).style(move |_| {
@@ -341,7 +343,7 @@ impl Workbench {
             Some(note) => picture.push(container(note).padding(12)),
             None => picture,
         };
-        let shelf = self.shelf(i18n, tokens, theme, style, font_scale, window);
+        let shelf = self.shelf(look, tokens);
         column![picture, shelf]
             .spacing(16)
             .padding(Padding { left: 16.0, right: 16.0, bottom: 24.0, top: 0.0 })
@@ -384,15 +386,8 @@ impl Workbench {
         row![source, pause].spacing(16).align_y(Alignment::Center).into()
     }
 
-    fn shelf<'a>(
-        &'a self,
-        i18n: &'a I18n,
-        tokens: Tokens,
-        theme: &'a Theme,
-        current: Style,
-        font_scale: f32,
-        window: Size,
-    ) -> Element<'a, crate::Message> {
+    fn shelf<'a>(&'a self, look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
+        let Look { i18n, theme, window, style: current, font_scale, audio, .. } = look;
         let columns: usize = if window.width >= 1024.0 { 7 } else { 4 };
         let count = text(Style::ALL.len().to_string()).size(13).color(tokens.t3);
         let heading = row![text(i18n.t("options.lyricStyles")).size(13).font(kit::SEMIBOLD).color(tokens.t2), count,]
@@ -414,6 +409,7 @@ impl Workbench {
                     chosen: *style == current,
                     pictures: &self.pictures,
                     tuning,
+                    audio,
                 }));
             }
             // A short last row keeps the grid's column width, as the original CSS grid does.
@@ -684,10 +680,11 @@ struct TileIn<'a> {
     chosen: bool,
     pictures: &'a Pictures,
     tuning: Values,
+    audio: &'a folia_core::AudioFrame,
 }
 
 fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
-    let TileIn { i18n, tokens, theme, lyrics, style, font_scale, chosen, pictures, tuning } = tile;
+    let TileIn { i18n, tokens, theme, lyrics, style, font_scale, chosen, pictures, tuning, audio } = tile;
     let scene = Scene {
         style,
         lyrics,
@@ -703,6 +700,7 @@ fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
         album: String::new(),
         portrait: None,
         preview: true,
+        audio,
     };
     let picture = container(iced::widget::canvas(pictures.frozen(scene)).width(Length::Fill).height(Length::Fill))
         .width(Length::Fill)

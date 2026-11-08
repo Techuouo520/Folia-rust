@@ -1,5 +1,6 @@
 // Online music: one facade (`Omni`) over every platform provider; only providers talk to platform APIs.
 
+mod paging;
 mod providers;
 mod qr;
 mod reads;
@@ -14,6 +15,11 @@ use std::sync::Arc;
 use folia_core::{AudioQuality, ChorusRange, Lyrics, OnlineId, Track, UNLISTED_AUDIO_QUALITY_LEVELS};
 use folia_lyrics::{ChorusSource, resolve_chorus};
 
+pub use paging::{
+    BodianCursor, bodian_search_page, kugou_search_page, netease_search_page, qishui_search_continues,
+    qq_anonymous_search_page, qq_session_search_page, spotify_search_done, spotify_search_page, ytm_search_page,
+    ytm_walk_done,
+};
 pub use qr::LoginQr;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -55,6 +61,17 @@ pub enum OmniError {
 pub struct Page<T> {
     pub items: Vec<T>,
     pub total: Option<u64>,
+    /// Another page follows (`hasMore`).
+    pub has_more: bool,
+    /// The offset the next page is requested at (`nextOffset`).
+    pub next_offset: u32,
+}
+
+impl<T> Page<T> {
+    /// An empty page whose next request would repeat `offset`.
+    pub fn empty(offset: u32) -> Self {
+        Self { items: Vec::new(), total: None, has_more: false, next_offset: offset }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

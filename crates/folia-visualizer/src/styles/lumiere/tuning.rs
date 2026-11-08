@@ -244,8 +244,8 @@ const GROUPS: &[Group] = &[
 
 pub fn manifest() -> Manifest {
     let mut manifest = Manifest::plain("lumiere_tuning", &[], GROUPS);
-    // Audio energy, theme word colours and lyric icons are not on the theme yet.
-    manifest.locked = &["audioResponse", "keywordColors", "themeIcons"];
+    // Theme word colours and lyric icons are not on the theme yet.
+    manifest.locked = &["keywordColors", "themeIcons"];
     manifest.reset_key = Some("notifications.lumiereReset");
     manifest
 }

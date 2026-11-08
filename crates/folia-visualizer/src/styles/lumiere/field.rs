@@ -50,7 +50,14 @@ pub struct Camera {
     pub rotation: f32,
 }
 
-pub fn prepare(program: &Program, time: f64, size: Size, theme: &Theme, tuning: Tuning) -> View {
+pub fn prepare(
+    program: &Program,
+    time: f64,
+    size: Size,
+    theme: &Theme,
+    tuning: Tuning,
+    heard: super::audio::Heard,
+) -> View {
     let width = size.width.max(1.0);
     let height = size.height.max(1.0);
     let aspect = width / height;
@@ -62,9 +69,10 @@ pub fn prepare(program: &Program, time: f64, size: Size, theme: &Theme, tuning: 
     let glare_k = if index > 0 { ease_cubic((since / GLARE_MOVE) as f32) } else { 1.0 };
     let enter = enter(program, time);
     let colors = palette::palette(theme, tuning.theme_color_mix);
+    let bass = heard.bass.min(1.0) * tuning.audio_response;
     let drive = |weight: f32, local: f32| Drive {
         intensity: enter * tuning.light_intensity * weight,
-        bass: 0.0,
+        bass,
         color: colors.light,
         local,
     };
@@ -116,7 +124,7 @@ pub fn prepare(program: &Program, time: f64, size: Size, theme: &Theme, tuning: 
         time: time as f32,
         fog_density: fog[0],
         fog_tyndall: fog[1],
-        fog_scale: fog[2],
+        fog_scale: fog[2] * (1.0 + 0.2 * heard.power.min(1.0) * tuning.audio_response),
         fog_warp: fog[3],
         fog_drift: [fog[4], fog[5]],
         fog_ambient: fog[6],

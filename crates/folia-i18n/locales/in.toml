@@ -282,6 +282,7 @@ replayGainAuto = "Pintar"
 replayGainUnavailable = "Tidak ada ReplayGain terdeteksi"
 replayGainTitle = "Penguatan Audio"
 lyricTimelineOffset = "Offset Timeline"
+searching = "Mencari..."
 
 [search]
 placeholder = "Cari lagu..."
@@ -367,6 +368,7 @@ confirmOnlineProviderSwitch = "Ganti ke {{provider}}? Pemutaran online dan antre
 loading = "Memuat..."
 lattice = "Kolase antrean"
 noResults = "Tidak ada hasil ditemukan."
+loadMore = "Muat Lebih Banyak"
 albums = "Album"
 closeLogin = "Tutup login"
 dailyRecommendations = "Rekomendasi Harian"
@@ -535,3 +537,6 @@ lumiereReset = "Setelan Lumiere direset"
 nebbiaReset = "Setelan Nebbia direset"
 monetPortraitUpdated = "Gambar potret Monet diperbarui"
 monetPortraitCleared = "Gambar potret Monet dihapus"
+
+[navidrome]
+addToQueue = "Tambahkan ke Antrean"

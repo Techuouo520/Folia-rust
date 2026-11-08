@@ -18,11 +18,20 @@ const ID: &str = "ytm";
 
 pub struct Ytm {
     client: innertube::Client,
+    /// One search walk: YouTube pages with a continuation token, Folia with an offset.
+    search: std::sync::Mutex<Option<SearchWalk>>,
+}
+
+struct SearchWalk {
+    query: String,
+    items: Vec<Track>,
+    token: Option<String>,
+    done: bool,
 }
 
 impl Ytm {
     pub fn new(http: reqwest::Client) -> Self {
-        Self { client: innertube::Client::new(http) }
+        Self { client: innertube::Client::new(http), search: std::sync::Mutex::default() }
     }
 }
 
@@ -35,23 +44,70 @@ impl Provider for Ytm {
         "YouTube Music"
     }
 
-    /// `search_songs`: the songs shelf of a song-filtered search; its continuation token is not an offset, so the
-    /// first page is all there is here.
+    /// `search_songs`: the songs shelf, walked by continuation and sliced to the offset (`createYtmPager`).
     fn search_songs<'a>(
         &'a self,
         query: &'a str,
-        _limit: u32,
+        limit: u32,
         offset: u32,
     ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
         Box::pin(async move {
             let query: String = query.trim().chars().take(200).collect();
-            if query.is_empty() || offset > 0 {
-                return Ok(Page::default());
+            if query.is_empty() {
+                return Ok(Page::empty(offset));
             }
-            let answer =
-                self.client.call("search", json!({ "query": query, "params": innertube::SONG_FILTER })).await?;
-            let shelf = find_first(&answer, "musicShelfRenderer").unwrap_or(&Value::Null);
-            Ok(Page { items: rows(shelf, None), total: None })
+            if offset == 0 {
+                *self.search.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            }
+            let wanted = offset.saturating_add(if offset == 0 { 1 } else { limit.min(100) });
+            for _ in 0..8 {
+                let (len, done, token) = {
+                    let walk = self.search.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    match walk.as_ref().filter(|walk| walk.query == query) {
+                        Some(walk) => (walk.items.len(), walk.done, walk.token.clone()),
+                        None => (0, false, None),
+                    }
+                };
+                if done || len >= wanted as usize {
+                    break;
+                }
+                let answer = match &token {
+                    Some(token) if len > 0 => self.client.call("search", json!({ "continuation": token })).await?,
+                    _ => {
+                        self.client.call("search", json!({ "query": query, "params": innertube::SONG_FILTER })).await?
+                    }
+                };
+                let shelf = find_first(&answer, "musicShelfRenderer").unwrap_or(&Value::Null);
+                let batch = rows(shelf, None);
+                let next = continuation_token(&answer);
+                let repeated = next.as_ref().is_some_and(|next| token.as_ref() == Some(next));
+                let mut walk = self.search.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let entry = walk.get_or_insert_with(|| SearchWalk {
+                    query: query.clone(),
+                    items: Vec::new(),
+                    token: None,
+                    done: false,
+                });
+                if entry.query != query {
+                    *entry = SearchWalk { query: query.clone(), items: Vec::new(), token: None, done: false };
+                }
+                entry.items.extend(batch);
+                entry.done = crate::ytm_walk_done(next.is_some(), repeated);
+                entry.token = next;
+            }
+            let walk = self.search.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(walk) = walk.as_ref().filter(|walk| walk.query == query) else {
+                return Ok(Page::empty(offset));
+            };
+            if !walk.done && walk.items.len() <= offset as usize {
+                return Err(OmniError::Response("YouTube Music list could not be read this far".to_owned()));
+            }
+            let start = (offset as usize).min(walk.items.len());
+            let end = (start + limit as usize).min(walk.items.len());
+            let items = walk.items[start..end].to_vec();
+            let (has_more, next_offset, total) =
+                crate::ytm_search_page(walk.done, offset, walk.items.len() as u32, items.len() as u32);
+            Ok(Page { items, total, has_more, next_offset })
         })
     }
 
@@ -212,6 +268,14 @@ impl Ytm {
         songs.retain(|song| seen.insert(song.online.clone()));
         Ok(CollectionDetail { tracks: songs, ..Default::default() })
     }
+}
+
+fn continuation_token(page: &Value) -> Option<String> {
+    find_first(page, "continuationCommand")
+        .and_then(|command| command.get("token"))
+        .or_else(|| find_first(page, "nextContinuationData").and_then(|data| data.get("continuation")))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 /// `VIDEO_ID`.

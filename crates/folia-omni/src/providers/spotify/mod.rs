@@ -21,6 +21,7 @@ pub struct Spotify {
     attempt: std::sync::Mutex<Option<signin::Attempt>>,
     player: audio::Player,
     rng: ring::rand::SystemRandom,
+    searches: library::SearchWalks,
 }
 
 impl Spotify {
@@ -30,6 +31,7 @@ impl Spotify {
             attempt: std::sync::Mutex::default(),
             player: audio::Player::default(),
             rng: ring::rand::SystemRandom::new(),
+            searches: library::SearchWalks::new(),
         }
     }
 
@@ -53,7 +55,7 @@ impl Provider for Spotify {
         limit: u32,
         offset: u32,
     ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
-        Box::pin(library::search(&self.client, query, limit, offset))
+        Box::pin(library::search(&self.client, &self.searches, query, limit, offset))
     }
 
     /// Spotify's files are encrypted on its CDN: they come whole from `audio_file`.

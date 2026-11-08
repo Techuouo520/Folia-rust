@@ -282,6 +282,7 @@ replayGainAuto = "Thông minh"
 replayGainUnavailable = "Không tìm thấy Cân bằng âm lượng"
 replayGainTitle = "Cân bằng âm lượng"
 lyricTimelineOffset = "Lệch mốc thời gian"
+searching = "Đang tìm kiếm..."
 
 [search]
 placeholder = "Tìm bài hát..."
@@ -367,6 +368,7 @@ confirmOnlineProviderSwitch = "Chuyển sang {{provider}}? Danh sách phát và 
 loading = "Đang tải..."
 lattice = "Lattice"
 noResults = "Không tìm thấy kết quả."
+loadMore = "Tải thêm"
 albums = "Album"
 closeLogin = "Đóng đăng nhập"
 dailyRecommendations = "Gợi ý hàng ngày"
@@ -535,3 +537,6 @@ lumiereReset = "Đã đặt lại thông số Lumiere"
 nebbiaReset = "Đã đặt lại thông số Nebbia"
 monetPortraitUpdated = "Đã cập nhật ảnh nhân vật (Portrait) Monet"
 monetPortraitCleared = "Đã xóa ảnh nhân vật (Portrait) Monet"
+
+[navidrome]
+addToQueue = "Thêm vào hàng đợi"

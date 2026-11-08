@@ -851,6 +851,8 @@ pub struct Host<'a> {
     pub list_hover: Option<usize>,
     /// The query while the home seam's search panel is open.
     pub search: Option<&'a str>,
+    /// Settings, the workbench or sign-in is open.
+    pub modal: bool,
 }
 
 /// The open collection as its seam shows it (`useBravaisCollectionSeam`).

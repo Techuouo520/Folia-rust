@@ -282,6 +282,7 @@ replayGainAuto = "智能平衡"
 replayGainUnavailable = "未检测到 ReplayGain"
 replayGainTitle = "音频增益"
 lyricTimelineOffset = "时间轴偏移"
+searching = "搜索中..."
 
 [search]
 placeholder = "搜索歌曲..."
@@ -367,6 +368,7 @@ confirmOnlineProviderSwitch = "切换到 {{provider}}？当前在线播放与队
 loading = "加载中..."
 lattice = "队列拼贴"
 noResults = "未找到相关结果"
+loadMore = "加载更多"
 albums = "专辑"
 closeLogin = "关闭登录窗口"
 dailyRecommendations = "每日推荐"
@@ -535,3 +537,6 @@ lumiereReset = "绘光参数已重置"
 nebbiaReset = "雾笺参数已重置"
 monetPortraitUpdated = "Monet 肖像图已更新"
 monetPortraitCleared = "Monet 肖像图已清空"
+
+[navidrome]
+addToQueue = "加入播放队列"

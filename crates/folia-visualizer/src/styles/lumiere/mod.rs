@@ -1,6 +1,7 @@
 // Lumiere (绘光): a dark stage, volumetric shafts and a small window of lyrics lit by those shafts.
 
 mod art;
+mod audio;
 mod beams;
 pub mod bloom;
 mod catalog;
@@ -37,6 +38,7 @@ pub struct Cache {
     decor: decor::Store,
     text: text::Text,
     glyphs: Batch,
+    audio: audio::Sampler,
 }
 
 /// The graphics and text groups for one frame. Only the foreground bokeh and the frame are drawn above it.
@@ -58,8 +60,9 @@ impl<Message> shader::Program<Message> for Field<'_, Message> {
         let size = bounds.size();
         let tuning = Tuning::read(&self.scene.tuning);
         cache.sync(self.scene.lyrics, self.scene.seed, tuning.seamless);
-        let view = field::prepare(&cache.program, self.scene.time, size, self.scene.theme, tuning);
-        stage_pass(&mut cache, &self.scene, &view, tuning)
+        let heard = cache.audio.sample(audio::wall_ms(), self.scene.audio);
+        let view = field::prepare(&cache.program, self.scene.time, size, self.scene.theme, tuning, heard);
+        stage_pass(&mut cache, &self.scene, &view, tuning, heard)
     }
 }
 
@@ -82,14 +85,15 @@ impl<Message> shader::Program<Message> for Front<'_, Message> {
         let size = bounds.size();
         let tuning = Tuning::read(&self.scene.tuning);
         cache.sync(self.scene.lyrics, self.scene.seed, tuning.seamless);
-        let view = field::prepare(&cache.program, self.scene.time, size, self.scene.theme, tuning);
+        let heard = cache.audio.sample(audio::wall_ms(), self.scene.audio);
+        let view = field::prepare(&cache.program, self.scene.time, size, self.scene.theme, tuning, heard);
         let particles = {
             let Cache { decor, program, .. } = &mut *cache;
             decor.front(program, &view, self.scene.time, tuning)
         };
         gpu::FrontPass {
             bytes: field::pack(&view),
-            decor: decor::uniform(&cache.program, self.scene.time, tuning),
+            decor: decor::uniform(&cache.program, self.scene.time, tuning, mote_lift(heard, tuning)),
             particles,
         }
     }
@@ -98,6 +102,10 @@ impl<Message> shader::Program<Message> for Front<'_, Message> {
 /// The coverage images the sprite pipeline is built with (light marks of the lyric window).
 pub fn sprite_images() -> Vec<folia_render::glyphs::Image> {
     text::images()
+}
+
+fn mote_lift(heard: audio::Heard, tuning: Tuning) -> f32 {
+    1.0 + 0.5 * heard.treble.min(1.0) * tuning.audio_response
 }
 
 fn light<'a>(view: &'a View, tuning: Tuning, intensity: f32) -> text::Light<'a> {
@@ -114,8 +122,8 @@ fn light<'a>(view: &'a View, tuning: Tuning, intensity: f32) -> text::Light<'a> 
     }
 }
 
-fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning) -> gpu::Pass {
-    let Cache { decor, program, seed, text, glyphs } = cache;
+fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning, heard: audio::Heard) -> gpu::Pass {
+    let Cache { decor, program, seed, text, glyphs, .. } = cache;
     text.sync(program, scene.lyrics, *seed, view, tuning, scene.time);
     let light = light(view, tuning, text.window_intensity(scene.time));
     let echo = {
@@ -129,7 +137,7 @@ fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning)
     decor.ensure(*seed, scene.lyrics, program);
     let bursts = decor.active(scene.time);
     let (lines, particles) = decor.rebuild(program, view, scene.time, tuning);
-    let mut decor_bytes = decor::uniform(program, scene.time, tuning);
+    let mut decor_bytes = decor::uniform(program, scene.time, tuning, mote_lift(heard, tuning));
     for (slot, burst) in bursts.iter().enumerate() {
         let Some(burst) = burst else { continue };
         let Some([x, y, font_px]) = text.glyph_anchor(scene.lyrics, burst.line, burst.grapheme, scene.time) else {
@@ -165,7 +173,8 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
         return;
     }
     cache.sync(scene.lyrics, scene.seed, tuning.seamless);
-    let view = field::prepare(&cache.program, scene.time, size, scene.theme, tuning);
+    let heard = cache.audio.sample(audio::wall_ms(), scene.audio);
+    let view = field::prepare(&cache.program, scene.time, size, scene.theme, tuning, heard);
     if scene.backdrop && active_line(&scene.lyrics.lines, scene.time).is_some() {
         let Cache { program, seed, text, .. } = cache;
         text.sync(program, scene.lyrics, *seed, &view, tuning, scene.time);

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use folia_core::{AudioQuality, ChorusRange, Lyrics, Queue, Repeat, Track};
+use folia_core::{AudioFrame, AudioQuality, ChorusRange, Lyrics, Queue, Repeat, Track};
 use folia_lyrics::{ChorusSource, chorus_ranges_of, resolve_chorus};
 use folia_omni::{Collection, Omni};
 use folia_player::{Player, PlayerState, Status};
@@ -129,6 +129,15 @@ impl Playback {
 
     pub fn is_playing(&self) -> bool {
         self.status.state == PlayerState::Playing
+    }
+
+    /// Spectrum for the frame about to be drawn. Stopped playback is the idle breath.
+    pub fn audio_frame(&mut self, wall_ms: f64) -> AudioFrame {
+        let playing = self.is_playing();
+        match self.player.as_mut() {
+            Some(player) => player.audio_frame(playing, wall_ms),
+            None => AudioFrame::breath(wall_ms),
+        }
     }
 
     /// Personal FM has no editable queue (`isFmMode`).

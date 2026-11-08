@@ -1,4 +1,4 @@
-// Lyric animation styles drawn on an iced canvas; every frame is a pure function of playback time.
+// Lyric animation styles drawn on an iced canvas. A frame is playback time plus the current audio frame.
 
 mod anim;
 mod preview;
@@ -17,7 +17,7 @@ pub use tuning::{Group, Item, Manifest, Values};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use folia_core::{Line, Lyrics, Rgb, Theme};
+use folia_core::{AudioFrame, Line, Lyrics, Rgb, Theme};
 use iced::advanced::text::{self as core_text, Paragraph as _};
 use iced::widget::canvas::{self, Frame, Geometry};
 use iced::widget::image::Handle;
@@ -49,15 +49,17 @@ pub struct Scene<'a> {
     pub album: String,
     /// Cover or uploaded portrait, already decoded.
     pub portrait: Option<Handle>,
-    /// Style-picker and workbench pictures use Monet's static spectrum. Playback passes zeros.
+    /// Style-picker and workbench pictures use Monet's static spectrum. Playback reads `audio`.
     pub preview: bool,
+    /// Loudness for this frame. Bands are 0–255, the same scale as the original byte analyser.
+    pub audio: &'a AudioFrame,
 }
 
 /// Per-widget state: measured line layouts survive between frames.
 #[derive(Default)]
 pub struct SceneState {
     cadenza: RefCell<styles::cadenza::Cache>,
-    claddagh: RefCell<LayoutCache<styles::claddagh::LineLayout>>,
+    claddagh: RefCell<styles::claddagh::Cache>,
     classic: RefCell<LayoutCache<styles::classic::LineLayout>>,
     partita: RefCell<LayoutCache<styles::partita::PartitaLayout>>,
     tilt: RefCell<LayoutCache<styles::tilt::TiltLayout>>,

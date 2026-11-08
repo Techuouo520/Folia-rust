@@ -188,12 +188,14 @@ pub async fn account(client: &Client) -> Result<Option<Account>, OmniError> {
 pub async fn search(client: &Client, query: &str, limit: u32, offset: u32) -> Result<Page<Track>, OmniError> {
     let query = query.trim();
     if query.is_empty() {
-        return Ok(Page::default());
+        return Ok(Page::empty(offset));
     }
     let limit = limit.clamp(1, 100) as usize;
     let search_id = client::uuid(&client.rng);
     let mut items = Vec::new();
     let mut cursor = u64::from(offset);
+    let mut resume = cursor;
+    let mut has_more = false;
     while items.len() < limit {
         let body = json!({
             "q": query, "cursor": cursor.to_string(), "search_id": search_id, "from_search_id": search_id,
@@ -218,19 +220,25 @@ pub async fn search(client: &Client, query: &str, limit: u32, offset: u32) -> Re
             .into_iter()
             .filter_map(|v| v.pointer("/entity/track").cloned())
             .collect();
-        let remaining = limit - items.len();
-        let more = batch.len() > remaining || group.get("has_more").and_then(Value::as_bool) == Some(true);
-        items.extend(batch.iter().take(remaining).filter_map(track));
-        if batch.is_empty() || !more || items.len() == limit {
+        let group_more = group.get("has_more").and_then(Value::as_bool) == Some(true);
+        items.extend(batch.iter().filter_map(track));
+        if !crate::qishui_search_continues(batch.is_empty(), group_more) {
+            has_more = false;
             break;
         }
         let next = group.get("next_cursor").and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()));
-        match next {
-            Some(next) if next > cursor => cursor = next,
-            _ => return Err(OmniError::Response("Search cursor did not advance".to_owned())),
+        let Some(next) = next.filter(|next| *next > cursor) else {
+            return Err(OmniError::Response("Search cursor did not advance".to_owned()));
+        };
+        resume = next;
+        has_more = true;
+        if items.len() >= limit {
+            break;
         }
+        cursor = next;
     }
-    Ok(Page { items, total: None })
+    let next_offset = u32::try_from(resume).unwrap_or(u32::MAX);
+    Ok(Page { items, total: None, has_more: has_more && resume <= u64::from(u32::MAX), next_offset })
 }
 
 /// `catalog.track`: `/media/mget/` for one track.

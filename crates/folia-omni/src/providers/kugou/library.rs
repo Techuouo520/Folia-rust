@@ -65,7 +65,7 @@ pub async fn search(
         remembered.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|kept| kept == keyword)
     };
     if !client.session().signed_in() || (offset > 0 && remembers(&keyword)) {
-        return anonymous_search(client, query, page, limit).await;
+        return anonymous_search(client, query, page, limit, offset).await;
     }
     let answer = client
         .call(|| {
@@ -94,7 +94,7 @@ pub async fn search(
     if offset == 0 && rows.is_empty() {
         tracing::warn!("kugou signed-in search returned nothing; retrying anonymously");
         keep(true);
-        match anonymous_search(client, query, page, limit).await {
+        match anonymous_search(client, query, page, limit, offset).await {
             Ok(found) if !found.items.is_empty() => return Ok(found),
             Ok(_) => {}
             Err(err) => tracing::warn!(error = &err as &dyn std::error::Error, "kugou anonymous retry failed"),
@@ -102,11 +102,17 @@ pub async fn search(
     } else if offset == 0 {
         keep(false);
     }
-    Ok(Page { items: tracks(&rows), total: total_of(&answer) })
+    Ok(paged(tracks(&rows), rows.len() as u32, limit, offset, total_of(&answer)))
 }
 
 /// `requestKugouAnonymousSearch`: the lite client's old search, signed without a device or a session.
-async fn anonymous_search(client: &Client, query: &str, page: u32, limit: u32) -> Result<Page<Track>, OmniError> {
+async fn anonymous_search(
+    client: &Client,
+    query: &str,
+    page: u32,
+    limit: u32,
+    offset: u32,
+) -> Result<Page<Track>, OmniError> {
     let keyword =
         query.trim().split(" - ").next().map(str::trim).filter(|title| !title.is_empty()).unwrap_or(query.trim());
     let millis = gateway::now().as_millis();
@@ -147,7 +153,19 @@ async fn anonymous_search(client: &Client, query: &str, page: u32, limit: u32) -
         Some(0 | 200) | None => {}
         Some(code) => return Err(OmniError::Platform(code)),
     }
-    Ok(Page { items: tracks(&list_of(&answer)), total: total_of(&answer) })
+    let rows = list_of(&answer);
+    Ok(paged(tracks(&rows), rows.len() as u32, limit, offset, total_of(&answer)))
+}
+
+fn paged(
+    items: Vec<folia_core::Track>,
+    raw: u32,
+    limit: u32,
+    offset: u32,
+    total: Option<u64>,
+) -> Page<folia_core::Track> {
+    let (has_more, next_offset) = crate::kugou_search_page(offset, raw, limit, total);
+    Page { items, total, has_more, next_offset }
 }
 
 fn total_of(answer: &Value) -> Option<u64> {

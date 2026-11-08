@@ -153,7 +153,7 @@ pub fn back<'a>(host: &Host<'a>, shown: f32, hover: f32) -> Element<'a, Message>
     let button = mouse_area(button).on_enter(Message::BackHover(true)).on_exit(Message::BackHover(false));
     let scale = (0.92 + 0.08 * shown) * (1.0 + 0.05 * hover);
     let shift = iced::Vector::new(-6.0 * (1.0 - shown), 0.0);
-    let button: Element<'a, Message> = iced::widget::float(button).translate(move |_, _| shift).scale(scale).into();
+    let button: Element<'a, Message> = crate::float_layer::place(button, host.modal, shift, scale);
     let (top, left) = if host.window_width < 640.0 { (14.0, 16.0) } else { (20.0, 24.0) };
     container(button)
         .width(Length::Fill)

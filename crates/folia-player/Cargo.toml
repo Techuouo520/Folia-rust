@@ -7,7 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+folia-core.workspace = true
 cpal.workspace = true
+realfft.workspace = true
 rtrb.workspace = true
 rubato.workspace = true
 symphonia.workspace = true

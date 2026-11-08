@@ -27,7 +27,7 @@ fn get(params: Vec<(&str, String)>) -> Call<'_> {
 pub async fn search(client: &Client, query: &str, limit: u32, offset: u32) -> Result<Page<Track>, OmniError> {
     let query = query.trim();
     if query.is_empty() {
-        return Ok(Page::default());
+        return Ok(Page::empty(offset));
     }
     let limit = limit.clamp(1, 100);
     let params = vec![
@@ -39,7 +39,17 @@ pub async fn search(client: &Client, query: &str, limit: u32, offset: u32) -> Re
     let answer = client.call("/api/search/music/list", get(params)).await?;
     let data = answer.get("data").unwrap_or(&Value::Null);
     let rows = data.get("resultList").ok_or_else(|| OmniError::Response("Bodian search list is missing".to_owned()))?;
-    Ok(Page { items: tracks(Some(rows)), total: data.get("total").and_then(Value::as_u64) })
+    let items = tracks(Some(rows));
+    let total = data.get("total").and_then(|value| value.as_f64().or_else(|| value.as_str()?.parse().ok()));
+    let cursor = data.get("bodianPagination").and_then(|page| {
+        let next_offset = page.get("nextOffset")?.as_u64()?;
+        let has_more = page.get("hasMore")?.as_bool()?;
+        Some(crate::BodianCursor { next_offset, has_more })
+    });
+    let (has_more, next, total) =
+        crate::bodian_search_page(items.len() as u64, total, u64::from(offset), u64::from(limit), cursor);
+    let next_offset = u32::try_from(next).unwrap_or(u32::MAX);
+    Ok(Page { items, total, has_more: has_more && next <= u64::from(u32::MAX), next_offset })
 }
 
 /// `audio`: `checkRight`, then the requested quality's `audioUrl`; a preview (`status` 3) plays its audition clip at

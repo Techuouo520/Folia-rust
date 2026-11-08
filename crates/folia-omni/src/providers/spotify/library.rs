@@ -25,27 +25,122 @@ const HOME_ROWS: u64 = 10;
 /// Home sections that are the account's own listening record (`LISTENING_RECORD_SECTIONS`).
 const LISTENING_RECORD: [&str; 2] = ["HomeRecentlyPlayedSectionData", "HomeShortsSectionData"];
 
-/// `searchTracks`.
-pub async fn search(client: &Client, query: &str, limit: u32, offset: u32) -> Result<Page<Track>, OmniError> {
+/// Walks kept for one search term. Spotify repeats rows across offsets, so a page is only the new ones.
+pub struct SearchWalks {
+    inner: std::sync::Mutex<std::collections::VecDeque<(String, Walk)>>,
+}
+
+struct Walk {
+    songs: Vec<Track>,
+    seen: std::collections::HashSet<String>,
+    asked: u32,
+    done: bool,
+}
+
+impl SearchWalks {
+    pub fn new() -> Self {
+        Self { inner: std::sync::Mutex::new(std::collections::VecDeque::new()) }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::VecDeque<(String, Walk)>> {
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// `offset == 0` starts the walk again.
+    pub fn reset(&self, key: &str) {
+        self.lock().retain(|(name, _)| name != key);
+    }
+
+    pub fn ensure(&self, key: &str) {
+        let mut walks = self.lock();
+        if walks.iter().any(|(name, _)| name == key) {
+            return;
+        }
+        walks.push_back((
+            key.to_owned(),
+            Walk { songs: Vec::new(), seen: std::collections::HashSet::new(), asked: 0, done: false },
+        ));
+        while walks.len() > 8 {
+            walks.pop_front();
+        }
+    }
+
+    fn progress(&self, key: &str) -> (u32, bool, usize) {
+        let walks = self.lock();
+        walks
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, walk)| (walk.asked, walk.done, walk.songs.len()))
+            .unwrap_or((0, true, 0))
+    }
+
+    fn push(&self, key: &str, rows: Vec<Track>, raw: u32) {
+        let mut walks = self.lock();
+        let Some((_, walk)) = walks.iter_mut().find(|(name, _)| name == key) else { return };
+        let mut fresh = 0_u32;
+        for song in rows {
+            let id = song.online.as_ref().map(|online| online.id.clone()).unwrap_or_default();
+            if id.is_empty() || walk.seen.insert(id) {
+                fresh = fresh.saturating_add(1);
+                walk.songs.push(song);
+            }
+        }
+        walk.asked = walk.asked.saturating_add(raw);
+        walk.done = crate::spotify_search_done(fresh, walk.asked);
+    }
+
+    fn page(&self, key: &str, offset: u32, limit: u32) -> Page<Track> {
+        let walks = self.lock();
+        let Some((_, walk)) = walks.iter().find(|(name, _)| name == key) else { return Page::empty(offset) };
+        let start = offset as usize;
+        let end = (start + limit as usize).min(walk.songs.len());
+        let items = if start < walk.songs.len() { walk.songs[start..end].to_vec() } else { Vec::new() };
+        let (has_more, next_offset) =
+            crate::spotify_search_page(walk.done, offset, walk.songs.len() as u32, items.len() as u32);
+        Page { items, total: None, has_more, next_offset }
+    }
+}
+
+/// `searchTracks`. One page is the new rows a walk from the start has not already kept.
+pub async fn search(
+    client: &Client,
+    walks: &SearchWalks,
+    query: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Page<Track>, OmniError> {
     let text = query.trim();
     if text.is_empty() {
-        return Ok(Page::default());
+        return Ok(Page::empty(offset));
     }
-    let variables = json!({
-        "searchTerm": text, "offset": offset, "limit": limit.clamp(1, SEARCH_ROWS), "includePreReleases": false,
-        "numberOfTopResults": 20, "includeAudiobooks": true, "includeAuthors": false,
-    });
-    let data = client.query("searchTracks", variables, None).await?;
-    let tracks = data.pointer("/searchV2/tracksV2").unwrap_or(&Value::Null);
-    let items = tracks
-        .get("items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.pointer("/item/data"))
-        .filter_map(song_of)
-        .collect();
-    Ok(Page { items, total: tracks.get("totalCount").and_then(Value::as_u64) })
+    let limit = limit.max(1);
+    if offset == 0 {
+        walks.reset(text);
+    }
+    walks.ensure(text);
+    for _ in 0..8 {
+        let (asked, done, len) = walks.progress(text);
+        if done || len > offset as usize {
+            break;
+        }
+        let variables = json!({
+            "searchTerm": text, "offset": asked, "limit": limit.min(SEARCH_ROWS), "includePreReleases": false,
+            "numberOfTopResults": 20, "includeAudiobooks": true, "includeAuthors": false,
+        });
+        let data = client.query("searchTracks", variables, None).await?;
+        let tracks = data.pointer("/searchV2/tracksV2").cloned().unwrap_or(Value::Null);
+        let raw = tracks.get("items").and_then(Value::as_array).map(|rows| rows.len()).unwrap_or(0) as u32;
+        let rows = tracks
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.pointer("/item/data"))
+            .filter_map(song_of)
+            .collect();
+        walks.push(text, rows, raw);
+    }
+    Ok(walks.page(text, offset, limit))
 }
 
 /// `readAccount`: `profileAttributes` for the name and picture, `product_state` for the plan.

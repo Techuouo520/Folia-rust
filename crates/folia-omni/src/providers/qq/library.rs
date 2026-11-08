@@ -60,7 +60,7 @@ pub async fn search(
 ) -> Result<Page<Track>, OmniError> {
     let keyword: String = query.trim().chars().take(MAX_KEYWORD).collect();
     if keyword.is_empty() {
-        return Ok(Page::default());
+        return Ok(Page::empty(offset));
     }
     let size = limit.clamp(1, MAX_PAGE);
     let page = offset / size + 1;
@@ -80,7 +80,7 @@ pub async fn search(
         let param = search_param(&keyword, page, size, 0);
         match client.android("music.search.SearchCgiService", "DoSearchForQQMusicLite", param).await {
             Ok(data) => {
-                let found = search_page(&data);
+                let found = search_page(&data, page, size, true);
                 if !found.items.is_empty() || offset > 0 {
                     if offset == 0 {
                         keep(false);
@@ -114,7 +114,7 @@ async fn anonymous_search(client: &Client, keyword: &str, page: u32, size: u32) 
     if !data.pointer("/body/item_song").is_some_and(Value::is_array) {
         return Err(OmniError::Response("QQ search returned no song list".to_owned()));
     }
-    Ok(search_page(&data))
+    Ok(search_page(&data, page, size, false))
 }
 
 fn search_param(keyword: &str, page: u32, size: u32, kind: u32) -> Value {
@@ -131,9 +131,14 @@ fn search_param(keyword: &str, page: u32, size: u32, kind: u32) -> Value {
     })
 }
 
-fn search_page(data: &Value) -> Page<Track> {
+fn search_page(data: &Value, page: u32, size: u32, session: bool) -> Page<Track> {
+    let items = tracks(data.pointer("/body/item_song"));
     let total = data.pointer("/meta/sum").or_else(|| data.pointer("/meta/estimate_sum")).and_then(Value::as_u64);
-    Page { items: tracks(data.pointer("/body/item_song")), total }
+    let (has_more, next_offset) = match data.get("more").and_then(Value::as_bool) {
+        Some(more) if session => crate::qq_session_search_page(more, page, size),
+        _ => crate::qq_anonymous_search_page(items.len() as u32, page, size),
+    };
+    Page { items, total, has_more, next_offset }
 }
 
 /// `getAudioSource`: each tier in turn; signed in through `UrlGetVkey`, as a guest through the web's `CgiGetVkey`.

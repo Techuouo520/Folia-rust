@@ -1550,6 +1550,8 @@ name = "folia-player"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "folia-core",
+ "realfft",
  "rtrb",
  "rubato",
  "symphonia",

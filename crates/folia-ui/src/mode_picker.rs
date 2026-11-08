@@ -93,6 +93,7 @@ pub struct Look<'a> {
     pub style_id: &'a str,
     /// Panel opacity while it opens and closes.
     pub open: f32,
+    pub audio: &'a folia_core::AudioFrame,
 }
 
 impl Pickers {
@@ -265,6 +266,7 @@ impl Pickers {
         look: Look<'a>,
         place: Place,
         now: Instant,
+        modal: bool,
     ) -> Option<Element<'a, crate::panel::Message>> {
         let which = self.drawn?;
         let pop = self.pop.value(now);
@@ -321,10 +323,8 @@ impl Pickers {
         // nothing is squeezed; it pops in from 98% and scales with the panel as one piece.
         let left = (place.origin.0 + GUTTER - plate.inset.0).max(0.0);
         let top = (place.origin.1 + top - plate.inset.1).max(0.0);
-        let layer: Element<'a, crate::panel::Message> = iced::widget::float(layer)
-            .translate(move |_, _| iced::Vector::new(0.0, lift))
-            .scale(0.98 + 0.02 * pop)
-            .into();
+        let layer: Element<'a, crate::panel::Message> =
+            crate::float_layer::place(layer, modal, iced::Vector::new(0.0, lift), 0.98 + 0.02 * pop);
         let catcher = mouse_area(container(space()).width(Length::Fill).height(Length::Fill))
             .on_press(crate::panel::Message::Picker(Message::Close));
         let placed = container(layer).padding(iced::Padding { top, left, ..iced::Padding::ZERO });
@@ -371,6 +371,7 @@ impl Pickers {
                     album: String::new(),
                     portrait: None,
                     preview: true,
+                    audio: look.audio,
                 };
                 if hovered {
                     canvas(folia_visualizer::Playing(scene)).width(Length::Fill).height(Length::Fill).into()

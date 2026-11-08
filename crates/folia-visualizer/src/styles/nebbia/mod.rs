@@ -1,5 +1,5 @@
 // Nebbia (雾笺): a rainy night street behind glass, lyrics wiped into the fog.
-// Beat and chorus energy are 0 until the analysis crate exists, so the bus does not bump.
+// Small rain follows the vocal band. Drum hits are not analysed, so the bus keeps its idle sway.
 
 mod drops;
 mod gpu;
@@ -12,10 +12,55 @@ mod strokes;
 mod tuning;
 
 pub use gpu::{Pass, Renderer, frame};
+
+/// One step of `VocalEnergy`: peak jumps to the raw byte, floor creeps, the span is at least 8.
+pub fn vocal_energy(floor: f32, peak: f32, raw: f32, dt: f32) -> (f32, f32, f32) {
+    let k = 1.0 - (-dt / 3.0).exp();
+    let peak = raw.max(peak + (raw - peak) * k * 0.5);
+    let floor = raw.min(floor + (raw - floor) * k * 0.3);
+    let span = (peak - floor).max(8.0);
+    let value = ((raw - floor) / span).clamp(0.0, 1.0).powf(1.2);
+    (value, floor, peak)
+}
+
+/// Vocal-band follower kept by the street shader. Starts at floor 0, peak 1, like `VocalEnergy`.
+#[derive(Clone)]
+pub struct RainEnergy {
+    floor: Cell<f32>,
+    peak: Cell<f32>,
+    last_ms: Cell<f64>,
+}
+
+impl Default for RainEnergy {
+    fn default() -> Self {
+        Self { floor: Cell::new(0.0), peak: Cell::new(1.0), last_ms: Cell::new(0.0) }
+    }
+}
+
+impl RainEnergy {
+    fn step(&self, raw: f32) -> f32 {
+        let now = wall_ms();
+        let previous = self.last_ms.get();
+        let dt = if previous > 0.0 { ((now - previous) / 1000.0).clamp(0.0, 0.1) as f32 } else { 1.0 / 60.0 };
+        self.last_ms.set(now);
+        let (value, floor, peak) = vocal_energy(self.floor.get(), self.peak.get(), raw, dt);
+        self.floor.set(floor);
+        self.peak.set(peak);
+        value
+    }
+}
+
+fn wall_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
 pub use ink::glyphs_settled;
 pub use strokes::{StrokesError, load_file};
 pub use tuning::manifest;
 
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use iced::widget::canvas::{Frame, Text};
@@ -36,10 +81,11 @@ pub fn view<'a, Message>(scene: Scene<'a>) -> View<'a, Message> {
 }
 
 impl<Message> shader::Program<Message> for View<'_, Message> {
-    type State = ();
+    type State = RainEnergy;
     type Primitive = gpu::Pass;
 
-    fn draw(&self, _state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
+    fn draw(&self, state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
+        let energy = state.step(self.scene.audio.vocal);
         frame(
             self.scene.lyrics,
             self.scene.time,
@@ -47,6 +93,7 @@ impl<Message> shader::Program<Message> for View<'_, Message> {
             self.scene.theme,
             self.scene.font_scale,
             &self.scene.tuning,
+            energy,
         )
     }
 }

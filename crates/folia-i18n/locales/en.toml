@@ -282,6 +282,7 @@ replayGainAuto = "Smart"
 replayGainUnavailable = "No ReplayGain detected"
 replayGainTitle = "Audio Gain"
 lyricTimelineOffset = "Timeline Offset"
+searching = "Searching..."
 
 [search]
 placeholder = "Search songs..."
@@ -367,6 +368,7 @@ confirmOnlineProviderSwitch = "Switch to {{provider}}? Current online playback a
 loading = "Loading..."
 lattice = "Queue collage"
 noResults = "No results found."
+loadMore = "Load More"
 albums = "Albums"
 closeLogin = "Close login"
 dailyRecommendations = "Daily Recommendations"
@@ -535,3 +537,6 @@ lumiereReset = "Lumiere tuning reset"
 nebbiaReset = "Nebbia tuning reset"
 monetPortraitUpdated = "Monet portrait image updated"
 monetPortraitCleared = "Monet portrait image cleared"
+
+[navidrome]
+addToQueue = "Add to Queue"

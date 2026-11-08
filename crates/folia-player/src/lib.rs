@@ -1,12 +1,15 @@
 // Audio playback: a decoder thread feeds a lock-free ring buffer that the device callback drains.
 
+mod analyser;
 mod convert;
 mod decoder;
 mod output;
 mod shared;
 mod source;
 
+pub use analyser::{Analyser, TAP_CAPACITY, push_samples};
 pub use convert::map_channels;
+pub use folia_core::AudioFrame;
 pub use shared::PlayerState;
 
 use std::path::{Path, PathBuf};
@@ -55,12 +58,14 @@ pub struct Player {
     shared: Arc<Shared>,
     stream: cpal::Stream,
     rate: u32,
+    analyser: Analyser,
 }
 
 impl Player {
     pub fn new() -> Result<Self, PlayerError> {
         let shared = Arc::new(Shared::new());
-        let (output, producer) = output::open(shared.clone())?;
+        let (tap, analyser) = Analyser::pair();
+        let (output, producer) = output::open(shared.clone(), tap)?;
         let (commands, receiver) = mpsc::channel();
         let decoder = Decoder::new(shared.clone(), producer, output.channels, output.rate, receiver);
         std::thread::Builder::new()
@@ -68,7 +73,12 @@ impl Player {
             .spawn(move || decoder.run())
             .map_err(PlayerError::Thread)?;
         tracing::info!(rate = output.rate, channels = output.channels, "audio output opened");
-        Ok(Self { commands, shared, stream: output.stream, rate: output.rate })
+        Ok(Self { commands, shared, stream: output.stream, rate: output.rate, analyser })
+    }
+
+    /// The latest spectrum. `playing` selects analysis; otherwise the frame is the idle breath.
+    pub fn audio_frame(&mut self, playing: bool, wall_ms: f64) -> AudioFrame {
+        *self.analyser.frame(playing, wall_ms)
     }
 
     /// Starts playing `path` from the beginning.

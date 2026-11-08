@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use folia_core::AnimationIntensity;
-use iced::widget::canvas::{self, Fill, Frame, Path, Stroke, Text, gradient};
+use iced::widget::canvas::{self, Fill, Frame, LineCap, Path, Stroke, Style, Text, gradient};
 use iced::widget::image::Handle;
 use iced::{Color, Point, Rectangle, Size, Vector, border::Radius, mouse};
 
@@ -642,34 +642,152 @@ pub fn interaction(scene: &Scene<'_>, cache: &Cache, size: Size, at: Option<Poin
     }
 }
 
+/// `audioPower` (0–255), the five bands over 255 as the original reads them, and the raw bins while playing.
+fn playback_spectrum<'a>(scene: &Scene<'a>) -> (f64, [f64; 5], &'a [u8]) {
+    let audio = scene.audio;
+    let unit = |value: f32| f64::from(value) / 255.0;
+    let bands = [unit(audio.bass), unit(audio.low_mid), unit(audio.mid), unit(audio.vocal), unit(audio.treble)];
+    let raw: &[u8] = if audio.has_spectrum { &audio.spectrum } else { &[] };
+    (f64::from(audio.power), bands, raw)
+}
+
 fn draw_audio(frame: &mut Frame, rect: Rectangle, scene: &Scene<'_>, line: bool, progress: f32) {
-    let ink = color(scene.theme.primary, 0.9 * progress);
+    if scene.preview {
+        draw_static_audio(frame, rect, scene, line, progress);
+    } else {
+        draw_live_audio(frame, rect, scene, line, progress);
+    }
+}
+
+/// `drawStaticBars`: the preview and the workbench. The line stroke is 2px; the 1.5 set above it is replaced.
+fn draw_static_audio(frame: &mut Frame, rect: Rectangle, scene: &Scene<'_>, line: bool, progress: f32) {
     let y0 = rect.y;
+    let height = rect.height;
     if line {
-        let path = Path::new(|builder| {
-            for index in 0..72 {
-                let t = index as f32 / 71.0;
-                let x = rect.x + t * rect.width;
-                let envelope = (t * std::f32::consts::PI).sin();
-                let val = if scene.preview { 0.12 + ((index as f32 * 0.35).sin() * 0.5 + 0.5) * 0.42 } else { 0.02 };
-                let point = Point::new(x, y0 + rect.height - rect.height * val * envelope);
-                if index == 0 {
-                    builder.move_to(point);
-                } else {
-                    builder.line_to(point);
-                }
-            }
-        });
-        frame.stroke(&path, Stroke::default().with_width(1.5).with_color(ink));
+        let points = static_points(rect);
+        let fill = gradient::Linear::new(Point::new(rect.x, y0), Point::new(rect.x, y0 + height))
+            .add_stop(0.0, color(scene.theme.primary, 0.24 * progress))
+            .add_stop(1.0, color(scene.theme.primary, 0.0));
+        frame.fill(&area_under(&points, rect), Fill::from(fill));
+        frame.stroke(&curve(&points), stroke(color(scene.theme.primary, 0.96 * progress), 2.0));
+        return;
+    }
+    let gap = rect.width / 72.0;
+    let ink = color(scene.theme.primary, 0.9 * progress);
+    for index in 0..72 {
+        let envelope = (index as f32 / 71.0 * std::f32::consts::PI).sin();
+        let val = 0.12 + ((index as f32 * 0.35).sin() * 0.5 + 0.5) * 0.42;
+        let bar = height * (0.02 + val * 0.8 * envelope);
+        let x = rect.x + index as f32 * gap + gap * 0.14;
+        frame.fill_rectangle(Point::new(x, y0 + height - bar), Size::new((gap * 0.34).max(1.35), bar), ink);
+    }
+}
+
+/// The playing spectrum. `t` is the playback position in milliseconds, so a pause holds the frame.
+fn draw_live_audio(frame: &mut Frame, rect: Rectangle, scene: &Scene<'_>, line: bool, progress: f32) {
+    let (power, bands, raw) = playback_spectrum(scene);
+    let millis = scene.time * 1000.0;
+    let level = super::spectrum::energy(power);
+    let y0 = rect.y;
+    let height = f64::from(rect.height);
+    let across = gradient::Linear::new(Point::new(rect.x, y0), Point::new(rect.x + rect.width, y0))
+        .add_stop(0.0, color(scene.theme.primary, 0.72 * progress))
+        .add_stop(0.5, color(scene.theme.primary, 0.94 * progress))
+        .add_stop(1.0, color(scene.theme.primary, 0.72 * progress));
+    if line {
+        let points = (0..72)
+            .map(|index| {
+                let x = rect.x + index as f32 / 71.0 * rect.width;
+                let at = index as f64 / 71.0;
+                let band = band_at(bands, raw, at);
+                let amplitude = level * 0.04 + band * 0.8 + super::spectrum::wave(index, millis) * 0.04;
+                let y = y0 + rect.height - (height * amplitude * super::spectrum::envelope(index)).max(0.0) as f32;
+                (x, y)
+            })
+            .collect::<Vec<_>>();
+        let down = gradient::Linear::new(Point::new(rect.x, y0), Point::new(rect.x, y0 + rect.height))
+            .add_stop(0.0, color(scene.theme.primary, 0.24 * progress))
+            .add_stop(1.0, color(scene.theme.primary, 0.0));
+        frame.fill(&area_under(&points, rect), Fill::from(down));
+        frame.stroke(&curve(&points), stroke_gradient(across, 2.0));
         return;
     }
     let gap = rect.width / 72.0;
     for index in 0..72 {
-        let t = index as f32 / 71.0;
-        let envelope = (t * std::f32::consts::PI).sin();
-        let val = if scene.preview { 0.12 + ((index as f32 * 0.35).sin() * 0.5 + 0.5) * 0.42 } else { 0.0 };
-        let height = rect.height * (0.02 + val * 0.8 * envelope) * progress;
-        let x = rect.x + index as f32 * gap;
-        frame.fill_rectangle(Point::new(x, y0 + rect.height - height), Size::new((gap * 0.34).max(1.0), height), ink);
+        let band = band_at(bands, raw, index as f64 / 71.0);
+        let bar = super::spectrum::active_bar_height(
+            height,
+            level,
+            band,
+            super::spectrum::pulse(index, millis),
+            super::spectrum::envelope(index),
+        ) as f32;
+        let x = rect.x + index as f32 * gap + gap * 0.14;
+        frame.fill_rectangle(
+            Point::new(x, y0 + rect.height - bar),
+            Size::new((gap * 0.34).max(1.35), bar),
+            Fill::from(across),
+        );
     }
+}
+
+fn band_at(bands: [f64; 5], raw: &[u8], at: f64) -> f64 {
+    if raw.len() > 6 {
+        super::spectrum::sample_raw_spectrum_profile(raw, at)
+    } else {
+        super::spectrum::sample_spectrum_profile(bands, at)
+    }
+}
+
+fn static_points(rect: Rectangle) -> Vec<(f32, f32)> {
+    (0..72)
+        .map(|index| {
+            let x = rect.x + index as f32 / 71.0 * rect.width;
+            let envelope = (index as f32 / 71.0 * std::f32::consts::PI).sin();
+            let val = 0.12 + ((index as f32 * 0.35).sin() * 0.5 + 0.5) * 0.42;
+            let y = rect.y + rect.height - rect.height * val * envelope;
+            (x, y)
+        })
+        .collect()
+}
+
+fn curve(points: &[(f32, f32)]) -> Path {
+    Path::new(|builder| {
+        let Some((first, rest)) = points.split_first() else { return };
+        builder.move_to(Point::new(first.0, first.1));
+        for (index, point) in rest.iter().enumerate() {
+            let previous = if index == 0 { first } else { &points[index] };
+            let mid = Point::new((previous.0 + point.0) / 2.0, (previous.1 + point.1) / 2.0);
+            builder.quadratic_curve_to(Point::new(previous.0, previous.1), mid);
+        }
+        if let Some(last) = points.last() {
+            builder.line_to(Point::new(last.0, last.1));
+        }
+    })
+}
+
+fn area_under(points: &[(f32, f32)], rect: Rectangle) -> Path {
+    Path::new(|builder| {
+        let Some((first, rest)) = points.split_first() else { return };
+        builder.move_to(Point::new(first.0, first.1));
+        for (index, point) in rest.iter().enumerate() {
+            let previous = if index == 0 { first } else { &points[index] };
+            let mid = Point::new((previous.0 + point.0) / 2.0, (previous.1 + point.1) / 2.0);
+            builder.quadratic_curve_to(Point::new(previous.0, previous.1), mid);
+        }
+        if let Some(last) = points.last() {
+            builder.line_to(Point::new(last.0, last.1));
+            builder.line_to(Point::new(rect.x + rect.width, rect.y + rect.height));
+            builder.line_to(Point::new(rect.x, rect.y + rect.height));
+            builder.close();
+        }
+    })
+}
+
+fn stroke(color: iced::Color, width: f32) -> Stroke<'static> {
+    Stroke::default().with_color(color).with_width(width).with_line_cap(LineCap::Round)
+}
+
+fn stroke_gradient(fill: gradient::Linear, width: f32) -> Stroke<'static> {
+    Stroke { style: Style::Gradient(fill.into()), width, line_cap: LineCap::Round, ..Stroke::default() }
 }

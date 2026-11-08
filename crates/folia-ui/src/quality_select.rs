@@ -207,7 +207,7 @@ impl Select {
     }
 
     /// The open menu, above the trigger where it fits, ending at the trigger's right edge.
-    pub fn menu<'a>(&self, look: Look<'a>, place: Place) -> Option<Element<'a, crate::panel::Message>> {
+    pub fn menu<'a>(&self, look: Look<'a>, place: Place, modal: bool) -> Option<Element<'a, crate::panel::Message>> {
         let Look { i18n, tokens, daylight, levels, value, now } = look;
         let pop = self.pop.value(now);
         if pop <= 0.0 || levels.is_empty() {
@@ -245,7 +245,7 @@ impl Select {
         let fix_x = (1.0 - scale) * width / 2.0;
         let fix_y = if above { (1.0 - scale) * height / 2.0 } else { -(1.0 - scale) * height / 2.0 };
         let layer: Element<'a, crate::panel::Message> =
-            iced::widget::float(layer).translate(move |_, _| Vector::new(fix_x, lift + fix_y)).scale(scale).into();
+            crate::float_layer::place(layer, modal, Vector::new(fix_x, lift + fix_y), scale);
         let top = (place.origin.1 + top - plate.inset.1).max(0.0);
         let left = (place.origin.0 + left - plate.inset.0).max(0.0);
         let placed = container(layer).padding(iced::Padding { top, left, ..iced::Padding::ZERO });

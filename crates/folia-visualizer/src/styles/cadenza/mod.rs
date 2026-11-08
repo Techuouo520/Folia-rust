@@ -74,7 +74,7 @@ impl Cache {
     }
 }
 
-/// Draws the active line. Beat energy is 0, so the per-word float stays still; the cloud still lifts.
+/// Draws the active line. `audio.power` lifts the cloud and floats each word, as `audioPower / 255`.
 pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size) {
     let Some(index) = folia_lyrics::active_line(&scene.lyrics.lines, scene.time) else {
         return;
@@ -88,10 +88,13 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
         return;
     }
     let origin = Point::new(size.width / 2.0, size.height * 0.42);
-    let lift = (scene.time * 2.3).sin() * 3.0;
+    let energy = (f64::from(scene.audio.power) / 255.0).clamp(0.0, 1.0);
+    let motion_energy = energy * envelopes::MOTION;
+    let lift = (scene.time * 2.3).sin() * (3.0 + motion_energy * 8.0);
     frame.with_save(|frame| {
         scale_around(frame, origin, line_scale, 0.0);
         let px = font_px(size.width, line.text.chars().count(), line.words.len().max(1), scale);
+        let mut placement_index = 0usize;
         for bucket in buckets(&layout.placements, scene.time, &timing) {
             for index in bucket {
                 let ctx = Paint {
@@ -104,7 +107,11 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
                     font_px: px,
                     motion_amount: envelopes::MOTION,
                     glow: envelopes::GLOW,
+                    energy,
+                    motion_energy,
+                    index: placement_index,
                 };
+                placement_index += 1;
                 paint(frame, &layout.placements[index], &ctx);
             }
         }
@@ -134,10 +141,26 @@ struct Paint<'a> {
     font_px: f32,
     motion_amount: f64,
     glow: f64,
+    energy: f64,
+    motion_energy: f64,
+    index: usize,
 }
 
 fn paint(frame: &mut Frame, placement: &Placement, paint: &Paint<'_>) {
-    let Paint { scene, timing, size, lift, opacity, line_start, font_px, motion_amount, glow } = *paint;
+    let Paint {
+        scene,
+        timing,
+        size,
+        lift,
+        opacity,
+        line_start,
+        font_px,
+        motion_amount,
+        glow,
+        energy,
+        motion_energy,
+        index,
+    } = *paint;
     let posed = motion(
         &WordMotion {
             scale: placement.scale,
@@ -156,14 +179,16 @@ fn paint(frame: &mut Frame, placement: &Placement, paint: &Paint<'_>) {
     if posed.alpha * opacity < 0.015 && posed.glow * opacity < 0.015 {
         return;
     }
-    let left = f64::from(size.width) / 2.0 + placement.x + posed.drift_x;
-    let baseline = f64::from(size.height) * 0.42 + lift + placement.y + posed.drift_y;
+    let local_x = (scene.time * 1.2 + index as f64 * 0.6).sin() * motion_energy * 4.0;
+    let local_y = (scene.time * 1.5 + index as f64 * 0.4).cos() * motion_energy * 2.5;
+    let left = f64::from(size.width) / 2.0 + placement.x + posed.drift_x + local_x;
+    let baseline = f64::from(size.height) * 0.42 + lift + placement.y + posed.drift_y + local_y;
     let anchor = Point::new((left + placement.width / 2.0) as f32, (baseline - placement.height * 0.42) as f32);
     frame.with_save(|frame| {
         frame.translate(Vector::new(anchor.x, anchor.y));
         frame.rotate((posed.rotation as f32).to_radians());
         frame.scale(posed.scale as f32);
-        paint_glow(frame, scene, placement, timing, posed.glow * opacity, font_px, glow);
+        paint_glow(frame, scene, placement, timing, posed.glow * opacity, font_px, (glow, 1.0 + energy * 0.22));
         let body = scene.theme.primary.mix(scene.theme.accent, posed.mix as f32);
         fill(frame, &placement.text, 0.0, color(body, (posed.alpha * opacity) as f32), font_px);
     });
@@ -176,16 +201,18 @@ fn paint_glow(
     timing: &Timing,
     glow: f64,
     font_px: f32,
-    glow_scale: f64,
+    glow_scale: (f64, f64),
 ) {
+    let (glow_scale, blur) = glow_scale;
     if glow <= 0.02 {
         return;
     }
     let split = timing.hints.reveal == folia_lyrics::Reveal::Normal && !placement.cjk && placement.glyphs.len() > 1;
     let tint = color(scene.theme.accent, 1.0);
+    let spread = (1.08 * blur) as f32;
     if !split {
         frame.with_save(|frame| {
-            frame.scale(1.08_f32);
+            frame.scale(spread);
             fill(frame, &placement.text, 0.0, fade(tint, glow * 0.55 * glow_scale), font_px);
         });
         return;

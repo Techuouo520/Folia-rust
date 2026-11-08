@@ -55,6 +55,11 @@ impl Tween {
         self.at = now;
     }
 
+    /// The value `set` is easing towards.
+    pub fn goal(&self) -> f32 {
+        self.goal
+    }
+
     pub fn running(&self, now: Instant) -> bool {
         (self.from - self.goal).abs() > 0.0001
             && now.saturating_duration_since(self.at).as_secs_f64() * 1000.0 < self.ms

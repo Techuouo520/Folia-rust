@@ -187,7 +187,7 @@ pub struct RingMoment {
     pub font_px: f32,
 }
 
-/// One glyph on the ellipse. `power` is the beat; this port passes 0 until audio bands exist.
+/// One glyph on the ellipse. `power` is the smoothed bass band, 0–1.
 pub fn glyph(item: &Placed, index: usize, moment: &RingMoment) -> Glyph {
     let RingMoment {
         line_index,

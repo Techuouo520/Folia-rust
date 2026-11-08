@@ -55,7 +55,7 @@ pub struct Drive {
 }
 
 /// Collects this frame's segments and drops into the shared buffers and returns the rest.
-pub fn paint(scene: &Scene, time: f64, width: f32, height: f32, knobs: &Knobs) -> Drive {
+pub fn paint(scene: &Scene, time: f64, width: f32, height: f32, knobs: &Knobs, energy: f32) -> Drive {
     let mut held = store().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Paint { segments, drops, path } = &mut *held;
     segments.clear();
@@ -68,7 +68,7 @@ pub fn paint(scene: &Scene, time: f64, width: f32, height: f32, knobs: &Knobs) -
             glass.line(line, time);
         }
     }
-    glass.hits(scene, time, width, height);
+    glass.hits(scene, time, width, height, energy);
     let mut drive = Drive { lobes: [[0.0; 4]; 8], lobe_sd: [[0.0; 4]; 4], spot: spot(scene, time) };
     let mut n = 0;
     for (index, line) in scene.lines.iter().enumerate() {
@@ -299,9 +299,9 @@ impl Glass<'_, '_> {
         self.put(bx + wob(dist), by + dist + r * 0.3, r, bead_v, 1.0, 1.0 + stretch);
     }
 
-    /// Raindrops on the glass (the original `NebbiaHits.draw`): big ones on word starts, small ones at the
-    /// quiet rate a song without a vocal track gets.
-    fn hits(&mut self, scene: &Scene, time: f64, width: f32, height: f32) {
+    /// Raindrops on the glass (the original `NebbiaHits.draw`): big ones on word starts, small ones at
+    /// `(0.15 + 7 e²) × rainHit` per second, where `e` is the vocal-band energy.
+    fn hits(&mut self, scene: &Scene, time: f64, width: f32, height: f32, energy: f32) {
         let refog = self.knobs.refog;
         let life = 0.4 + refog * 0.3 + BEAD_HOLD * 0.5 + refog;
         self.pen.transform(SCREEN);
@@ -312,7 +312,8 @@ impl Glass<'_, '_> {
                 self.hit(hit, true, size, time, refog);
             }
         }
-        let rate = 0.15 * f64::from(self.knobs.rain_hit) * BUCKET;
+        let level = f64::from(energy);
+        let rate = (0.15 + 7.0 * level * level) * f64::from(self.knobs.rain_hit) * BUCKET;
         if rate <= 0.0 {
             return;
         }
