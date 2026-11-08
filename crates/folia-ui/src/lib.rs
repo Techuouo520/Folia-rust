@@ -9,6 +9,7 @@ mod design_size;
 mod drag_capture;
 mod float_layer;
 mod focus_card;
+mod fonts;
 mod home;
 mod icons;
 mod library;
@@ -21,6 +22,7 @@ mod online;
 mod overlay;
 mod page_fade;
 mod panel;
+mod panel_sheets;
 mod platform_highlight;
 mod platform_icon;
 mod platform_rows;
@@ -37,8 +39,10 @@ mod search;
 pub mod search_results;
 mod settings;
 mod settings_kit;
+mod smooth_scroll;
 mod splash;
 mod status_toast;
+mod timeline;
 mod typeface;
 mod wall;
 mod wall_pan;
@@ -64,10 +68,15 @@ pub use playback_navigation::PlaybackNavigation;
 pub use player_bar::{CapsuleBox, PlayerBar, capsule_box};
 pub use search_results::format_duration;
 pub use settings_kit::{Faded, Tokens, panel_glass, quick_tile_fill, tools_glass};
+pub use smooth_scroll::{LINE_PX, PROGRAM_EASE, PROGRAM_MS, Scroll, WHEEL_EASE, WHEEL_MS};
+pub use timeline::{Follow, Message as TimelineMessage, Timeline, USER_SCROLL_MS, active_line, seek_time};
 pub use typeface::install as install_fonts;
 pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, seam_on_axis, wider_span};
 pub use wall_pan::{Glide as WallGlide, Inertia as WallInertia, Release as WallRelease};
 pub use wall_shift::{Kind as ShiftKind, Pose as ShiftPose, Shift as WallShift};
+pub use workbench::{
+    Hotspot, Look as WorkbenchLook, Message as WorkbenchMessage, Tab as WorkbenchTab, Workbench, hotspot_at,
+};
 
 use std::path::PathBuf;
 
@@ -82,7 +91,7 @@ use iced::widget::{container, mouse_area, space, stack};
 use iced::{Alignment, Color, Element, Length, Size, Subscription, Task, mouse};
 use lucide_static_svg::Icon;
 
-use crate::background::save;
+use crate::background::{blocking, save};
 use crate::library::LibraryPage;
 use crate::playback::Playback;
 use crate::search::SearchPage;
@@ -100,6 +109,8 @@ pub struct Init {
     pub store: Store,
     pub general: GeneralSettings,
     pub appearance: AppearanceSettings,
+    pub theme: folia_store::ThemeSettings,
+    pub audio: folia_store::AudioSettings,
     pub playback: PlaybackSettings,
     pub player: folia_store::PlayerSettings,
     pub visualizer: VisualizerSettings,
@@ -170,22 +181,45 @@ pub enum Message {
     SplashFrame,
     Home(home::Message),
     Panel(panel::Message),
+    /// One of the sheets the panel opens over the window.
+    Sheets(panel_sheets::Message),
+    /// The local playlists after a write, or the write's failure.
+    LocalPlaylists(Result<Vec<folia_library::Playlist>, String>),
+    /// A short status line under the title bar: whether it is good news, and its words.
+    Status(bool, String),
+    StatusLeaving(u64),
+    StatusGone(u64),
+    StatusFrame,
+    /// The first lyric file was read and parsed for the playing song, or its failure.
+    ImportedLyrics(Result<folia_core::Lyrics, String>),
+    /// The platform's lyrics were asked for again for the playing song.
+    MatchedLyrics(u64, i64, Result<Option<folia_core::Lyrics>, String>),
+    /// The playing song's lyrics were written to this file, or its failure.
+    ExportedLyrics(Result<std::path::PathBuf, String>),
     Art(i64, Option<folia_library::Cover>),
     PortraitPicked(Option<std::path::PathBuf>),
     PortraitDecoded(String, Option<folia_library::Cover>),
     PortraitStored(std::path::PathBuf, folia_library::Cover),
     /// The Monet portrait was dragged to this horizontal offset.
     MonetOffset(f32),
+    /// A lyric line was clicked on the playing page: play from this position in seconds.
+    SeekTo(f64),
+    /// The installed font families finished loading for the font picker.
+    FontsLoaded(Vec<String>),
     Login(login::Message),
     /// Escape on the player page: leave fullscreen, close the panel, or go back to the wall.
     PlayerEscape,
     /// An input method is composing on the player page; Escape belongs to it.
     PlayerComposing(bool),
+    Timeline(timeline::Message),
 }
 
-impl From<folia_visualizer::styles::monet::PortraitOffset> for Message {
-    fn from(moved: folia_visualizer::styles::monet::PortraitOffset) -> Self {
-        Message::MonetOffset(moved.0)
+impl From<folia_visualizer::styles::monet::Event> for Message {
+    fn from(event: folia_visualizer::styles::monet::Event) -> Self {
+        match event {
+            folia_visualizer::styles::monet::Event::Portrait(moved) => Message::MonetOffset(moved.0),
+            folia_visualizer::styles::monet::Event::Seek(at) => Message::SeekTo(at),
+        }
     }
 }
 
@@ -207,6 +241,7 @@ pub struct Shell {
     seam_flip: Option<home::flip::SeamFlip>,
     general: GeneralSettings,
     appearance: AppearanceSettings,
+    theme_settings: folia_store::ThemeSettings,
     i18n: I18n,
     system_locale: Option<String>,
     theme: Theme,
@@ -220,6 +255,20 @@ pub struct Shell {
     omni: Option<Omni>,
     playback: Playback,
     play_navigation: PlaybackNavigation,
+    /// The local playlists as last read or written, the liked-songs list first.
+    playlists: Vec<folia_library::Playlist>,
+    /// The database the playlists live in; writes open it off the UI thread.
+    db_path: PathBuf,
+    sheets: panel_sheets::Sheets,
+    /// The panel's data as the last update left it: the picker rows, the style's quick controls and the reasons a
+    /// heart or star is out of reach. `view` borrows these, so they must outlive the frame.
+    panel_choices: Vec<panel::PlaylistChoice>,
+    panel_quick: Vec<folia_visualizer::QuickControl>,
+    panel_like_reason: Option<String>,
+    panel_add_reason: Option<String>,
+    /// `StatusToast`: whether it is good news, its words and when it started.
+    status: Option<(bool, String, std::time::Instant)>,
+    status_serial: u64,
     empty_lyrics: Lyrics,
     window: Option<iced::window::Id>,
     maximized: bool,
@@ -246,23 +295,32 @@ pub struct Shell {
     player: folia_store::PlayerSettings,
     positioning: Option<positioner::Positioning>,
     login: login::Login,
+    /// The lyrics timeline window opened from the capsule.
+    timeline: timeline::Timeline,
     /// An input method is composing in a field on the player page.
     composing: bool,
     /// Song id string the original visualizer uses as its geometry seed.
     visualizer_seed: String,
     /// Latest spectrum for the playing page and the style preview. Other pages leave it alone.
     audio: folia_core::AudioFrame,
+    /// The equalizer and ReplayGain choices.
+    audio_settings: folia_store::AudioSettings,
+    /// A random style drawn again from the pool for one song (`randomVisualizerReroll`).
+    random_choice: Option<(i64, Style)>,
     data_dir: std::path::PathBuf,
     /// Uploaded Monet portrait, keyed by its saved path.
     monet_portrait: Option<(String, iced::widget::image::Handle)>,
+    /// Families installed on this machine, read off the text system in the background.
+    system_fonts: Vec<String>,
 }
 
 impl Shell {
     pub fn new(init: Init) -> (Self, Task<Message>) {
-        let theme = init.appearance.theme.theme();
+        let theme = theme_for(&init.theme, init.appearance.theme, init.appearance.animation_intensity);
         let omni = Omni::new(init.cache_dir, init.keyring_service)
             .inspect_err(|err| tracing::error!(error = err as &dyn std::error::Error, "online music unavailable"))
             .ok();
+        let db_path = init.library_db.clone();
         let (library, load) = LibraryPage::new(
             init.library_db,
             init.general.home_tab,
@@ -271,12 +329,15 @@ impl Shell {
         );
         let mut home = home::HomeChrome::new(INITIAL_WINDOW.width);
         home.restore_queue_island(init.general.wall_tools_queue_island_open);
-        let shell = Self {
+        let equalizer = folia_player::Parameters::of(&init.audio.equalizer);
+        let replay_gain = init.audio.replay_gain_mode;
+        let mut shell = Self {
             store: init.store,
             general: init.general,
             iced_theme: iced_theme(&theme),
             theme,
             appearance: init.appearance,
+            theme_settings: init.theme,
             i18n: init.i18n,
             system_locale: init.system_locale,
             page: Page::Library,
@@ -290,6 +351,15 @@ impl Shell {
             search: SearchPage::default(),
             playback: Playback::new(init.playback, omni.clone()),
             play_navigation: PlaybackNavigation::default(),
+            playlists: Vec::new(),
+            db_path: db_path.clone(),
+            sheets: panel_sheets::Sheets::default(),
+            panel_choices: Vec::new(),
+            panel_quick: Vec::new(),
+            panel_like_reason: None,
+            panel_add_reason: None,
+            status: None,
+            status_serial: 0,
             omni,
             empty_lyrics: Lyrics::default(),
             window: None,
@@ -313,16 +383,31 @@ impl Shell {
             player: init.player,
             positioning: None,
             login: login::Login::new(std::time::Instant::now()),
+            timeline: timeline::Timeline::default(),
             composing: false,
             visualizer_seed: "lumiere".to_owned(),
             audio: folia_core::AudioFrame::SILENT,
+            audio_settings: init.audio,
+            random_choice: None,
             data_dir: init.data_dir,
             monet_portrait: None,
+            system_fonts: Vec::new(),
+        };
+        shell.playback.set_equalizer(equalizer);
+        shell.playback.set_replay_gain(replay_gain, None);
+        let playlists = {
+            let path = db_path;
+            Task::perform(blocking(move || open_playlists(&path)), |result| {
+                Message::LocalPlaylists(result.unwrap_or_else(|| Err("playlist worker stopped".to_owned())))
+            })
         };
         let open = if init.open_files.is_empty() { Task::none() } else { open_files(init.open_files) };
         let window = iced::window::oldest().map(Message::WindowReady);
         let portrait = shell.load_portrait();
-        (shell, Task::batch([load.map(Message::Library), open, window, portrait]))
+        let fonts = Task::perform(crate::background::blocking(fonts::installed_families), |fonts| {
+            Message::FontsLoaded(fonts.unwrap_or_default())
+        });
+        (shell, Task::batch([load.map(Message::Library), open, window, portrait, playlists, fonts]))
     }
 
     fn portrait_handle(&self, id: Option<i64>) -> Option<&iced::widget::image::Handle> {
@@ -444,6 +529,7 @@ impl Shell {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        self.refresh_panel_data();
         let before = self.page;
         let settles_page = matches!(message, Message::PageShot(_) | Message::PageShotDone);
         let seam_before = self.seam_before(&message);
@@ -513,6 +599,17 @@ impl Shell {
         self.library.sync_hint(&self.i18n, now);
         self.bar.set_forced(self.positioning.is_some());
         self.bar.sync(&self.playback, self.window_size.width, now);
+        self.timeline.sync(
+            timeline::Sync {
+                song: self.playback.current().map(|track| track.id),
+                lyrics: self.playback.lyrics.as_ref(),
+                duration: self.playback.duration(),
+                time: self.playback.lyric_time(),
+                window: self.window_size,
+                disabled: self.positioning.is_some(),
+            },
+            now,
+        );
         self.bar.set_modal(self.modal_open());
         self.panel.set_modal(self.modal_open());
         if !self.modal_open() {
@@ -572,7 +669,7 @@ impl Shell {
             Message::Theme(mode) => {
                 let before = self.appearance.clone();
                 self.appearance.theme = mode;
-                self.theme = mode.theme();
+                self.theme = theme_for(&self.theme_settings, mode, self.appearance.animation_intensity);
                 self.iced_theme = iced_theme(&self.theme);
                 self.appearance_changed(&before)
             }
@@ -586,6 +683,17 @@ impl Shell {
                 save(&self.store, &self.appearance)
             }
             Message::Library(message) => {
+                let like_notice = match &message {
+                    library::Message::Online(online::Message::LikeSettled(_, _, liked, result)) => {
+                        let key = if result.is_ok() {
+                            if *liked { "status.liked" } else { "status.unliked" }
+                        } else {
+                            "status.likeFailed"
+                        };
+                        Some((result.is_ok(), self.i18n.t(key).to_owned()))
+                    }
+                    _ => None,
+                };
                 if matches!(message, library::Message::Loaded(_)) {
                     self.splash.library_ready();
                 }
@@ -609,7 +717,11 @@ impl Shell {
                     self.login.refresh_rows(&self.library.online);
                 }
                 let task = task.map(Message::Library);
-                Task::batch([queue_task, task, self.library_effect(effect)])
+                let notice = match like_notice {
+                    Some((ok, words)) => self.status(ok, words),
+                    None => Task::none(),
+                };
+                Task::batch([queue_task, task, self.library_effect(effect), notice])
             }
             Message::Search(message) => {
                 if matches!(message, search::Message::Close) {
@@ -761,6 +873,20 @@ impl Shell {
                 }
                 Task::none()
             }
+            Message::Bar(player_bar::Message::Timeline) => {
+                if self.playback.lyrics.is_some() {
+                    let now = std::time::Instant::now();
+                    self.timeline.open(
+                        self.playback.current().map(|track| track.id),
+                        self.playback.lyrics.as_ref(),
+                        self.playback.duration(),
+                        self.playback.lyric_time(),
+                        self.window_size,
+                        now,
+                    );
+                }
+                Task::none()
+            }
             Message::Bar(message) => match self.bar.update(message, &self.playback, std::time::Instant::now()) {
                 Some(message) => {
                     let task = self.playback.update(message, &self.store).map(Message::Playback);
@@ -778,6 +904,72 @@ impl Shell {
                 let task = self.panel(message);
                 Task::batch([task, self.ensure_art()])
             }
+            Message::Sheets(message) => {
+                let event = self.sheets.update(message, &self.audio_settings.equalizer);
+                self.sheet_event(event)
+            }
+            Message::LocalPlaylists(result) => match result {
+                Ok(playlists) => {
+                    self.playlists = playlists;
+                    Task::none()
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "local playlists unavailable");
+                    self.status(false, err)
+                }
+            },
+            Message::Status(ok, text) => {
+                if text.is_empty() {
+                    Task::none()
+                } else {
+                    self.status(ok, text)
+                }
+            }
+            Message::StatusLeaving(serial) if serial == self.status_serial => {
+                Task::perform(blocking(|| std::thread::sleep(std::time::Duration::from_millis(220))), move |_| {
+                    Message::StatusGone(serial)
+                })
+            }
+            Message::StatusGone(serial) if serial == self.status_serial => {
+                self.status = None;
+                Task::none()
+            }
+            Message::StatusLeaving(_) | Message::StatusGone(_) | Message::StatusFrame => Task::none(),
+            Message::ImportedLyrics(result) => match result {
+                Ok(lyrics) => {
+                    self.playback.set_lyrics(Some(lyrics));
+                    let words = self.i18n.t("status.lyricsImported").to_owned();
+                    self.status(true, words)
+                }
+                Err(err) => self.status(false, err),
+            },
+            Message::MatchedLyrics(request, id, result) => {
+                if request != self.playback.request_id() || self.playback.current().is_none_or(|track| track.id != id) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(lyrics) => {
+                        let found = lyrics.is_some();
+                        self.playback.set_lyrics(lyrics);
+                        let key = if found { "status.lyricsMatched" } else { "lyricExport.noLyrics" };
+                        let words = self.i18n.t(key).to_owned();
+                        self.status(found, words)
+                    }
+                    Err(err) => self.status(false, err),
+                }
+            }
+            Message::ExportedLyrics(result) => match result {
+                Ok(path) => {
+                    tracing::info!(path = %path.display(), "lyrics exported");
+                    let words = self.i18n.t("lyricExport.exported").to_owned();
+                    self.status(true, words)
+                }
+                Err(err) if err == "cancelled" => Task::none(),
+                Err(err) => {
+                    tracing::warn!(error = %err, "lyrics not exported");
+                    self.status(false, err)
+                }
+            },
             Message::Art(id, cover) => {
                 if self.art_pending == Some(id) {
                     self.art_pending = None;
@@ -790,6 +982,15 @@ impl Shell {
                 Task::none()
             }
             Message::MonetOffset(offset) => self.store_monet_offset(offset),
+            Message::SeekTo(position) => {
+                let _ = self.playback.update(playback::Message::Seeking(position), &self.store);
+                self.playback.update(playback::Message::SeekDone, &self.store).map(Message::Playback)
+            }
+            Message::FontsLoaded(fonts) => {
+                tracing::info!(count = fonts.len(), "system fonts read");
+                self.system_fonts = fonts;
+                Task::none()
+            }
             Message::PortraitPicked(Some(path)) => self.store_portrait(path),
             Message::PortraitPicked(None) => Task::none(),
             Message::PortraitDecoded(path, Some(cover)) => {
@@ -809,7 +1010,10 @@ impl Shell {
             // and only with neither does the player go back.
             Message::PlayerEscape if self.composing => Task::none(),
             Message::PlayerEscape => {
-                if self.fullscreen {
+                if self.sheets.any_open() {
+                    self.sheets.close_all();
+                    Task::none()
+                } else if self.fullscreen {
                     self.toggle_fullscreen()
                 } else if self.panel.is_open() {
                     self.panel(panel::Message::Close)
@@ -821,6 +1025,7 @@ impl Shell {
                 self.composing = composing;
                 Task::none()
             }
+            Message::Timeline(message) => self.timeline(message),
             Message::Login(message) => {
                 let (task, effect) = self.login.update(
                     message,
@@ -1114,7 +1319,8 @@ impl Shell {
                     glass: self.page == Page::Library
                         || self.search.fade(now) > 0.0
                         || self.titlebar.frost(now) > 0.0
-                        || self.notice_visible(now),
+                        || self.notice_visible(now)
+                        || self.timeline.is_open(),
                     modal: self.modal_open(),
                 };
                 self.library.view(&self.i18n, &self.theme, daylight, muted, playing, look).map(Message::Library)
@@ -1152,6 +1358,7 @@ impl Shell {
                 let subtitle = self.subtitle();
                 let bottom = subtitle_bottom(self.bar_offset(), self.subtitle_presence.value(self.now_ms()));
                 let background = folia_visualizer::color(self.theme.background, 1.0);
+                let vignette = if self.appearance.disable_visualizer_vignette { 0.0 } else { 0.28 };
                 let now = std::time::Instant::now();
                 let foot = now_playing::Foot {
                     bottom,
@@ -1161,7 +1368,25 @@ impl Shell {
                         || self.back_hotspot()
                         || self.notice_visible(now),
                 };
-                now_playing::view(scene, &self.i18n, muted, background, self.window_size, subtitle, foot)
+                now_playing::view(
+                    scene,
+                    &self.i18n,
+                    muted,
+                    background,
+                    now_playing::Screen {
+                        window: self.window_size,
+                        vignette,
+                        subtitle_opacity: self.appearance.subtitle.opacity,
+                        subtitle_scale: self.appearance.subtitle.font_scale,
+                        subtitle_font: fonts::resolve(if self.appearance.subtitle.font_inherits_lyrics {
+                            &self.appearance.lyrics_font
+                        } else {
+                            &self.appearance.subtitle.font
+                        }),
+                    },
+                    subtitle,
+                    foot,
+                )
             }
         };
         let playing = self.page == Page::NowPlaying;
@@ -1235,6 +1460,7 @@ impl Shell {
                 window: self.window_size,
                 bottom: self.bar_offset(),
                 modal: self.modal_open(),
+                controls_disabled: self.positioning.is_some(),
             };
             frame = frame.push(self.bar.view(&self.playback, look, now).map(Message::Bar));
         }
@@ -1264,6 +1490,17 @@ impl Shell {
                 _ => None,
             };
             let (quality_levels, quality) = self.audio_quality();
+            let style = self.style();
+            let quick = &self.panel_quick;
+            let choices = &self.panel_choices;
+            let like_reason = self.panel_like_reason.as_deref();
+            let add_reason = self.panel_add_reason.as_deref();
+            let can_match = self.omni.is_some() && self.playback.current().is_some_and(|track| track.online.is_some());
+            let can_create_playlist = match self.playback.current() {
+                Some(track) if track.online.is_none() => track.id > 0,
+                Some(track) => track.online.as_ref().is_some_and(|online| self.can_create_playlist(&online.provider)),
+                None => false,
+            };
             let panel_view = panel::View {
                 i18n: &self.i18n,
                 theme: &self.theme,
@@ -1281,7 +1518,7 @@ impl Shell {
                 style_id: &self.appearance.visualizer,
                 has_lyrics: self.playback.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()),
                 font_scale: self.appearance.lyrics_font_scale,
-                drawn_style: self.style(),
+                drawn_style: style,
                 origin: self.playback.queue.origin().map(|origin| origin.name.as_str()),
                 art: self.playback.current().and_then(|track| self.art.peek(&track.id)).and_then(Option::as_ref),
                 pill_hover: self.panel.pill_hover(),
@@ -1293,6 +1530,34 @@ impl Shell {
                 quality,
                 modal: self.modal_open(),
                 audio: &self.audio,
+                liked: self.song_liked(),
+                like_disabled: like_reason,
+                playlists: choices,
+                can_add: self.can_add_song(),
+                add_disabled: add_reason,
+                can_create_playlist,
+                quick,
+                theme_source: self.theme_settings.source,
+                has_custom_theme: self.theme_settings.custom_dual_theme.is_some(),
+                random_pool: self.theme_settings.random_pool.as_deref(),
+                all_styles: &Style::ALL,
+                equalizer_on: self.audio_settings.equalizer.enabled,
+                replay_gain: self.audio_settings.replay_gain_mode,
+                gain: self.playback_gain(),
+                can_match,
+                can_import_lyrics: self.playback.current().is_some(),
+                can_export_lyrics: self.playback.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()),
+                lyric_provider: self
+                    .playback
+                    .current()
+                    .and_then(|track| track.online.as_ref())
+                    .and_then(|online| {
+                        self.library.online.platforms().into_iter().find(|platform| platform.id == online.provider)
+                    })
+                    .map_or("", |platform| platform.short_name),
+                can_shuffle: !self.playback.is_fm() && self.playback.queue.items().len() >= 2,
+                can_save_queue: !self.playback.queue.items().is_empty()
+                    && self.playback.queue.items().iter().all(|track| track.online.is_none() && track.id > 0),
             };
             frame = frame.push(self.panel.view(panel_view, std::time::Instant::now()).map(Message::Panel));
         }
@@ -1313,6 +1578,8 @@ impl Shell {
                 font_scale: self.appearance.lyrics_font_scale,
                 live,
                 audio: &self.audio,
+                appearance: &self.appearance,
+                fonts: &self.system_fonts,
             }));
         }
         if let Some(window) = &self.settings {
@@ -1347,6 +1614,26 @@ impl Shell {
         };
         if let Some(window) = self.login.view(look, now) {
             frame = frame.push(window.map(Message::Login));
+        }
+        if let Some(layer) =
+            self.timeline.view(&self.i18n, &self.theme, daylight, self.window_size, self.playback.lyrics.as_ref(), now)
+        {
+            frame = frame.push(layer.map(Message::Timeline));
+        }
+        if let Some(sheet) = panel_sheets::view(
+            &self.sheets,
+            panel_sheets::Look {
+                i18n: &self.i18n,
+                daylight,
+                window: self.window_size,
+                has_lyrics: self.playback.lyrics.as_ref().is_some_and(|lyrics| !lyrics.lines.is_empty()),
+                tokens: settings_kit::Tokens::new(&self.theme, daylight),
+            },
+        ) {
+            frame = frame.push(sheet.map(Message::Sheets));
+        }
+        if let Some((ok, words, opacity, shift)) = self.status_notice(now) {
+            frame = frame.push(status_toast::message_view(ok, words, daylight, self.window_size.width, opacity, shift));
         }
         if let Some(fade) = &self.page_fade {
             frame = frame.push(fade.view(now));
@@ -1418,9 +1705,13 @@ impl Shell {
         self.page != Page::NowPlaying || self.clock.visible(self.now_ms(), self.pointer_held)
     }
 
-    /// Settings, the lyric workbench or the sign-in window.
+    /// Settings, the lyric workbench, the sign-in window or the lyrics timeline.
     fn modal_open(&self) -> bool {
-        self.settings.is_some() || self.workbench.is_some() || self.login.is_open()
+        self.settings.is_some()
+            || self.workbench.is_some()
+            || self.login.is_open()
+            || self.sheets.any_open()
+            || self.timeline.is_open()
     }
 
     /// Surfaces that take the keyboard the way an open sheet does: settings, sign-in, the workbench, search.
@@ -1451,7 +1742,9 @@ impl Shell {
     }
 
     fn subtitle(&self) -> overlay::Subtitle<'_> {
-        if !self.style().shared_subtitle() {
+        let hidden = self.appearance.subtitle.hide_translation
+            || self.appearance.subtitle.content_mode == folia_store::SubtitleContentMode::None;
+        if hidden || !self.style().shared_subtitle() {
             return overlay::Subtitle { translation: None, upcoming: None };
         }
         let Some(lyrics) = self.playback.lyrics.as_ref() else {
@@ -1479,6 +1772,7 @@ impl Shell {
             && self.settings.is_none()
             && self.workbench.is_none()
             && !self.login.is_open()
+            && !self.timeline.is_open()
             && self.positioning.is_none();
         if player_keys {
             parts.push(iced::event::listen_with(player_key));
@@ -1523,6 +1817,12 @@ impl Shell {
         if self.login.animating(std::time::Instant::now()) {
             parts.push(iced::window::frames().map(|_| Message::Login(login::Message::Frame)));
         }
+        if self.timeline.is_open() {
+            parts.push(iced::event::listen_with(timeline_key));
+            if self.timeline.animating(std::time::Instant::now()) {
+                parts.push(iced::window::frames().map(|_| Message::Timeline(timeline::Message::Frame)));
+            }
+        }
         if self.splash.showing(std::time::Instant::now()) {
             parts.push(iced::window::frames().map(|_| Message::SplashFrame));
         }
@@ -1552,8 +1852,14 @@ impl Shell {
         {
             parts.push(iced::window::frames().map(|_| Message::Library(library::Message::Frame)));
         }
+        if self.page == Page::Library && self.home.scrolling(now) {
+            parts.push(iced::window::frames().map(|_| Message::Home(home::Message::Frame)));
+        }
         if self.page == Page::NowPlaying && self.panel.animating(now) {
             parts.push(iced::window::frames().map(|_| Message::Panel(panel::Message::Frame)));
+        }
+        if self.status.is_some() {
+            parts.push(iced::window::frames().map(|_| Message::StatusFrame));
         }
         if self.page == Page::Library && self.home_menu_open() {
             parts.push(iced::event::listen_with(home_dismiss));
@@ -1585,13 +1891,37 @@ impl Shell {
         Subscription::batch(parts)
     }
 
+    fn timeline(&mut self, message: timeline::Message) -> Task<Message> {
+        let now = std::time::Instant::now();
+        let (task, effect) = self.timeline.update(
+            message,
+            self.playback.lyrics.as_ref(),
+            self.playback.lyric_offset,
+            self.playback.duration(),
+            now,
+        );
+        let seek = match effect {
+            timeline::Effect::None => Task::none(),
+            timeline::Effect::Seek(time) => {
+                let seeking = self.playback.update(playback::Message::Seeking(time), &self.store);
+                let done = self.playback.update(playback::Message::SeekDone, &self.store);
+                Task::batch([seeking, done]).map(Message::Playback)
+            }
+        };
+        Task::batch([task.map(Message::Timeline), seek])
+    }
+
     fn workbench(&mut self, message: workbench::Message) -> Task<Message> {
         let style = self.style();
         let manifest = style.manifest();
         let Some(window) = self.workbench.as_mut() else { return Task::none() };
-        let effect = window.update(message, manifest);
+        let update = window.update(message, manifest, &self.appearance);
+        let scroll = window.scroll_frame(std::time::Instant::now()).map(Message::Workbench);
         let values = window.values.clone();
-        match effect {
+        if let Some(appearance) = update.appearance {
+            self.appearance = appearance;
+        }
+        let task = match update.effect {
             workbench::Effect::None => Task::none(),
             workbench::Effect::Close => {
                 self.workbench = None;
@@ -1601,7 +1931,15 @@ impl Shell {
                 self.hold_tuning(style, values);
                 Task::none()
             }
-            workbench::Effect::Save => self.store_tuning(style, values),
+            workbench::Effect::Appearance => Task::none(),
+            workbench::Effect::ScrollTop => iced::widget::operation::snap_to(
+                workbench::settings_scroll_id(),
+                iced::widget::operation::RelativeOffset { x: Some(0.0), y: Some(0.0) },
+            ),
+            workbench::Effect::Save => {
+                let tuning = self.store_tuning(style, values);
+                Task::batch([tuning, save(&self.store, &self.appearance)])
+            }
             workbench::Effect::Style(next) => {
                 self.appearance.visualizer = next.id().to_owned();
                 if let Some(window) = self.workbench.as_mut() {
@@ -1609,15 +1947,11 @@ impl Shell {
                 }
                 save(&self.store, &self.appearance)
             }
-            workbench::Effect::Font(scale) => {
-                let before = self.appearance.clone();
-                self.appearance.lyrics_font_scale = scale;
-                self.appearance_changed(&before)
-            }
             workbench::Effect::Button("uploadPortrait") => self.pick_portrait(),
             workbench::Effect::Button("clearPortrait") => self.clear_portrait(),
             workbench::Effect::Button(_) => Task::none(),
-        }
+        };
+        Task::batch([task, scroll])
     }
 
     fn hold_tuning(&mut self, style: Style, values: Values) {
@@ -1637,8 +1971,24 @@ impl Shell {
     fn style(&self) -> Style {
         match self.chosen_style() {
             Some(style) => style,
-            None => Style::random_for(self.playback.current().map_or(0, |track| track.id)),
+            None => {
+                let song = self.playback.current().map_or(0, |track| track.id);
+                if let Some((chosen_for, style)) = self.random_choice
+                    && chosen_for == song
+                {
+                    return style;
+                }
+                Style::random_in(&self.selected_styles(), song)
+            }
         }
+    }
+
+    /// The styles the random choice draws from, in registry order.
+    fn selected_styles(&self) -> Vec<Style> {
+        let Some(pool) = &self.theme_settings.random_pool else { return Style::ALL.to_vec() };
+        let chosen: Vec<Style> =
+            Style::ALL.into_iter().filter(|style| pool.iter().any(|entry| entry == style.id())).collect();
+        if chosen.is_empty() { Style::ALL.to_vec() } else { chosen }
     }
 
     /// The style picked in settings; `None` means a random style per song.
@@ -1909,20 +2259,22 @@ impl Shell {
                 Task::none()
             }
             panel::Effect::Intensity => {
-                self.theme.intensity = match self.theme.intensity {
+                let before = self.appearance.clone();
+                self.appearance.animation_intensity = match self.appearance.animation_intensity {
                     folia_core::AnimationIntensity::Calm => folia_core::AnimationIntensity::Normal,
                     folia_core::AnimationIntensity::Normal => folia_core::AnimationIntensity::Chaotic,
                     folia_core::AnimationIntensity::Chaotic => folia_core::AnimationIntensity::Calm,
                 };
-                Task::none()
+                self.theme =
+                    theme_for(&self.theme_settings, self.appearance.theme, self.appearance.animation_intensity);
+                self.iced_theme = iced_theme(&self.theme);
+                self.appearance_changed(&before)
             }
             panel::Effect::Playback(message) => self.playback.update(message, &self.store).map(Message::Playback),
             panel::Effect::Theme(mode) => {
                 let before = self.appearance.clone();
-                let intensity = self.theme.intensity;
                 self.appearance.theme = mode;
-                self.theme = mode.theme();
-                self.theme.intensity = intensity;
+                self.theme = theme_for(&self.theme_settings, mode, self.appearance.animation_intensity);
                 self.iced_theme = iced_theme(&self.theme);
                 self.appearance_changed(&before)
             }
@@ -1949,8 +2301,480 @@ impl Shell {
             panel::Effect::Quality(level) => {
                 self.playback.update(playback::Message::Quality(level), &self.store).map(Message::Playback)
             }
+            panel::Effect::Like => self.toggle_like(),
+            panel::Effect::PlaylistPick(index) => self.add_to_playlist(index),
+            panel::Effect::CreatePlaylist(name) => self.create_playlist(name),
+            panel::Effect::CopySongInfo => self.copy_song_info(),
+            panel::Effect::Quick(key) => self.apply_quick(key),
+            panel::Effect::Reroll => self.reroll_style(),
+            panel::Effect::PoolToggle(style) => self.toggle_pool(&style),
+            panel::Effect::EqualizerOpen => {
+                self.sheets.open_equalizer(&self.audio_settings.equalizer);
+                Task::none()
+            }
+            panel::Effect::ThemeSource(source) => {
+                if source == folia_store::ThemeSource::Custom && self.theme_settings.custom_dual_theme.is_none() {
+                    return Task::none();
+                }
+                self.theme_settings.source = source;
+                self.theme =
+                    theme_for(&self.theme_settings, self.appearance.theme, self.appearance.animation_intensity);
+                self.iced_theme = iced_theme(&self.theme);
+                let theme_settings = self.theme_settings.clone();
+                save(&self.store, &theme_settings)
+            }
+            panel::Effect::QuickEditOpen => {
+                self.sheets.open_editor(self.theme_settings.custom_dual_theme.as_ref(), self.theme_is_light());
+                Task::none()
+            }
+            panel::Effect::MatchOnline => self.match_online_lyrics(),
+            panel::Effect::LyricFileOpen => {
+                self.sheets.open_lyric_file();
+                Task::none()
+            }
+            panel::Effect::ExportLyrics => self.export_lyrics(),
+            panel::Effect::ImportLyrics => self.import_lyrics(),
+            panel::Effect::ReplayGain(mode) => {
+                self.audio_settings.replay_gain_mode = mode;
+                self.playback.set_replay_gain(mode, self.playback_gain());
+                let audio = self.audio_settings.clone();
+                save(&self.store, &audio)
+            }
+            panel::Effect::SaveQueue(name) => self.save_queue(name),
+            panel::Effect::Shuffle => {
+                if self.playback.shuffle(status_seed()) {
+                    self.status(true, self.i18n.t("status.queueShuffled").to_owned())
+                } else {
+                    Task::none()
+                }
+            }
         };
         Task::batch([task, scroll])
+    }
+
+    /// Shows a `StatusToast` line for four seconds (`runStatusMessageTime`).
+    fn status(&mut self, ok: bool, text: String) -> Task<Message> {
+        self.status_serial = self.status_serial.wrapping_add(1);
+        let serial = self.status_serial;
+        self.status = Some((ok, text, std::time::Instant::now()));
+        Task::perform(blocking(|| std::thread::sleep(std::time::Duration::from_millis(4000))), move |_| {
+            Message::StatusLeaving(serial)
+        })
+    }
+
+    fn theme_is_light(&self) -> bool {
+        self.appearance.theme == ThemeMode::Light
+    }
+
+    /// Rebuilds what the panel's view borrows this frame.
+    fn refresh_panel_data(&mut self) {
+        let style = self.style();
+        self.panel_quick = folia_visualizer::quick_controls(style, &self.tuning_of(style));
+        self.panel_choices = self.playlist_choices();
+        self.panel_like_reason = self.like_reason();
+        self.panel_add_reason = self.add_reason();
+    }
+
+    /// `holdStatusMessage`: the toast's enter and leave.
+    fn status_notice(&self, now: std::time::Instant) -> Option<(bool, String, f32, f32)> {
+        let (ok, words, started) = self.status.as_ref()?;
+        let ms = now.saturating_duration_since(*started).as_secs_f64() * 1000.0;
+        let entered = folia_visualizer::Ease::new(0.2, 0.8, 0.2, 1.0).at((ms / 320.0).clamp(0.0, 1.0)) as f32;
+        let left = folia_visualizer::Ease::new(0.4, 0.0, 1.0, 1.0).at(((ms - 4000.0) / 220.0).clamp(0.0, 1.0)) as f32;
+        Some((*ok, words.clone(), entered * (1.0 - left), -18.0 * (1.0 - entered) - 10.0 * left))
+    }
+
+    fn playback_gain(&self) -> Option<folia_core::ReplayGain> {
+        self.playback.current().and_then(|track| track.replay_gain)
+    }
+
+    fn local_track(&self) -> Option<i64> {
+        self.playback.current().filter(|track| track.online.is_none() && track.id > 0).map(|track| track.id)
+    }
+
+    fn favorite_ids(&self) -> std::collections::HashSet<i64> {
+        self.playlists
+            .iter()
+            .find(|playlist| playlist.favorite)
+            .map(|playlist| playlist.song_ids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    fn song_liked(&self) -> bool {
+        match self.playback.current() {
+            Some(track) => match &track.online {
+                Some(online) => self.library.online.is_liked(&online.provider, &online.id),
+                None => self.local_track().is_some_and(|id| self.favorite_ids().contains(&id)),
+            },
+            None => false,
+        }
+    }
+
+    /// `resolveLikeAvailability`'s reason, worded.
+    fn like_reason(&self) -> Option<String> {
+        let online = self.playback.current()?.online.as_ref()?;
+        if self.library.online.can_like(&online.provider) {
+            return None;
+        }
+        let platform = self.library.online.platforms().into_iter().find(|platform| platform.id == online.provider);
+        let name = platform.map_or(online.provider.as_str(), |platform| platform.short_name);
+        Some(self.i18n.format("status.providerLikeUnavailable", &[("provider", name)]))
+    }
+
+    /// The playlists the playing song can go into, in the order the picker shows them.
+    fn playlist_choices(&self) -> Vec<panel::PlaylistChoice> {
+        let online = self.playback.current().is_some_and(|track| track.online.is_some());
+        if online {
+            return self
+                .online_playlists()
+                .into_iter()
+                .map(|collection| panel::PlaylistChoice {
+                    local: None,
+                    online: Some((collection.provider.clone(), collection.id.clone())),
+                    name: collection.name.clone(),
+                    detail: self
+                        .i18n
+                        .format("playlist.tracks", &[("count", &collection.track_count.unwrap_or(0).to_string())]),
+                })
+                .collect();
+        }
+        self.playlists
+            .iter()
+            .map(|playlist| panel::PlaylistChoice {
+                local: Some(playlist.id),
+                online: None,
+                name: playlist.name.clone(),
+                detail: self.i18n.format("playlist.tracks", &[("count", &playlist.song_ids.len().to_string())]),
+            })
+            .collect()
+    }
+
+    /// The account's own playlists of the playing platform.
+    fn online_playlists(&self) -> Vec<folia_omni::Collection> {
+        let Some(provider) =
+            self.playback.current().and_then(|track| track.online.as_ref()).map(|o| o.provider.clone())
+        else {
+            return Vec::new();
+        };
+        self.library
+            .online
+            .playlists
+            .ready()
+            .into_iter()
+            .flatten()
+            .filter(|collection| {
+                collection.provider == provider
+                    && collection.kind == folia_omni::CollectionKind::Playlist
+                    && collection.owned
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn can_add_song(&self) -> bool {
+        let Some(online) = self.playback.current().and_then(|track| track.online.as_ref()) else {
+            return self.playback.current().is_some();
+        };
+        let capabilities = self.omni.as_ref().map_or(Default::default(), |omni| omni.capabilities(&online.provider));
+        capabilities.playlist_track_mutations
+            && (!self.online_playlists().is_empty() || self.can_create_playlist(&online.provider))
+    }
+
+    fn can_create_playlist(&self, provider: &str) -> bool {
+        self.omni.as_ref().is_some_and(|omni| omni.capabilities(provider).create_playlist)
+    }
+
+    /// `status.providerPlaylistMutationUnavailable`, or why there is nowhere to put the song.
+    fn add_reason(&self) -> Option<String> {
+        let online = self.playback.current().and_then(|track| track.online.as_ref())?;
+        let capabilities = self.omni.as_ref().map_or(Default::default(), |omni| omni.capabilities(&online.provider));
+        if !capabilities.playlist_track_mutations {
+            let name = self
+                .library
+                .online
+                .platforms()
+                .into_iter()
+                .find(|platform| platform.id == online.provider)
+                .map_or_else(|| online.provider.clone(), |platform| platform.short_name.to_owned());
+            return Some(self.i18n.format("status.providerPlaylistMutationUnavailable", &[("provider", &name)]));
+        }
+        None
+    }
+
+    fn toggle_like(&mut self) -> Task<Message> {
+        let Some(track) = self.playback.current().cloned() else { return Task::none() };
+        if let Some(online) = track.online {
+            if !self.library.online.can_like(&online.provider) {
+                let reason = self.like_reason().unwrap_or_default();
+                return self.status(false, reason);
+            }
+            let liked = !self.library.online.is_liked(&online.provider, &online.id);
+            let _ = self.library.online.ensure_liked();
+            let fallback = self.library.online.provider();
+            let provider = self
+                .library
+                .online
+                .platforms()
+                .into_iter()
+                .find(|platform| platform.id == online.provider)
+                .map_or(fallback, |platform| platform.id);
+            return self
+                .library
+                .online
+                .press_like(provider, online.id, liked)
+                .map(|message| Message::Library(library::Message::Online(message)));
+        }
+        let Some(id) = self.local_track() else { return Task::none() };
+        let favorite = !self.favorite_ids().contains(&id);
+        let path = self.db_path.clone();
+        let task = blocking(move || {
+            let library = folia_library::Library::open(&path).map_err(|err| error_chain(&err))?;
+            library.set_favorite(id, favorite).map_err(|err| error_chain(&err))?;
+            library.playlists().map_err(|err| error_chain(&err))
+        });
+        let words = self.i18n.t(if favorite { "status.liked" } else { "status.unliked" }).to_owned();
+        Task::batch([
+            Task::perform(task, |result| {
+                Message::LocalPlaylists(result.unwrap_or_else(|| Err("playlist worker stopped".to_owned())))
+            }),
+            self.status(true, words),
+        ])
+    }
+
+    fn add_to_playlist(&mut self, index: usize) -> Task<Message> {
+        let Some(choice) = self.playlist_choices().into_iter().nth(index) else { return Task::none() };
+        if let Some(playlist) = choice.local {
+            let Some(track) = self.local_track() else { return Task::none() };
+            let path = self.db_path.clone();
+            let task = blocking(move || {
+                let library = folia_library::Library::open(&path).map_err(|err| error_chain(&err))?;
+                library.add_to_playlist(playlist, &[track]).map_err(|err| error_chain(&err))?;
+                library.playlists().map_err(|err| error_chain(&err))
+            });
+            return Task::perform(task, |result| {
+                Message::LocalPlaylists(result.unwrap_or_else(|| Err("playlist worker stopped".to_owned())))
+            });
+        }
+        let Some((provider, id)) = choice.online else { return Task::none() };
+        let Some(song) = self.playback.current().and_then(|track| track.online.clone()) else { return Task::none() };
+        let Some(omni) = self.omni.clone() else { return Task::none() };
+        let collection = folia_omni::Collection {
+            provider: provider.clone(),
+            id,
+            kind: folia_omni::CollectionKind::Playlist,
+            name: choice.name,
+            cover_url: None,
+            track_count: None,
+            creator: None,
+            description: None,
+            owned: true,
+        };
+        let words = self.i18n.t("status.playlistUpdated").to_owned();
+        let add = Task::perform(
+            async move { omni.update_playlist_tracks(&collection, &[song], true).await.map_err(|err| error_chain(&err)) },
+            move |result| match result {
+                Ok(()) => Message::Status(true, words.clone()),
+                Err(err) => Message::Status(false, err),
+            },
+        );
+        Task::batch([
+            add,
+            self.library.online.reload_playlists().map(|message| Message::Library(library::Message::Online(message))),
+        ])
+    }
+
+    fn create_playlist(&mut self, name: String) -> Task<Message> {
+        let Some(track) = self.playback.current().cloned() else { return Task::none() };
+        if let Some(online) = track.online {
+            let Some(omni) = self.omni.clone() else { return Task::none() };
+            if !omni.capabilities(&online.provider).create_playlist {
+                return Task::none();
+            }
+            let words = self.i18n.t("status.playlistUpdated").to_owned();
+            let created = Task::perform(
+                async move {
+                    let playlist =
+                        omni.create_playlist(&online.provider, &name).await.map_err(|err| error_chain(&err))?;
+                    omni.update_playlist_tracks(&playlist, &[online], true).await.map_err(|err| error_chain(&err))?;
+                    Ok::<(), String>(())
+                },
+                move |result| match result {
+                    Ok(()) => Message::Status(true, words.clone()),
+                    Err(err) => Message::Status(false, err),
+                },
+            );
+            let reload = self
+                .library
+                .online
+                .reload_playlists()
+                .map(|message| Message::Library(library::Message::Online(message)));
+            return Task::batch([created, reload]);
+        }
+        let Some(id) = self.local_track() else { return Task::none() };
+        let path = self.db_path.clone();
+        let task = blocking(move || {
+            let library = folia_library::Library::open(&path).map_err(|err| error_chain(&err))?;
+            let playlist = library.create_playlist(&name).map_err(|err| error_chain(&err))?;
+            library.add_to_playlist(playlist.id, &[id]).map_err(|err| error_chain(&err))?;
+            library.playlists().map_err(|err| error_chain(&err))
+        });
+        Task::perform(task, |result| {
+            Message::LocalPlaylists(result.unwrap_or_else(|| Err("playlist worker stopped".to_owned())))
+        })
+    }
+
+    fn copy_song_info(&mut self) -> Task<Message> {
+        let Some(track) = self.playback.current() else { return Task::none() };
+        let mut line = track.display_name();
+        if let Some(album) = &track.album {
+            line.push_str(" - ");
+            line.push_str(album);
+        }
+        if let Some(url) = song_page_url(track) {
+            line.push('\n');
+            line.push_str(&url);
+        }
+        let words = self.i18n.t("status.copiedSongInfo").to_owned();
+        let copied = words.clone();
+        Task::batch([
+            iced::clipboard::write(line).map(move |()| Message::Status(true, copied.clone())),
+            self.status(true, words),
+        ])
+    }
+
+    fn apply_quick(&mut self, key: &'static str) -> Task<Message> {
+        let style = self.style();
+        let mut values = self.tuning_of(style);
+        if !folia_visualizer::apply_quick(style, &mut values, key) {
+            return Task::none();
+        }
+        self.store_tuning(style, values)
+    }
+
+    fn reroll_style(&mut self) -> Task<Message> {
+        if self.appearance.visualizer != RANDOM_STYLE {
+            return Task::none();
+        }
+        let song = self.playback.current().map_or(0, |track| track.id);
+        let pool = self.selected_styles();
+        let current = self.style();
+        if pool.len() < 2 {
+            return Task::none();
+        }
+        let at = pool.iter().position(|style| *style == current).unwrap_or(0);
+        let next = pool[(at + 1) % pool.len()];
+        self.random_choice = Some((song, next));
+        Task::none()
+    }
+
+    fn toggle_pool(&mut self, id: &str) -> Task<Message> {
+        let mut selected: Vec<String> = self.selected_styles().into_iter().map(|style| style.id().to_owned()).collect();
+        if let Some(at) = selected.iter().position(|entry| entry == id) {
+            if selected.len() <= 1 {
+                return Task::none();
+            }
+            selected.remove(at);
+        } else {
+            let order: Vec<&str> = Style::ALL.iter().map(|style| style.id()).collect();
+            selected.push(id.to_owned());
+            selected.sort_by_key(|entry| order.iter().position(|known| known == entry).unwrap_or(order.len()));
+        }
+        self.theme_settings.random_pool = Some(selected.clone());
+        let theme_settings = self.theme_settings.clone();
+        save(&self.store, &theme_settings)
+    }
+
+    fn match_online_lyrics(&mut self) -> Task<Message> {
+        let (Some(online), Some(omni)) =
+            (self.playback.current().and_then(|track| track.online.clone()), self.omni.clone())
+        else {
+            return Task::none();
+        };
+        let request = self.playback.request_id();
+        let id = self.playback.current().map_or(0, |track| track.id);
+        Task::perform(async move { omni.lyrics(&online).await.map_err(|err| error_chain(&err)) }, move |result| {
+            Message::MatchedLyrics(request, id, result)
+        })
+    }
+
+    fn import_lyrics(&mut self) -> Task<Message> {
+        Task::perform(
+            blocking(|| {
+                let path = rfd::FileDialog::new()
+                    .add_filter("Lyrics", &["lrc", "vtt", "ttml", "qrc", "yrc", "krc", "txt", "json"])
+                    .pick_file()?;
+                let bytes = std::fs::read(&path).ok()?;
+                let text = folia_library::decode_text(&bytes);
+                let parsed = folia_lyrics::parse(folia_lyrics::Format::detect(&text), &text, "", "");
+                (!parsed.lines.is_empty()).then_some(parsed)
+            }),
+            |lyrics| Message::ImportedLyrics(lyrics.flatten().ok_or_else(|| "no lyrics in the file".to_owned())),
+        )
+    }
+
+    fn export_lyrics(&mut self) -> Task<Message> {
+        let Some(lyrics) = self.playback.lyrics.clone() else { return Task::none() };
+        let Some(track) = self.playback.current().cloned() else { return Task::none() };
+        let text = lyrics_to_lrc(&lyrics);
+        Task::perform(
+            blocking(move || {
+                let name = format!("{} - {}.lrc", track.artist.clone().unwrap_or_default(), track.title);
+                let Some(path) = rfd::FileDialog::new().set_file_name(name.trim_start_matches(" - ")).save_file()
+                else {
+                    return Err("cancelled".to_owned());
+                };
+                std::fs::write(&path, text).map_err(|err| err.to_string())?;
+                Ok(path)
+            }),
+            |result| Message::ExportedLyrics(result.unwrap_or_else(|| Err("export worker stopped".to_owned()))),
+        )
+    }
+
+    fn save_queue(&mut self, name: String) -> Task<Message> {
+        let ids: Vec<i64> = self
+            .playback
+            .queue
+            .items()
+            .iter()
+            .filter(|track| track.online.is_none() && track.id > 0)
+            .map(|track| track.id)
+            .collect();
+        if ids.is_empty() || ids.len() != self.playback.queue.items().len() {
+            return Task::none();
+        }
+        let path = self.db_path.clone();
+        let task = blocking(move || {
+            let library = folia_library::Library::open(&path).map_err(|err| error_chain(&err))?;
+            let playlist = library.create_playlist(&name).map_err(|err| error_chain(&err))?;
+            library.add_to_playlist(playlist.id, &ids).map_err(|err| error_chain(&err))?;
+            library.playlists().map_err(|err| error_chain(&err))
+        });
+        Task::perform(task, |result| {
+            Message::LocalPlaylists(result.unwrap_or_else(|| Err("playlist worker stopped".to_owned())))
+        })
+    }
+
+    fn sheet_event(&mut self, event: panel_sheets::Event) -> Task<Message> {
+        match event {
+            panel_sheets::Event::None => Task::none(),
+            panel_sheets::Event::Equalizer(settings) => {
+                self.audio_settings.equalizer = settings.clone();
+                self.playback.set_equalizer(folia_player::Parameters::of(&settings));
+                let audio = self.audio_settings.clone();
+                save(&self.store, &audio)
+            }
+            panel_sheets::Event::SaveTheme(theme) => {
+                self.theme_settings.custom_dual_theme = Some(theme);
+                self.theme_settings.source = folia_store::ThemeSource::Custom;
+                self.theme =
+                    theme_for(&self.theme_settings, self.appearance.theme, self.appearance.animation_intensity);
+                self.iced_theme = iced_theme(&self.theme);
+                let theme_settings = self.theme_settings.clone();
+                save(&self.store, &theme_settings)
+            }
+            panel_sheets::Event::ImportLyrics => self.import_lyrics(),
+            panel_sheets::Event::ExportLyrics => self.export_lyrics(),
+        }
     }
 
     fn home(&mut self, message: home::Message) -> Task<Message> {
@@ -2063,7 +2887,14 @@ impl Shell {
             home::Message::OpenFilter => self.library_message(library::Message::OpenFilter),
             home::Message::PosterCover(rect) => self.library_message(library::Message::PosterCoverAt(rect)),
             home::Message::FilterSubmit => self.library_message(library::Message::FilterSubmit),
-            home::Message::ListScrolled(offset) => self.library_message(library::Message::ListScrolled(offset)),
+            home::Message::ListScrolled(viewport) => self.library_message(library::Message::ListScrolled(viewport)),
+            home::Message::ListWheel(delta) => self.library_message(library::Message::ListWheel(delta)),
+            home::Message::HelpWheel(delta) => self.home.help_wheel(delta).map(Message::Home),
+            home::Message::HelpScrolled(viewport) => {
+                self.home.help_scrolled(&viewport);
+                Task::none()
+            }
+            home::Message::Frame => self.home.scroll_frame().map(Message::Home),
             home::Message::LocateRow(row) => self.library_message(library::Message::LocateRow(row)),
             home::Message::PlayRow(row) => self.library_message(library::Message::PlayRow(row)),
             home::Message::ToggleSubscribe => self.library_message(library::Message::ToggleSubscribe),
@@ -2091,8 +2922,7 @@ impl Shell {
             | home::Message::ToolsQueueToggle
             | home::Message::ToolsQueueClearTimeout(_)
             | home::Message::ToolsHelp
-            | home::Message::BackHover(_)
-            | home::Message::Frame => Task::none(),
+            | home::Message::BackHover(_) => Task::none(),
         };
         if replan {
             self.library.replan(self.home.goal());
@@ -2161,6 +2991,75 @@ fn copy_portrait(
 }
 
 /// Reads the files' tags in the background and queues the playable ones.
+/// The platform's page for a song, for the copied title line's second line.
+fn song_page_url(track: &Track) -> Option<String> {
+    let online = track.online.as_ref()?;
+    match online.provider.as_str() {
+        "netease" => Some(format!("https://music.163.com/#/song?id={}", online.id)),
+        "qq" => online.id.split('-').next().map(|mid| format!("https://y.qq.com/n/ryqq/songDetail/{mid}")),
+        "kugou" => online
+            .id
+            .split('-')
+            .next()
+            .filter(|hash| !hash.is_empty())
+            .map(|hash| format!("https://www.kugou.com/song/#hash={hash}")),
+        "spotify" => Some(format!("https://open.spotify.com/track/{}", online.id)),
+        "ytm" => Some(format!("https://music.youtube.com/watch?v={}", online.id)),
+        _ => None,
+    }
+}
+
+/// Plain enhanced-LRC: the line's time and text, then its translation at the same time.
+fn lyrics_to_lrc(lyrics: &Lyrics) -> String {
+    let mut out = String::new();
+    for line in &lyrics.lines {
+        let seconds = line.start.max(0.0);
+        let minutes = (seconds / 60.0).floor() as u64;
+        let stamp = format!("[{:02}:{:05.2}]", minutes, seconds - minutes as f64 * 60.0);
+        out.push_str(&stamp);
+        out.push_str(&line.text);
+        out.push('\n');
+        if let Some(translation) = &line.translation {
+            out.push_str(&stamp);
+            out.push_str(translation);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// A fresh seed for a shuffle, from the clock.
+fn status_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0x9e37_79b9, |since| since.as_nanos() as u64)
+}
+
+/// The interface theme for a mode: the custom pair when it is chosen, else the built-in preset, with the stored
+/// animation intensity.
+fn theme_for(
+    settings: &folia_store::ThemeSettings,
+    mode: ThemeMode,
+    intensity: folia_core::AnimationIntensity,
+) -> Theme {
+    match (&settings.custom_dual_theme, settings.source) {
+        (Some(dual), folia_store::ThemeSource::Custom) => {
+            let side = if mode == ThemeMode::Light { &dual.light } else { &dual.dark };
+            side.theme(intensity)
+        }
+        _ => {
+            let mut theme = mode.theme();
+            theme.intensity = intensity;
+            theme
+        }
+    }
+}
+
+/// Reads the local playlists for the cached list; runs off the UI thread.
+fn open_playlists(path: &std::path::Path) -> Result<Vec<folia_library::Playlist>, String> {
+    folia_library::Library::open(path).and_then(|library| library.playlists()).map_err(|err| error_chain(&err))
+}
+
 fn open_files(paths: Vec<PathBuf>) -> Task<Message> {
     let work = background::blocking(move || {
         paths.iter().filter(|path| folia_library::is_audio(path)).map(|path| folia_library::read_track(path)).collect()
@@ -2388,6 +3287,20 @@ fn login_key(event: iced::Event, _status: iced::event::Status, _id: iced::window
             key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
             ..
         }) => Some(Message::Login(login::Message::Close)),
+        _ => None,
+    }
+}
+
+/// Escape closes the lyrics timeline; the command palette's own Escape is not open here.
+fn timeline_key(event: iced::Event, status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    if status == iced::event::Status::Captured {
+        return None;
+    }
+    match event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+            ..
+        }) => Some(Message::Timeline(timeline::Message::Close)),
         _ => None,
     }
 }

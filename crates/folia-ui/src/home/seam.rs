@@ -868,8 +868,10 @@ fn list_panel<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Eleme
     }
     list = list.push(space().height(Length::Fixed(after)));
     let list = iced::widget::scrollable(list.width(Length::Fill))
-        .on_scroll(|viewport| Message::ListScrolled(viewport.absolute_offset().y))
+        .id(super::LIST_SCROLL)
+        .on_scroll(Message::ListScrolled)
         .height(Length::Fill);
+    let list = crate::smooth_scroll::smooth(list, Message::ListWheel);
     let actions = row![
         chrome_button(
             Icon::Play,

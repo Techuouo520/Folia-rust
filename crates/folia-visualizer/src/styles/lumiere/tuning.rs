@@ -146,7 +146,7 @@ const fn noted(item: Item, hint: &'static str) -> Item {
             Item::Slider { key, label_key, hint_key: Some(hint), min, max, step, default }
         }
         Item::Switch { key, label_key, default, .. } => Item::Switch { key, label_key, hint_key: Some(hint), default },
-        Item::Member { .. } | Item::Select { .. } | Item::Button { .. } => item,
+        Item::Member { .. } | Item::Select { .. } | Item::Picture { .. } | Item::Button { .. } => item,
     }
 }
 

@@ -496,6 +496,7 @@ async fn discover_cards(client: &Client) -> Vec<Collection> {
             track_count: u32::try_from(songs.len()).ok(),
             creator: None,
             description: Some(text(&detail, &["subTitle"]).unwrap_or_else(|| "「为你量身打造的专属歌单」".to_owned())),
+            owned: false,
         });
     }
     found

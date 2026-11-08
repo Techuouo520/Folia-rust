@@ -3,12 +3,14 @@
 mod analyser;
 mod convert;
 mod decoder;
+mod equalizer;
 mod output;
 mod shared;
 mod source;
 
 pub use analyser::{Analyser, TAP_CAPACITY, push_samples};
 pub use convert::map_channels;
+pub use equalizer::{Biquad, Coefficients, Control, Parameters, Processor};
 pub use folia_core::AudioFrame;
 pub use shared::PlayerState;
 
@@ -59,13 +61,15 @@ pub struct Player {
     stream: cpal::Stream,
     rate: u32,
     analyser: Analyser,
+    equalizer: equalizer::Control,
 }
 
 impl Player {
     pub fn new() -> Result<Self, PlayerError> {
         let shared = Arc::new(Shared::new());
         let (tap, analyser) = Analyser::pair();
-        let (output, producer) = output::open(shared.clone(), tap)?;
+        let (equalizer, equalizer_consumer) = equalizer::Control::pair();
+        let (output, producer) = output::open(shared.clone(), tap, equalizer_consumer)?;
         let (commands, receiver) = mpsc::channel();
         let decoder = Decoder::new(shared.clone(), producer, output.channels, output.rate, receiver);
         std::thread::Builder::new()
@@ -73,7 +77,12 @@ impl Player {
             .spawn(move || decoder.run())
             .map_err(PlayerError::Thread)?;
         tracing::info!(rate = output.rate, channels = output.channels, "audio output opened");
-        Ok(Self { commands, shared, stream: output.stream, rate: output.rate, analyser })
+        Ok(Self { commands, shared, stream: output.stream, rate: output.rate, analyser, equalizer })
+    }
+
+    /// Hands the equalizer and effect settings to the audio callback. No lock is taken there.
+    pub fn set_equalizer(&mut self, parameters: equalizer::Parameters) {
+        self.equalizer.set(parameters);
     }
 
     /// The latest spectrum. `playing` selects analysis; otherwise the frame is the idle breath.

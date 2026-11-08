@@ -9,8 +9,8 @@ use folia_core::{AudioQuality, OnlineId, Track};
 use serde_json::Value;
 
 use crate::{
-    Account, AudioSource, BoxFuture, Collection, CollectionDetail, CollectionKind, ExploreSection, LoginCode,
-    LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
+    Account, AudioSource, BoxFuture, Capabilities, Collection, CollectionDetail, CollectionKind, ExploreSection,
+    LoginCode, LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
 };
 
 const ID: &str = "qq";
@@ -131,6 +131,36 @@ impl Provider for Qq {
 
     fn explore(&self) -> BoxFuture<'_, Result<Vec<ExploreSection>, OmniError>> {
         Box::pin(library::explore(&self.client))
+    }
+
+    /// `likes`, `playlistTrackMutations` and `mutations.createPlaylist`.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { likes: true, playlist_track_mutations: true, create_playlist: true }
+    }
+
+    fn like_song<'a>(&'a self, song: &'a OnlineId, liked: bool) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(library::like_song(&self.client, &song.id, liked))
+    }
+
+    fn liked_song_ids(&self) -> BoxFuture<'_, Result<Option<Vec<String>>, OmniError>> {
+        Box::pin(async move { library::liked_song_ids(&self.client).await.map(Some) })
+    }
+
+    fn update_playlist_tracks<'a>(
+        &'a self,
+        playlist: &'a Collection,
+        songs: &'a [OnlineId],
+        add: bool,
+    ) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(async move {
+            let ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
+            library::update_playlist_tracks(&self.client, &playlist.id, &ids, add).await
+        })
+    }
+
+    fn create_playlist(&self, name: &str) -> BoxFuture<'_, Result<Collection, OmniError>> {
+        let name = name.to_owned();
+        Box::pin(async move { library::create_playlist(&self.client, &name).await })
     }
 
     /// `withQqCoverSize`: `T00xR<n>x<n>M000` on `y.gtimg.cn`, 300 or 800, else the original.
@@ -255,6 +285,7 @@ fn playlist(raw: &Value) -> Option<Collection> {
     let dir = text(raw, &["dirId", "dirid"]);
     let liked = raw.get("dirName").is_some() && dir.as_deref() == Some(LIKED_DIR);
     let tid = tid.filter(|_| !liked);
+    let owned = tid.is_some() && !liked;
     let id = tid.or_else(|| dir.map(|dir| format!("dir-{dir}"))).or_else(|| text(raw, &["id"]))?;
     let creator = raw
         .get("creator")
@@ -273,6 +304,7 @@ fn playlist(raw: &Value) -> Option<Collection> {
             .and_then(|n| u32::try_from(n).ok()),
         creator,
         description: text(raw, &["desc", "description"]),
+        owned,
     })
 }
 
@@ -298,5 +330,6 @@ fn album(raw: &Value) -> Option<Collection> {
             .and_then(|n| u32::try_from(n).ok()),
         creator,
         description: text(raw, &["desc", "description"]),
+        owned: false,
     })
 }

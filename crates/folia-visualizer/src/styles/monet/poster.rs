@@ -535,8 +535,8 @@ fn edit_range(scene: &Scene<'_>, layout: &Layout) -> Option<Rectangle> {
 }
 
 /// Pointer and wheel input on a live stage. The drag preview stays in the canvas state; letting go publishes one
-/// `PortraitOffset`.
-pub fn update<Message: From<PortraitOffset>>(
+/// `Event::Portrait`. A click on a lyric line publishes the line's start (`MonetRailLine.tsx` `onLineSeek`).
+pub fn update<Message: From<super::Event>>(
     scene: &Scene<'_>,
     cache: &mut Cache,
     event: &canvas::Event,
@@ -551,6 +551,8 @@ pub fn update<Message: From<PortraitOffset>>(
     if hanger.is_none() {
         cache.pin = Pin::default();
     }
+    // The original disables seeking in the preview (`seekDisabled={isPreviewMode}`).
+    let can_seek = !scene.preview;
     match event {
         canvas::Event::Window(iced::window::Event::RedrawRequested(now)) => {
             cache.now = Some(*now);
@@ -571,7 +573,12 @@ pub fn update<Message: From<PortraitOffset>>(
                 .then(|| canvas::Action::request_redraw().and_capture())
         }
         canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
-            let (hanger, at) = (hanger?, at?);
+            let at = at?;
+            if can_seek && let Some(start) = super::line_at(scene, size, at) {
+                rail::end_manual(&mut cache.rail);
+                return Some(canvas::Action::publish(Message::from(super::Event::Seek(start))).and_capture());
+            }
+            let hanger = hanger?;
             let pin = &mut cache.pin;
             if pin.editing.is_some()
                 && edit_range(scene, &layout).map(reset_button).is_some_and(|button| button.contains(at))
@@ -609,7 +616,7 @@ pub fn update<Message: From<PortraitOffset>>(
                 }
                 pin.live = Some(last);
                 pin.pending = true;
-                canvas::Action::publish(Message::from(PortraitOffset(last))).and_capture()
+                canvas::Action::publish(Message::from(super::Event::Portrait(PortraitOffset(last)))).and_capture()
             };
             if down.moved {
                 return Some(finish(pin));
@@ -625,14 +632,17 @@ pub fn update<Message: From<PortraitOffset>>(
     }
 }
 
-/// A pointer over the hanger, or its reset button while editing.
+/// A pointer over the hanger, its reset button while editing, or a lyric line that plays on click.
 pub fn interaction(scene: &Scene<'_>, cache: &Cache, size: Size, at: Option<Point>) -> mouse::Interaction {
     let Some(at) = at else { return mouse::Interaction::None };
+    let saved = tuning::offset(&scene.tuning);
+    let layout = layout::layout(scene, size, cache.pin.live.unwrap_or(saved));
+    if !scene.preview && rail::hit(&cache.rail, at).is_some() {
+        return mouse::Interaction::Pointer;
+    }
     if !scene.tuning.flag(tuning::manifest(), "showPortraitDragHanger") {
         return mouse::Interaction::None;
     }
-    let saved = tuning::offset(&scene.tuning);
-    let layout = layout::layout(scene, size, cache.pin.live.unwrap_or(saved));
     let over_reset = cache.pin.editing.is_some()
         && edit_range(scene, &layout).map(reset_button).is_some_and(|button| button.contains(at));
     if over_reset || layout.hanger.is_some_and(|hanger| hanger.contains(at)) {

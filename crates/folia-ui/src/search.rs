@@ -11,7 +11,7 @@ use folia_render::Plate;
 use folia_visualizer::Ease;
 use iced::widget::scrollable::Viewport;
 use iced::widget::{button, column, container, row, shader, space, stack, svg, text, text_input};
-use iced::{Alignment, Background, Border, Color, Element, Length, Radians, Task, Theme};
+use iced::{Alignment, Background, Border, Color, Element, Length, Radians, Task, Theme, mouse};
 use lucide_static_svg::Icon;
 
 use crate::background::{error_chain, online_cover_sized};
@@ -32,6 +32,7 @@ pub enum Message {
     LoadMore,
     More(Result<folia_omni::Page<Track>, String>),
     Scrolled(Viewport),
+    Wheel(mouse::ScrollDelta),
     Hover(Option<usize>),
     Plus(Option<usize>),
     Play(usize),
@@ -123,8 +124,9 @@ impl SearchPage {
     }
 
     pub fn animating(&self, now: Instant) -> bool {
-        (self.fade_from - self.fade_goal).abs() > 0.001
-            && now.saturating_duration_since(self.fade_at).as_secs_f64() * 1000.0 < FADE_MS
+        self.list.animating(now)
+            || (self.fade_from - self.fade_goal).abs() > 0.001
+                && now.saturating_duration_since(self.fade_at).as_secs_f64() * 1000.0 < FADE_MS
     }
 
     /// The searching mark spins, so the page keeps a frame subscription.
@@ -155,15 +157,20 @@ impl SearchPage {
             Message::LoadMore => return (self.load_more(omni, provider), Outcome::None),
             Message::More(result) => return self.land(result, true, omni),
             Message::Scrolled(viewport) => {
-                self.list.scrolled(viewport);
+                self.list.scrolled(&viewport, Instant::now());
                 return (self.load_covers(omni), Outcome::None);
+            }
+            Message::Wheel(delta) => {
+                self.list.wheel(delta, Instant::now());
+                return (self.list.apply(), Outcome::None);
             }
             Message::Hover(index) => self.list.hovered = index,
             Message::Plus(index) => self.list.plus(index),
             Message::Play(index) => return (Task::none(), Outcome::Play(index)),
             Message::Enqueue(index) => return (Task::none(), Outcome::Enqueue(index)),
             Message::Cover(id, cover) => self.store_cover(id, cover),
-            Message::Close | Message::Frame => {}
+            Message::Frame => return (self.list.frame(Instant::now()), Outcome::None),
+            Message::Close => {}
         }
         (Task::none(), Outcome::None)
     }
@@ -402,6 +409,7 @@ impl SearchPage {
         };
         let bindings = search_results::Bindings {
             scroll: Message::Scrolled,
+            wheel: Message::Wheel,
             hover: Message::Hover,
             play: Message::Play,
             enqueue: Message::Enqueue,

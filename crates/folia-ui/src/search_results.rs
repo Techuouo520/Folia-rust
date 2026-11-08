@@ -3,17 +3,20 @@
 use folia_core::Track;
 use iced::widget::scrollable::Viewport;
 use iced::widget::{
-    button, column, container, image, mouse_area, responsive, row, scrollable, space, stack, text, tooltip,
+    Id, button, column, container, image, mouse_area, responsive, row, scrollable, space, stack, text, tooltip,
 };
-use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
+use iced::{Alignment, Background, Border, Color, Element, Length, Task, Theme, mouse};
 use lucide_static_svg::Icon;
 
 use crate::icons::{Variant, icon, variant};
 use crate::scrollbar;
+use crate::smooth_scroll::{self, Scroll};
 
 const ROW: f32 = 76.0;
 const OVERSCAN: usize = 6;
 const COVER: f32 = 48.0;
+/// The results list's scrollable id, used for the program scrolls.
+const LIST: &str = "search-results";
 
 /// `m:ss` (`formatDuration`). Minutes are not padded. `seconds` is the track length.
 pub fn format_duration(seconds: f64) -> String {
@@ -23,20 +26,41 @@ pub fn format_duration(seconds: f64) -> String {
 
 #[derive(Debug, Default)]
 pub struct List {
-    offset: f32,
+    scroll: Scroll,
     viewport: f32,
     pub hovered: Option<usize>,
     plus: Option<usize>,
 }
 
 impl List {
-    pub fn scrolled(&mut self, viewport: Viewport) {
-        self.offset = viewport.absolute_offset().y;
+    pub fn scrolled(&mut self, viewport: &Viewport, now: std::time::Instant) {
+        self.scroll.scrolled(viewport, now);
         self.viewport = viewport.bounds().height;
     }
 
+    pub fn wheel(&mut self, delta: mouse::ScrollDelta, now: std::time::Instant) {
+        self.scroll.wheel(delta, now);
+    }
+
+    /// One frame of a smooth scroll; the results page asks for frames while this moves.
+    pub fn frame<Message>(&mut self, now: std::time::Instant) -> Task<Message> {
+        match self.scroll.frame(now) {
+            Some(_) => self.apply(),
+            None => Task::none(),
+        }
+    }
+
+    pub fn apply<Message>(&self) -> Task<Message> {
+        self.scroll.apply(Id::new(LIST))
+    }
+
+    pub fn animating(&self, now: std::time::Instant) -> bool {
+        self.scroll.animating(now)
+    }
+
     pub fn reset(&mut self) {
-        self.offset = 0.0;
+        self.scroll.reset();
+        self.viewport = 0.0;
         self.hovered = None;
         self.plus = None;
     }
@@ -51,8 +75,9 @@ impl List {
             return 0..0;
         }
         let window = if self.viewport > 1.0 { self.viewport } else { 800.0 };
-        let first = ((self.offset / ROW).floor() as usize).saturating_sub(OVERSCAN);
-        let last = (((self.offset + window) / ROW).ceil() as usize + OVERSCAN).min(count);
+        let offset = self.scroll.offset();
+        let first = ((offset / ROW).floor() as usize).saturating_sub(OVERSCAN);
+        let last = (((offset + window) / ROW).ceil() as usize + OVERSCAN).min(count);
         first..last.max(first)
     }
 
@@ -73,12 +98,13 @@ impl List {
         let list = column![space().height(range.start as f32 * ROW)]
             .extend(rows)
             .push(space().height((tracks.len() - range.end) as f32 * ROW));
-        scrollable(list)
+        let list = scrollable(list)
+            .id(LIST)
             .on_scroll(bindings.scroll)
             .direction(scrollbar::direction())
             .style(scrollbar::style(look.daylight))
-            .height(Length::Fill)
-            .into()
+            .height(Length::Fill);
+        smooth_scroll::smooth(list, bindings.wheel)
     }
 }
 
@@ -86,6 +112,7 @@ impl List {
 #[derive(Clone, Copy)]
 pub struct Bindings<M> {
     pub scroll: fn(Viewport) -> M,
+    pub wheel: fn(mouse::ScrollDelta) -> M,
     pub hover: fn(Option<usize>) -> M,
     pub play: fn(usize) -> M,
     pub enqueue: fn(usize) -> M,

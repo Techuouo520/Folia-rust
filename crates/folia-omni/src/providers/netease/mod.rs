@@ -12,8 +12,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::{
-    Account, AudioSource, BoxFuture, Collection, CollectionDetail, CollectionKind, ExploreSection, LoginCode,
-    LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
+    Account, AudioSource, BoxFuture, Capabilities, Collection, CollectionDetail, CollectionKind, ExploreSection,
+    LoginCode, LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
 };
 
 const ID: &str = "netease";
@@ -256,6 +256,35 @@ impl Provider for Netease {
         Box::pin(explore::first_page(&self.client, &self.explore))
     }
 
+    /// `likes` and `playlistTrackMutations`; the account's liked list is `/api/song/like/list`.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { likes: true, playlist_track_mutations: true, create_playlist: false }
+    }
+
+    fn like_song<'a>(&'a self, song: &'a OnlineId, liked: bool) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(library::like_song(&self.client, &song.id, liked))
+    }
+
+    fn liked_song_ids(&self) -> BoxFuture<'_, Result<Option<Vec<String>>, OmniError>> {
+        Box::pin(async move {
+            let account = account::account(&self.client).await?;
+            let Some(account) = account else { return Ok(None) };
+            library::liked_song_ids(&self.client, &account.id).await.map(Some)
+        })
+    }
+
+    fn update_playlist_tracks<'a>(
+        &'a self,
+        playlist: &'a Collection,
+        songs: &'a [OnlineId],
+        add: bool,
+    ) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(async move {
+            let ids: Vec<String> = songs.iter().map(|song| song.id.clone()).collect();
+            library::update_playlist_tracks(&self.client, &playlist.id, &ids, add).await
+        })
+    }
+
     /// `getSizedCoverUrl` for `126.net`: the query is replaced by `param=<px>y<px>`.
     fn sized_cover(&self, url: &str, px: u32) -> Option<String> {
         let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
@@ -359,6 +388,7 @@ fn collection(row: &Value, kind: CollectionKind) -> Option<Collection> {
         track_count: count.and_then(|count| u32::try_from(count).ok()),
         creator: if artists.is_empty() { creator } else { Some(artists.join(", ")) },
         description: text("description").or_else(|| text("copywriter")),
+        owned: false,
     })
 }
 

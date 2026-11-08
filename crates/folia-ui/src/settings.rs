@@ -6,14 +6,16 @@ use folia_core::{Language, LanguagePreference, Theme};
 use folia_i18n::I18n;
 use folia_store::{AppearanceSettings, FrameRate, ThemeMode};
 use folia_visualizer::{Ease, Style, tween};
+use iced::widget::scrollable::Viewport;
 use iced::widget::{
-    button, column, container, mouse_area, opaque, operation, row, scrollable, space, stack, text, text_input,
+    Id, button, column, container, mouse_area, opaque, row, scrollable, space, stack, text, text_input,
 };
-use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Size, Task, Vector};
+use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Size, Task, Vector, mouse};
 use lucide_static_svg::Icon;
 
 use crate::icons::icon;
 use crate::settings_kit::{self as kit, Choice, Group, Row, Tokens};
+use crate::smooth_scroll::{self, Scroll};
 
 /// `KIT_MOTION.move` and the window's own fade (`shellTransition`), in seconds.
 const MOVE: f64 = 0.22;
@@ -96,7 +98,8 @@ pub enum Message {
     /// A search hit: the category, and the group to land on.
     Hit(Section, Option<&'static str>),
     Tab(&'static str),
-    Scrolled(f32),
+    Scrolled(Viewport),
+    Wheel(mouse::ScrollDelta),
     Escape,
     Close,
     Frame,
@@ -140,6 +143,7 @@ pub struct Settings {
     closing: Option<Instant>,
     page_at: Instant,
     motions: Vec<Motion>,
+    body: Scroll,
 }
 
 impl Settings {
@@ -153,6 +157,7 @@ impl Settings {
             closing: None,
             page_at: now,
             motions: Vec::new(),
+            body: Scroll::default(),
         }
     }
 
@@ -177,9 +182,15 @@ impl Settings {
                 self.land(id, now);
                 self.scroll_to(Some(id))
             }
-            Message::Scrolled(offset) => {
+            Message::Scrolled(viewport) => {
+                let offset = viewport.absolute_offset().y;
+                self.body.scrolled(&viewport, now);
                 self.follow_scroll(offset, now);
                 Task::none()
+            }
+            Message::Wheel(delta) => {
+                self.body.wheel(delta, now);
+                self.body.apply(Id::new(SCROLL))
             }
             Message::Escape if !self.query.is_empty() => {
                 self.query.clear();
@@ -191,7 +202,10 @@ impl Settings {
             }
             Message::Frame => {
                 self.motions.retain(|motion| seconds(motion.at, now) < MOVE);
-                Task::none()
+                match self.body.frame(now) {
+                    Some(_) => self.body.apply(Id::new(SCROLL)),
+                    None => Task::none(),
+                }
             }
         }
     }
@@ -225,16 +239,18 @@ impl Settings {
             || self.closing.is_some()
             || seconds(self.page_at, now) < MOVE
             || self.motions.iter().any(|motion| seconds(motion.at, now) < MOVE)
+            || self.body.animating(now)
     }
 
     /// Scrolls the page so `group`'s gap sits at the top, or to the top of the page.
-    fn scroll_to(&self, group: Option<&'static str>) -> Task<Message> {
+    fn scroll_to(&mut self, group: Option<&'static str>) -> Task<Message> {
         let groups = groups_of(self.section);
         let before = groups.iter().take_while(|g| Some(g.id) != group).count();
         let before = if group.is_some() && before < groups.len() { before } else { 0 };
         let y: f32 =
             groups[..before].iter().enumerate().map(|(index, g)| group_height(self.section, g, index == 0)).sum();
-        operation::scroll_to(SCROLL, operation::AbsoluteOffset { x: None, y: Some(y) })
+        self.body.scroll_to(y, Instant::now());
+        self.body.apply(Id::new(SCROLL))
     }
 
     fn show(&mut self, section: Section, group: Option<&'static str>, now: Instant) {
@@ -506,13 +522,13 @@ impl Settings {
             bottom: gutter.foot - rise,
             left: gutter.side,
         });
-        scrollable(body)
+        let page = scrollable(body)
             .id(SCROLL)
             .height(Length::Fill)
             .direction(crate::settings_kit::scrollbar())
-            .on_scroll(|viewport| crate::Message::Settings(Message::Scrolled(viewport.absolute_offset().y)))
-            .style(crate::settings_kit::scroll_style(tokens))
-            .into()
+            .on_scroll(|viewport| crate::Message::Settings(Message::Scrolled(viewport)))
+            .style(crate::settings_kit::scroll_style(tokens));
+        smooth_scroll::smooth(page, |delta| crate::Message::Settings(Message::Wheel(delta)))
     }
 
     fn page<'a>(
@@ -527,6 +543,7 @@ impl Settings {
             label: i18n.t(label).to_owned(),
             hint,
             sub,
+            below: None,
             control,
         };
         match self.section {

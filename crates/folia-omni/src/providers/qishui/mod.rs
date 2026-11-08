@@ -220,6 +220,7 @@ fn collection(raw: &Value) -> Option<Collection> {
             .and_then(|n| u32::try_from(n).ok()),
         creator: text(owner, "nickname"),
         description: text(base, "desc").or_else(|| text(base, "intro")),
+        owned: false,
     })
 }
 

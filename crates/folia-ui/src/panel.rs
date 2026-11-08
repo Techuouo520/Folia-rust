@@ -6,10 +6,12 @@ use folia_core::{AudioQuality, Repeat, Theme, Track};
 use folia_i18n::I18n;
 use folia_omni::{Account, Platform};
 use folia_render::Plate;
-use folia_store::ThemeMode;
-use folia_visualizer::{Ease, Style};
+use folia_store::{ReplayGainMode, ThemeMode, ThemeSource};
+use folia_visualizer::{Ease, QuickControl, QuickKind, Style};
 use iced::widget::text::LineHeight;
-use iced::widget::{button, column, container, image, mouse_area, row, shader, slider, space, stack, text, tooltip};
+use iced::widget::{
+    button, column, container, image, mouse_area, row, shader, slider, space, stack, text, text_input, tooltip,
+};
 use iced::{Alignment, Background, Border, Color, Element, Length, Size, Task, Theme as IcedTheme};
 use lucide_static_svg::Icon;
 
@@ -51,6 +53,17 @@ pub enum Tab {
     Quality,
 }
 
+/// A playlist the playing song can go into.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaylistChoice {
+    /// The local playlist's row id, or `None` for an online one.
+    pub local: Option<i64>,
+    /// The online platform and playlist id.
+    pub online: Option<(String, String)>,
+    pub name: String,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Toggle,
@@ -75,13 +88,52 @@ pub enum Message {
     Theme(ThemeMode),
     Picker(mode_picker::Message),
     Intensity,
-    /// 「去主页登录」: opens the sign-in window on the track's platform.
+    /// The sign-in shortcut on the guest card: opens the sign-in window on the track's platform.
     Login,
-    /// 「同步数据」.
+    /// The sync button.
     Sync,
     /// The account card's sign-out.
     SignOut,
     QualitySelect(quality_select::Message),
+    /// The heart on the song header.
+    Like,
+    /// The star: the playlist picker opens (or closes).
+    AddToPlaylist,
+    PlaylistClose,
+    /// A row of the picker: index into the choices the view was given.
+    PlaylistPick(usize),
+    /// The new-playlist prompt: the name field takes the picker's place.
+    PlaylistCreate,
+    PlaylistName(String),
+    PlaylistCreateConfirm,
+    PlaylistCreateCancel,
+    /// The song title's press: copies the song's line.
+    CopySongInfo,
+    /// The lyric style's own quick control with this key.
+    Quick(&'static str),
+    /// With a random style chosen: draw another style for this song.
+    Reroll,
+    PoolOpen,
+    PoolClose,
+    /// Turns one style on or off in the random pool.
+    PoolToggle(String),
+    /// The audio effects window.
+    EqualizerOpen,
+    /// The theme source's segments and the quick editor.
+    ThemeSource(folia_store::ThemeSource),
+    QuickEditOpen,
+    /// The lyric tab's buttons.
+    MatchOnline,
+    LyricFileOpen,
+    ExportLyrics,
+    ImportLyrics,
+    ReplayGain(folia_store::ReplayGainMode),
+    /// The save-as-playlist prompt: the queue's name field opens, then saves.
+    SaveQueue,
+    SaveQueueName(String),
+    SaveQueueConfirm,
+    SaveQueueCancel,
+    Shuffle,
 }
 
 pub enum Effect {
@@ -98,6 +150,25 @@ pub enum Effect {
     Sync,
     SignOut,
     Quality(AudioQuality),
+    Like,
+    /// A row of the picker, by its place in the list the shell gave the view.
+    PlaylistPick(usize),
+    /// The name typed into the new-playlist prompt.
+    CreatePlaylist(String),
+    CopySongInfo,
+    Quick(&'static str),
+    Reroll,
+    PoolToggle(String),
+    EqualizerOpen,
+    ThemeSource(folia_store::ThemeSource),
+    QuickEditOpen,
+    MatchOnline,
+    LyricFileOpen,
+    ExportLyrics,
+    ImportLyrics,
+    ReplayGain(folia_store::ReplayGainMode),
+    SaveQueue(String),
+    Shuffle,
 }
 
 pub struct PlayerPanel {
@@ -127,11 +198,183 @@ pub struct PlayerPanel {
     page: Tween,
     pickers: mode_picker::Pickers,
     quality: quality_select::Select,
+    /// The playlist picker's opening: closed, choosing a playlist, or naming a new one.
+    playlists: PlaylistPicker,
+    /// The random pool's popover, and the queue's save-as-playlist name field.
+    pool_open: bool,
+    save_queue: Option<String>,
     /// A modal covers the window: handle hover does not retarget, and floats stay in the normal stack.
     modal: bool,
 }
 
+/// `AddToPlaylistHost`'s picker and its new-playlist prompt.
+#[derive(Debug, Clone, Default)]
+struct PlaylistPicker {
+    open: bool,
+    /// The name field is up instead of the list.
+    creating: bool,
+    name: String,
+}
+
 impl PlayerPanel {
+    /// The panel's own popovers: the playlist picker, the random pool and the queue's name field.
+    fn overlay<'a>(
+        &self,
+        view: View<'a>,
+        tokens: Faded,
+        size: Size,
+        top: f32,
+        origin: (f32, f32),
+    ) -> Option<Element<'a, Message>> {
+        let (body, dialog) = if self.playlists.open {
+            let list = if self.playlists.creating {
+                let field = text_input(view.i18n.t("localMusic.enterPlaylistName"), &self.playlists.name)
+                    .on_input(Message::PlaylistName)
+                    .on_submit(Message::PlaylistCreateConfirm)
+                    .size(13)
+                    .padding(8)
+                    .style(move |_theme: &IcedTheme, _status| iced::widget::text_input::Style {
+                        background: Background::Color(tokens.win),
+                        border: Border { radius: 8.0.into(), width: 1.0, color: tokens.line },
+                        icon: tokens.t3,
+                        placeholder: tokens.t3,
+                        value: tokens.t1,
+                        selection: tokens.fill2,
+                    });
+                let buttons = row![
+                    text_btn(view.i18n.t("ui.cancel"), tokens.t2, Some(Message::PlaylistCreateCancel)),
+                    text_btn(view.i18n.t("options.save"), tokens.t1, Some(Message::PlaylistCreateConfirm)),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center);
+                column![field, container(buttons).width(Length::Fill).align_x(Alignment::End)].spacing(8)
+            } else {
+                let mut rows = column![].spacing(2);
+                if view.playlists.is_empty() {
+                    rows = rows.push(
+                        container(text(view.i18n.t("localMusic.noPlaylistsFound")).size(12).color(tokens.t3))
+                            .padding(pad(8.0, 8.0, 8.0, 8.0)),
+                    );
+                }
+                for (index, choice) in view.playlists.iter().enumerate() {
+                    rows = rows.push(playlist_row(tokens, choice, index));
+                }
+                let create = view.can_create_playlist.then(|| -> Element<'a, Message> {
+                    button(
+                        row![
+                            icon(Icon::Plus, 14.0, tokens.t1),
+                            text(view.i18n.t("localMusic.createPlaylist")).size(13).color(tokens.t1)
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center),
+                    )
+                    .width(Length::Fill)
+                    .padding(pad(8.0, 8.0, 8.0, 8.0))
+                    .on_press(Message::PlaylistCreate)
+                    .style(button::text)
+                    .into()
+                });
+                let mut list = rows;
+                if let Some(create) = create {
+                    list = list.push(create);
+                }
+                list
+            };
+            let head = row![
+                text(view.i18n.t("localMusic.addToPlaylist")).size(13).font(settings_kit::SEMIBOLD).color(tokens.t1),
+                space().width(Length::Fill),
+                text_btn(view.i18n.t("ui.close"), tokens.t3, Some(Message::PlaylistClose)),
+            ]
+            .align_y(Alignment::Center);
+            (column![head, hairline(tokens), list].spacing(8), true)
+        } else if self.pool_open {
+            let mut rows = column![].spacing(2);
+            let pool = view.random_pool;
+            for style in view.all_styles {
+                let id = style.id();
+                let on = pool.is_none_or(|pool| pool.iter().any(|entry| entry == id));
+                rows = rows.push(
+                    button(
+                        row![
+                            container(if on { icon(Icon::Check, 13.0, tokens.accent) } else { space().into() })
+                                .width(Length::Fixed(16.0)),
+                            text(view.i18n.t(style.label_key())).size(13).color(tokens.t1),
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center),
+                    )
+                    .width(Length::Fill)
+                    .padding(pad(7.0, 8.0, 7.0, 8.0))
+                    .on_press(Message::PoolToggle(id.to_owned()))
+                    .style(button::text),
+                );
+            }
+            let head = row![
+                text(view.i18n.t("options.randomPoolChoose")).size(13).font(settings_kit::SEMIBOLD).color(tokens.t1),
+                space().width(Length::Fill),
+                text_btn(view.i18n.t("ui.close"), tokens.t3, Some(Message::PoolClose)),
+            ]
+            .align_y(Alignment::Center);
+            (column![head, hairline(tokens), rows].spacing(8), true)
+        } else if let Some(name) = &self.save_queue {
+            let field = text_input(view.i18n.t("localMusic.enterPlaylistName"), name)
+                .on_input(Message::SaveQueueName)
+                .on_submit(Message::SaveQueueConfirm)
+                .size(13)
+                .padding(8)
+                .style(move |_theme: &IcedTheme, _status| iced::widget::text_input::Style {
+                    background: Background::Color(tokens.win),
+                    border: Border { radius: 8.0.into(), width: 1.0, color: tokens.line },
+                    icon: tokens.t3,
+                    placeholder: tokens.t3,
+                    value: tokens.t1,
+                    selection: tokens.fill2,
+                });
+            let buttons = row![
+                text_btn(view.i18n.t("ui.cancel"), tokens.t2, Some(Message::SaveQueueCancel)),
+                text_btn(view.i18n.t("options.save"), tokens.t1, Some(Message::SaveQueueConfirm)),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center);
+            (
+                column![
+                    text(view.i18n.t("localMusic.saveQueueAsPlaylist"))
+                        .size(13)
+                        .font(settings_kit::SEMIBOLD)
+                        .color(tokens.t1),
+                    field,
+                    container(buttons).width(Length::Fill).align_x(Alignment::End),
+                ]
+                .spacing(8),
+                true,
+            )
+        } else {
+            return None;
+        };
+        let width = (size.width - 24.0).clamp(160.0, 300.0);
+        let card =
+            container(body).width(Length::Fixed(width)).padding(12).style(move |_theme: &IcedTheme| container::Style {
+                background: Some(tokens.win.into()),
+                border: Border { radius: 12.0.into(), width: 1.0, color: tokens.line },
+                shadow: iced::Shadow {
+                    color: Color { a: 0.35, ..Color::BLACK },
+                    offset: iced::Vector::new(0.0, 14.0),
+                    blur_radius: 36.0,
+                },
+                ..container::Style::default()
+            });
+        let left = if dialog { (size.width - width) / 2.0 } else { 8.0 };
+        let top = (top + 60.0).min(size.height - 60.0);
+        Some(
+            container(card)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Alignment::Start)
+                .align_y(Alignment::Start)
+                .padding(pad(top + origin.1, 0.0, 0.0, left + origin.0))
+                .into(),
+        )
+    }
     pub fn new(now: Instant) -> Self {
         Self {
             open: false,
@@ -155,6 +398,9 @@ impl PlayerPanel {
             page: Tween::new(1.0, CLOSE_MS, OPEN_EASE, now),
             pickers: mode_picker::Pickers::new(now),
             quality: quality_select::Select::new(now),
+            playlists: PlaylistPicker::default(),
+            pool_open: false,
+            save_queue: None,
             modal: false,
         }
     }
@@ -221,6 +467,10 @@ impl PlayerPanel {
             Message::Close => {
                 if self.quality.is_open() {
                     self.quality.update(quality_select::Message::Close, room.quality_levels, room.quality, now);
+                } else if self.playlists.open || self.pool_open || self.save_queue.is_some() {
+                    self.playlists = PlaylistPicker::default();
+                    self.pool_open = false;
+                    self.save_queue = None;
                 } else {
                     self.set_open(false, now);
                 }
@@ -302,6 +552,85 @@ impl PlayerPanel {
                     None => Effect::None,
                 }
             }
+            Message::Like => Effect::Like,
+            Message::AddToPlaylist => {
+                self.playlists = PlaylistPicker { open: true, creating: false, name: String::new() };
+                Effect::None
+            }
+            Message::PlaylistClose => {
+                self.playlists = PlaylistPicker::default();
+                Effect::None
+            }
+            Message::PlaylistPick(index) => {
+                self.playlists = PlaylistPicker::default();
+                Effect::PlaylistPick(*index)
+            }
+            Message::PlaylistCreate => {
+                self.playlists.creating = true;
+                self.playlists.name.clear();
+                Effect::None
+            }
+            Message::PlaylistName(name) => {
+                self.playlists.name = name.clone();
+                Effect::None
+            }
+            Message::PlaylistCreateConfirm => {
+                let name = self.playlists.name.trim().to_owned();
+                if name.is_empty() {
+                    return (Effect::None, Task::none());
+                }
+                self.playlists = PlaylistPicker::default();
+                Effect::CreatePlaylist(name)
+            }
+            Message::PlaylistCreateCancel => {
+                self.playlists.creating = false;
+                self.playlists.name.clear();
+                Effect::None
+            }
+            Message::CopySongInfo => Effect::CopySongInfo,
+            Message::Quick(key) => Effect::Quick(key),
+            Message::Reroll => Effect::Reroll,
+            Message::PoolOpen => {
+                self.pool_open = true;
+                self.playlists = PlaylistPicker::default();
+                Effect::None
+            }
+            Message::PoolClose => {
+                self.pool_open = false;
+                Effect::None
+            }
+            Message::PoolToggle(style) => Effect::PoolToggle(style.clone()),
+            Message::EqualizerOpen => Effect::EqualizerOpen,
+            Message::ThemeSource(source) => Effect::ThemeSource(*source),
+            Message::QuickEditOpen => Effect::QuickEditOpen,
+            Message::MatchOnline => Effect::MatchOnline,
+            Message::LyricFileOpen => Effect::LyricFileOpen,
+            Message::ExportLyrics => Effect::ExportLyrics,
+            Message::ImportLyrics => Effect::ImportLyrics,
+            Message::ReplayGain(mode) => Effect::ReplayGain(*mode),
+            Message::SaveQueue => {
+                self.save_queue = Some(String::new());
+                Effect::None
+            }
+            Message::SaveQueueName(name) => {
+                if let Some(draft) = &mut self.save_queue {
+                    *draft = name.clone();
+                }
+                Effect::None
+            }
+            Message::SaveQueueConfirm => {
+                let Some(name) = self.save_queue.take() else { return (Effect::None, Task::none()) };
+                let name = name.trim().to_owned();
+                if name.is_empty() {
+                    return (Effect::None, Task::none());
+                }
+                Effect::SaveQueue(name)
+            }
+            Message::SaveQueueCancel => {
+                self.save_queue = None;
+                Effect::None
+            }
+            Message::Shuffle => Effect::Shuffle,
             Message::Frame => {
                 if self.open && self.tab == Tab::Queue {
                     let task = self.queue.frame(room.queue, room.index, list_h, now);
@@ -313,6 +642,9 @@ impl PlayerPanel {
                 if self.quality.is_open() {
                     self.quality.update(quality_select::Message::Close, room.quality_levels, room.quality, now);
                 }
+                self.playlists = PlaylistPicker::default();
+                self.pool_open = false;
+                self.save_queue = None;
                 Effect::None
             }
         };
@@ -440,6 +772,34 @@ pub struct View<'a> {
     /// Settings, the workbench or sign-in is open.
     pub modal: bool,
     pub audio: &'a folia_core::AudioFrame,
+    /// The playing song is in the account's liked list (or the local liked list).
+    pub liked: bool,
+    /// Why the heart is out of reach, already worded; `None` when it can be pressed.
+    pub like_disabled: Option<&'a str>,
+    /// The playlists the song can go into, and whether a new one can be made.
+    pub playlists: &'a [PlaylistChoice],
+    pub can_add: bool,
+    pub add_disabled: Option<&'a str>,
+    pub can_create_playlist: bool,
+    /// The chosen style's own quick controls.
+    pub quick: &'a [QuickControl],
+    pub theme_source: ThemeSource,
+    pub has_custom_theme: bool,
+    /// The random pool (style ids), or every style when `None`.
+    pub random_pool: Option<&'a [String]>,
+    pub all_styles: &'a [Style],
+    pub equalizer_on: bool,
+    pub replay_gain: ReplayGainMode,
+    pub gain: Option<folia_core::ReplayGain>,
+    /// The lyric tab's reach: a platform to match on, an import, an export.
+    pub can_match: bool,
+    pub can_import_lyrics: bool,
+    pub can_export_lyrics: bool,
+    /// The platform's name for the lyric source row.
+    pub lyric_provider: &'a str,
+    /// The queue can be shuffled and saved as a local playlist.
+    pub can_shuffle: bool,
+    pub can_save_queue: bool,
 }
 
 fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) -> Element<'a, Message> {
@@ -548,6 +908,11 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     }
     if let Some(quality) = quality {
         layers = layers.push(quality);
+    }
+    if let Some(extra) =
+        panel.overlay(view, tokens, Size::new(panel_w, visual_h), visual_top, (visual_left - x0, visual_top - y0))
+    {
+        layers = layers.push(extra);
     }
     let patch: Element<'a, Message> = layers.width(Length::Fixed(x1 - x0)).height(Length::Fixed(y1 - y0)).into();
     // `transformOrigin`: the handle's centre, 24px in from the surface's right and `under - 24` below it.
@@ -662,11 +1027,16 @@ fn header<'a>(view: View<'a>, tokens: Faded, cover_px: f32, header_h: f32, fold:
     let big_ink = Color { a: open * fold.under, ..tokens.t1 };
     let drop = 8.0 * (1.0 - fold.under);
     let credits = column![
-        text(title)
-            .size(18)
-            .line_height(LineHeight::Absolute(iced::Pixels(26.0)))
-            .font(settings_kit::SEMIBOLD)
-            .color(big_ink),
+        button(
+            text(title)
+                .size(18)
+                .line_height(LineHeight::Absolute(iced::Pixels(26.0)))
+                .font(settings_kit::SEMIBOLD)
+                .color(big_ink)
+        )
+        .padding(0)
+        .on_press_maybe((view.track.is_some() && fold.under > 0.5).then_some(Message::CopySongInfo))
+        .style(button::text),
         artists(view, big, 13.0, 20.0),
         text(album).size(12).line_height(LineHeight::Absolute(iced::Pixels(18.0))).color(big.t3),
     ];
@@ -699,15 +1069,17 @@ fn actions<'a>(view: View<'a>, tokens: Faded, ink: Color) -> Element<'a, Message
     let dim = Color { a: 0.4 * ink.a, ..tokens.t2 };
     let mut items = vec![heart(view, tokens, ink, true)];
     if view.track.is_some() {
-        items.push(icon_btn(
-            tokens,
-            Icon::Star,
-            (17.0, 32.0),
-            dim,
-            Some(tokens.fill),
-            view.i18n.t("localMusic.addToPlaylist").to_owned(),
-            None,
-        ));
+        let (color, fill, tip, on_press) = match view.add_disabled {
+            Some(reason) => (dim, Some(tokens.fill), reason.to_owned(), None),
+            None if view.can_add => (
+                ink,
+                Some(tokens.fill),
+                view.i18n.t("localMusic.addToPlaylist").to_owned(),
+                Some(Message::AddToPlaylist),
+            ),
+            None => (dim, Some(tokens.fill), view.i18n.t("localMusic.addToPlaylist").to_owned(), None),
+        };
+        items.push(icon_btn(tokens, Icon::Star, (17.0, 32.0), color, fill, tip, on_press));
     }
     if let Some(name) = view.origin {
         items.push(source_pill(view, tokens, ink, name, view.pill_hover));
@@ -756,14 +1128,25 @@ fn source_pill<'a>(view: View<'a>, tokens: Faded, ink: Color, name: &'a str, hov
 }
 
 fn heart<'a>(view: View<'a>, tokens: Faded, ink: Color, filled: bool) -> Element<'a, Message> {
+    let on = view.liked;
+    let like_ink = if on {
+        if view.daylight { Color::from_rgb8(0xe0, 0x35, 0x4f) } else { Color::from_rgb8(0xf2, 0x60, 0x7a) }
+    } else {
+        Color { a: 0.4 * ink.a, ..tokens.t2 }
+    };
+    let tip = match view.like_disabled {
+        Some(reason) => reason.to_owned(),
+        None => view.i18n.t(if on { "player.unlike" } else { "player.like" }).to_owned(),
+    };
+    let fill = if on || filled { Some(tokens.fill) } else { None };
     icon_btn(
         tokens,
         Icon::Heart,
         (17.0, 32.0),
-        Color { a: 0.4 * ink.a, ..tokens.t2 },
-        filled.then_some(tokens.fill),
-        view.i18n.t("player.like").to_owned(),
-        None,
+        like_ink,
+        fill,
+        tip,
+        view.like_disabled.is_none().then_some(Message::Like),
     )
 }
 
@@ -884,7 +1267,13 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
     let tiles = row![
         tile(tokens, Icon::Repeat, loop_label, view.repeat != Repeat::Off, Some(Message::Repeat)),
         tile(tokens, Icon::Blend, view.i18n.t("ui.automix"), false, None),
-        tile(tokens, Icon::SlidersHorizontal, view.i18n.t("ui.equalizerTitle"), false, None),
+        tile(
+            tokens,
+            Icon::SlidersHorizontal,
+            view.i18n.t("ui.equalizerTitle"),
+            view.equalizer_on,
+            Some(Message::EqualizerOpen)
+        ),
     ]
     .spacing(8);
     let (panel, now) = rows;
@@ -902,37 +1291,64 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
     let intensity_tip = format!("{}: {}", view.i18n.t("ui.animationIntensity"), intensity);
     let aside = chip(tokens, ink.a, &intensity_tip, intensity, Some(Message::Intensity));
     let style_row = pickers.row(look, mode_picker::Row::Style, Some(aside), now);
-    // Random: the style this song drew (reroll) and the pool, both without a backend here.
+    let quick = quick_row(view, tokens, ink);
+    // Random: the style this song drew (reroll) and the pool.
     let random = (view.style_id == "random").then(|| {
         let drawn = view.i18n.t(view.drawn_style.label_key());
         let reroll = format!("{}: {}", view.i18n.t("options.randomVisualizerReroll"), drawn);
+        let count = view.random_pool.map_or(view.all_styles.len(), <[String]>::len);
         let pool = view.i18n.t("options.randomPoolChoose");
-        container(row![chip(tokens, ink.a, &reroll, drawn, None), chip(tokens, ink.a, pool, pool, None)].spacing(6))
-            .width(Length::Fill)
-            .align_x(Alignment::End)
-            .padding(pad(4.0, 0.0, 0.0, 0.0))
+        let pool_tip = format!(
+            "{pool}: {}",
+            view.i18n.format(
+                "options.randomPoolCount",
+                &[("selected", &count.to_string()), ("total", &view.all_styles.len().to_string())]
+            )
+        );
+        container(
+            row![
+                chip(tokens, ink.a, &reroll, drawn, (count > 1).then_some(Message::Reroll)),
+                chip(tokens, ink.a, &pool_tip, pool, Some(Message::PoolOpen)),
+            ]
+            .spacing(6),
+        )
+        .width(Length::Fill)
+        .align_x(Alignment::End)
+        .padding(pad(4.0, 0.0, 0.0, 0.0))
     });
     let background = pickers.row(look, mode_picker::Row::Background, None, now);
     let transparent = row![
-        text(view.i18n.t("options.transparentPlayerBackground"))
-            .size(14)
-            .color(fade(tokens.t2, ink.a * 0.4))
-            .width(Length::Fill),
+        container(
+            tooltip(
+                text(view.i18n.t("options.transparentPlayerBackground")).size(14).color(fade(tokens.t2, ink.a * 0.4)),
+                text(view.i18n.t("options.transparentPlayerBackgroundUnavailable")).size(12),
+                tooltip::Position::Top,
+            )
+            .style(tokens.tip())
+        )
+        .width(Length::Fill),
         off_switch(tokens),
     ]
     .align_y(Alignment::Center)
     .height(Length::Fixed(44.0));
     let track = tokens.fill;
+    let custom = view.theme_source == ThemeSource::Custom && view.has_custom_theme;
     let choices = container(
         row![
-            source_seg(tokens, ink, view.i18n.t("ui.default"), true, None),
-            source_seg(tokens, ink, view.i18n.t("ui.aiTheme"), false, None),
-            source_seg(
+            source_seg_press(
+                tokens,
+                ink,
+                view.i18n.t("ui.default"),
+                view.theme_source == ThemeSource::Default,
+                Some(Message::ThemeSource(ThemeSource::Default))
+            ),
+            source_seg(tokens, ink, view.i18n.t("ui.aiTheme"), false, Some(view.i18n.t("ui.aiThemeUnavailable")),),
+            source_seg_press(
                 tokens,
                 ink,
                 view.i18n.t("options.customTheme"),
-                false,
-                Some(view.i18n.t("options.customThemeUnavailable"))
+                custom,
+                view.has_custom_theme.then_some(Message::ThemeSource(ThemeSource::Custom))
             ),
         ]
         .spacing(0)
@@ -947,22 +1363,32 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
         border: Border { radius: 8.0.into(), ..Border::default() },
         ..container::Style::default()
     });
+    let palette_tip = if custom {
+        view.i18n.t("options.customThemeQuickEditTitle").to_owned()
+    } else {
+        view.i18n.t("options.themeQuickEditUnavailable").to_owned()
+    };
     let sources = row![
         choices,
         icon_btn(
             tokens,
             Icon::Palette,
             (15.0, 28.0),
-            fade(tokens.t2, ink.a * 0.4),
+            if custom { fade(tokens.t2, ink.a) } else { fade(tokens.t2, ink.a * 0.4) },
             Some(tokens.fill),
-            view.i18n.t("options.themeQuickEditUnavailable").to_owned(),
-            None
+            palette_tip,
+            custom.then_some(Message::QuickEditOpen)
         ),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
-    let theme_name =
-        if view.daylight { view.i18n.t("theme.daylightDefault") } else { view.i18n.t("theme.midnightDefault") };
+    let theme_name = if view.theme_source == ThemeSource::Custom {
+        view.theme.name.to_string()
+    } else if view.daylight {
+        view.i18n.t("theme.daylightDefault").to_owned()
+    } else {
+        view.i18n.t("theme.midnightDefault").to_owned()
+    };
     let name_row = row![
         text(theme_name).size(13).color(fade(tokens.t2, ink.a)).width(Length::Fill),
         day_night(tokens, ink, view.daylight),
@@ -970,11 +1396,70 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
     ]
     .spacing(6)
     .align_y(Alignment::Center);
-    let mut column = column![volume, tiles, hairline(tokens), style_row].spacing(8);
+    let mut column = column![volume, tiles, hairline(tokens), style_row];
+    if let Some(quick) = quick {
+        column = column.push(quick);
+    }
     if let Some(random) = random {
         column = column.push(random);
     }
     column.push(background).push(transparent).push(hairline(tokens)).push(sources).push(name_row).into()
+}
+
+/// `renderQuickControls`: the style's own chips and toggles under its row.
+fn quick_row<'a>(view: View<'a>, tokens: Faded, ink: Color) -> Option<Element<'a, Message>> {
+    if view.quick.is_empty() {
+        return None;
+    }
+    let mut row = iced::widget::Row::new().spacing(6);
+    for control in view.quick {
+        let label = view.i18n.t(control.label_key);
+        let tip = format!("{}: {}", view.i18n.t(control.tip_key), label);
+        row = row.push(match control.kind {
+            QuickKind::Toggle { on } => {
+                quick_toggle(tokens, ink.a, control.glyph, on, &tip, Message::Quick(control.key))
+            }
+            QuickKind::Cycle => chip(tokens, ink.a, &tip, label, Some(Message::Quick(control.key))),
+        });
+    }
+    Some(container(row).width(Length::Fill).align_x(Alignment::End).padding(pad(4.0, 0.0, 0.0, 0.0)).into())
+}
+
+fn quick_toggle<'a>(
+    tokens: Faded,
+    alpha: f32,
+    glyph: &str,
+    on: bool,
+    tip: &str,
+    message: Message,
+) -> Element<'a, Message> {
+    let lucide = match glyph {
+        "rotate" => Icon::RotateCw,
+        "spline" => Icon::Spline,
+        "separator" => Icon::SeparatorVertical,
+        "frame" => Icon::Frame,
+        "eye-off" => Icon::EyeOff,
+        "align-left" => Icon::TextAlignStart,
+        "move" => Icon::GripVertical,
+        "audio" => Icon::AudioWaveform,
+        _ => Icon::Palette,
+    };
+    let ink = if on { tokens.t1 } else { tokens.t2 };
+    let button = button(container(icon(lucide, 14.0, fade(ink, alpha))).center(Length::Fixed(28.0)))
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(28.0))
+        .padding(0)
+        .on_press(message)
+        .style(move |_theme: &IcedTheme, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            let fill = if on { tokens.raise } else { tokens.fill };
+            button::Style {
+                background: Some(Background::Color(fade(if hot { tokens.fill2 } else { fill }, alpha))),
+                border: Border { radius: 8.0.into(), ..Border::default() },
+                ..button::Style::default()
+            }
+        });
+    tooltip(button, text(tip.to_owned()).size(12), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
 fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Faded, ink: Color) -> Element<'a, Message> {
@@ -985,18 +1470,25 @@ fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Faded, ink: Col
         text(view.i18n.t("queue.title")).size(13).font(settings_kit::SEMIBOLD).color(Color { a: ink.a, ..tokens.t2 }),
         text(view.queue.len().to_string()).size(13).color(Color { a: ink.a, ..tokens.t3 }),
         space().width(Length::Fill),
+        text_btn(
+            view.i18n.t("localMusic.saveQueueAsPlaylist"),
+            if view.can_save_queue { Color { a: ink.a, ..tokens.t2 } } else { Color { a: 0.4 * ink.a, ..tokens.t2 } },
+            view.can_save_queue.then_some(Message::SaveQueue)
+        ),
         icon_btn(
             tokens,
             Icon::Shuffle,
             (15.0, 28.0),
-            Color { a: 0.4 * ink.a, ..tokens.t2 },
+            if view.can_shuffle { ink } else { Color { a: 0.4 * ink.a, ..tokens.t2 } },
             None,
             if view.queue.len() < 2 {
                 view.i18n.t("wallTools.shuffleUnavailable").to_owned()
+            } else if !view.can_shuffle {
+                view.i18n.t("wallTools.queueUnavailableInFm").to_owned()
             } else {
                 view.i18n.t("queue.shuffle").to_owned()
             },
-            None,
+            view.can_shuffle.then_some(Message::Shuffle),
         ),
     ]
     .spacing(6)
@@ -1023,7 +1515,7 @@ fn source_tab<'a>(view: View<'a>, tokens: Faded) -> Element<'a, Message> {
     let source = if !view.has_lyrics {
         i18n.t("localMusic.statusNone")
     } else if online {
-        i18n.t("lyricProvider.netease")
+        view.lyric_provider
     } else {
         i18n.t("localMusic.statusLocal")
     };
@@ -1042,21 +1534,27 @@ fn source_tab<'a>(view: View<'a>, tokens: Faded) -> Element<'a, Message> {
     let offset = row![reset, stepper(tokens, offset_ms, i18n.t("localMusic.lyricTimelineOffset"))]
         .spacing(6)
         .align_y(Alignment::Center);
-    // Matching and the lyric file window have no backend yet; they stay as disabled buttons.
     let buttons = row![
-        panel_button(tokens, Icon::Search, i18n.t("localMusic.matchOnline"), true),
-        panel_button(tokens, Icon::ArrowUpDown, i18n.t("lyricFile.button"), false),
+        panel_button(
+            tokens,
+            Icon::Search,
+            i18n.t("localMusic.matchOnline"),
+            true,
+            view.can_match.then_some(Message::MatchOnline)
+        ),
+        panel_button(tokens, Icon::ArrowUpDown, i18n.t("lyricFile.button"), false, Some(Message::LyricFileOpen)),
     ]
     .spacing(8);
     let gains = [
-        "localMusic.replayGainOff",
-        "localMusic.replayGainAuto",
-        "localMusic.replayGainTrack",
-        "localMusic.replayGainAlbum",
+        ("localMusic.replayGainOff", ReplayGainMode::Off),
+        ("localMusic.replayGainAuto", ReplayGainMode::Auto),
+        ("localMusic.replayGainTrack", ReplayGainMode::Track),
+        ("localMusic.replayGainAlbum", ReplayGainMode::Album),
     ];
     let mut segments = row![].spacing(0);
-    for (index, key) in gains.into_iter().enumerate() {
-        segments = segments.push(segment(tokens, i18n.t(key), index == 0, index != 0));
+    for (key, mode) in gains {
+        segments =
+            segments.push(gain_segment(tokens, i18n.t(key), view.replay_gain == mode, Message::ReplayGain(mode)));
     }
     let segments =
         container(segments.height(Length::Fill)).width(Length::Fill).height(Length::Fixed(32.0)).padding(2).style(
@@ -1066,13 +1564,60 @@ fn source_tab<'a>(view: View<'a>, tokens: Faded) -> Element<'a, Message> {
                 ..container::Style::default()
             },
         );
-    column![
+    let hint = match (view.replay_gain, view.gain) {
+        (ReplayGainMode::Off, _) => None,
+        (_, Some(gain)) => {
+            let mut words = Vec::new();
+            if let Some(db) = gain.track_db {
+                words.push(format!("{} {db:+.1} dB", i18n.t("localMusic.replayGainTrack")));
+            }
+            if let Some(db) = gain.album_db {
+                words.push(format!("{} {db:+.1} dB", i18n.t("localMusic.replayGainAlbum")));
+            }
+            (!words.is_empty()).then(|| words.join(" · "))
+        }
+        (_, None) => Some(i18n.t("localMusic.replayGainUnavailable").to_owned()),
+    };
+    let mut column = column![
         panel_row(tokens, i18n.t("localMusic.lyrics"), source.into()),
         panel_row(tokens, i18n.t("localMusic.lyricTimelineOffset"), offset.into()),
         container(buttons).padding(pad(8.0, 4.0, 8.0, 4.0)),
         container(hairline(tokens)).padding(pad(8.0, 4.0, 8.0, 4.0)),
         panel_row(tokens, i18n.t("localMusic.replayGainTitle"), segments.into()),
-    ]
+    ];
+    if let Some(hint) = hint {
+        column = column.push(
+            container(text(hint).size(12).color(tokens.t3))
+                .width(Length::Fill)
+                .align_x(Alignment::End)
+                .padding(pad(0.0, 4.0, 4.0, 4.0)),
+        );
+    }
+    column.into()
+}
+
+/// `Segments`' option on the source tab: chosen sits on `--st-raise`, the others take the press.
+fn gain_segment<'a>(tokens: Faded, label: &'a str, chosen: bool, message: Message) -> Element<'a, Message> {
+    let ink = if chosen { tokens.t1 } else { tokens.t2 };
+    button(
+        container(text(label).size(13).color(ink).wrapping(iced::widget::text::Wrapping::None))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding(0)
+    .on_press(message)
+    .style(move |_theme: &IcedTheme, status| {
+        let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: chosen
+                .then_some(Background::Color(tokens.raise))
+                .or_else(|| hot.then_some(Background::Color(tokens.fill2))),
+            border: Border { radius: 6.0.into(), ..Border::default() },
+            ..button::Style::default()
+        }
+    })
     .into()
 }
 
@@ -1089,7 +1634,7 @@ fn panel_row<'a>(tokens: Faded, label: &'a str, control: Element<'a, Message>) -
         .into()
 }
 
-/// `Stepper`: a 32px `--st-fill` pill with − and + of 250ms, the value in 13px mono and `ms` in `--st-t3`.
+/// `Stepper`: a 32px `--st-fill` pill with minus and plus of 250ms, the value in 13px mono and `ms` in `--st-t3`.
 fn stepper<'a>(tokens: Faded, value_ms: i64, label: &'a str) -> Element<'a, Message> {
     let step = move |lucide: Icon, to: i64| -> Element<'a, Message> {
         button(container(icon(lucide, 14.0, tokens.t2)).center(Length::Fixed(28.0)))
@@ -1119,34 +1664,32 @@ fn stepper<'a>(tokens: Faded, value_ms: i64, label: &'a str) -> Element<'a, Mess
 }
 
 /// `PanelButton`: 32px, `rounded-lg`, `--st-fill`, a 14px icon and 13px text; disabled it is at 40%.
-fn panel_button<'a>(tokens: Faded, lucide: Icon, label: &'a str, grow: bool) -> Element<'a, Message> {
-    let ink = fade(tokens.t1, 0.4);
+fn panel_button<'a>(
+    tokens: Faded,
+    lucide: Icon,
+    label: &'a str,
+    grow: bool,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    let enabled = on_press.is_some();
+    let ink = if enabled { tokens.t1 } else { fade(tokens.t1, 0.4) };
     let label = text(label).size(13).color(ink).wrapping(iced::widget::text::Wrapping::None);
     let body = row![icon(lucide, 14.0, ink), label].spacing(6).align_y(Alignment::Center);
     let button = button(container(body).center_y(Length::Fixed(32.0)).center_x(Length::Fill))
         .height(Length::Fixed(32.0))
         .padding(pad(0.0, 12.0, 0.0, 12.0))
-        .style(move |_theme: &IcedTheme, _status| button::Style {
-            background: Some(fade(tokens.fill, 0.4).into()),
-            border: Border { radius: 8.0.into(), ..Border::default() },
-            ..button::Style::default()
+        .on_press_maybe(on_press)
+        .style(move |_theme: &IcedTheme, status| {
+            let hot = enabled && matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some(
+                    fade(if hot { tokens.fill2 } else { tokens.fill }, if enabled { 1.0 } else { 0.4 }).into(),
+                ),
+                border: Border { radius: 8.0.into(), ..Border::default() },
+                ..button::Style::default()
+            }
         });
     if grow { button.width(Length::Fill).into() } else { button.into() }
-}
-
-/// One option of `Segments` (`m`): 28px, `rounded-md`, 13px; the chosen one sits on `--st-raise`.
-fn segment<'a>(tokens: Faded, label: &'a str, chosen: bool, disabled: bool) -> Element<'a, Message> {
-    let ink = if chosen { tokens.t1 } else { tokens.t2 };
-    let ink = if disabled { fade(ink, 0.4) } else { ink };
-    container(text(label).size(13).color(ink).wrapping(iced::widget::text::Wrapping::None))
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(move |_theme: &IcedTheme| container::Style {
-            background: chosen.then_some(Background::Color(tokens.raise)),
-            border: Border { radius: 6.0.into(), ..Border::default() },
-            ..container::Style::default()
-        })
-        .into()
 }
 
 fn quality_tab<'a>(
@@ -1187,7 +1730,7 @@ fn quality_tab<'a>(
 }
 
 /// `AccountTab`'s signed-in card: a 40px face with the platform's mark on its corner, the name and the member crown,
-/// `provider · ID: …`, and the sign-out on the right.
+/// `provider · ID: ...`, and the sign-out on the right.
 fn account_card<'a>(
     view: View<'a>,
     platform: Platform,
@@ -1403,6 +1946,28 @@ fn cover_box<'a>(
         .into()
 }
 
+/// One row of the playlist picker: the name, then its size or where it lives.
+fn playlist_row<'a>(tokens: Faded, choice: &'a PlaylistChoice, index: usize) -> Element<'a, Message> {
+    let body = column![
+        text(choice.name.clone()).size(13).color(tokens.t1),
+        text(choice.detail.clone()).size(11).color(tokens.t3),
+    ]
+    .spacing(1);
+    button(body)
+        .width(Length::Fill)
+        .padding(pad(7.0, 8.0, 7.0, 8.0))
+        .on_press(Message::PlaylistPick(index))
+        .style(move |_theme: &IcedTheme, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: hot.then_some(Background::Color(tokens.fill)),
+                border: Border { radius: 8.0.into(), ..Border::default() },
+                ..button::Style::default()
+            }
+        })
+        .into()
+}
+
 fn tile<'a>(tokens: Faded, lucide: Icon, label: &'a str, lit: bool, on_press: Option<Message>) -> Element<'a, Message> {
     let enabled = on_press.is_some();
     let (icon_color, label_color) = if lit { (tokens.accent, tokens.t1) } else { (tokens.t3, tokens.t2) };
@@ -1450,7 +2015,7 @@ fn text_btn<'a>(label: &'a str, color: Color, on_press: Option<Message>) -> Elem
 }
 
 /// `ModeStepperRow`: arrows at the two ends, the mode in the middle, an optional chip before the right arrow.
-/// 「更多设置」lives in the picture picker (`QuickEffectPicker`), which is not drawn here.
+/// `More settings` lives in the picture picker (`QuickEffectPicker`), which is not drawn here.
 fn hairline<'a>(tokens: Faded) -> Element<'a, Message> {
     container(space())
         .width(Length::Fill)
@@ -1517,6 +2082,36 @@ fn chip<'a>(tokens: Faded, alpha: f32, tip: &str, label: &'a str, on_press: Opti
         }
     });
     tooltip(button, text(tip.to_owned()).size(12), tooltip::Position::Top).style(tokens.tip()).into()
+}
+
+fn source_seg_press<'a>(
+    tokens: Faded,
+    ink: Color,
+    label: &'a str,
+    on: bool,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    let label = text(label).size(13).color(if on { ink } else { Color { a: ink.a, ..tokens.t2 } });
+    button(container(label).center_x(Length::Fill).center_y(Length::Fill))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .padding(0)
+        .on_press_maybe(on_press)
+        .style(move |_theme: &IcedTheme, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                background: Some(Background::Color(if on {
+                    tokens.raise
+                } else if hot {
+                    tokens.fill2
+                } else {
+                    Color::TRANSPARENT
+                })),
+                border: Border { radius: 6.0.into(), ..Border::default() },
+                ..button::Style::default()
+            }
+        })
+        .into()
 }
 
 fn source_seg<'a>(tokens: Faded, ink: Color, label: &'a str, on: bool, tip: Option<&'a str>) -> Element<'a, Message> {

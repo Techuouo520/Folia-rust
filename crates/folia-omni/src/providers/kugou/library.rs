@@ -352,6 +352,7 @@ pub async fn user_collections(client: &Client, kind: CollectionKind) -> Result<V
     let mut all = Vec::new();
     for row in rows.iter().filter(|row| is_album_row(row) == (kind == CollectionKind::Album)) {
         let Some(mut found) = collection(row, kind) else { continue };
+        found.owned = !is_album_row(row) && is_owned(row);
         if kind == CollectionKind::Playlist && found.cover_url.is_none() && is_owned(row) {
             found.cover_url = playlist_page(client, &found.id, 1, 1)
                 .await
@@ -618,6 +619,7 @@ pub async fn radio_feed(client: &Client, limit: u32) -> Result<RadioFeed, OmniEr
                 track_count: u32::try_from(songs.len()).ok(),
                 creator: None,
                 description: None,
+                owned: false,
             }),
             Ok(_) => {}
             Err(err) => {

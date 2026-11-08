@@ -118,6 +118,8 @@ pub struct Rail {
     measured: Vec<(u64, Rc<Measured>)>,
     events: (usize, usize, Vec<f64>),
     scroll: Scroll,
+    /// The line boxes drawn last frame, in stage coordinates, with the line each one shows.
+    hits: Vec<(usize, Rectangle)>,
 }
 
 struct Ctx<'a> {
@@ -541,6 +543,7 @@ pub fn settling(rail: &Rail, now: Instant) -> bool {
 pub fn draw(frame: &mut Frame, place: Place, scene: &Scene<'_>, layout: &Layout, rail: &mut Rail, alpha: f32, dy: f32) {
     let lines = &scene.lyrics.lines;
     if lines.is_empty() || alpha <= 0.0 {
+        rail.hits.clear();
         return;
     }
     let ctx = Ctx::new(scene, layout);
@@ -588,8 +591,16 @@ pub fn draw(frame: &mut Frame, place: Place, scene: &Scene<'_>, layout: &Layout,
         }
     };
     let paint = Paint { place, scene, layout, ctx: &ctx, rail: box_, fade: &fade, alpha, manual: manual.is_some() };
+    rail.hits.clear();
     for visual in &visuals {
         let measured = rail.measured(&ctx, visual.index, visual.status == Status::Active);
+        let hit = clip_to(
+            Rectangle { x: box_.x, y: box_.y + visual.y, width: box_.width, height: measured.height * visual.scale },
+            box_,
+        );
+        if hit.height > 0.0 {
+            rail.hits.push((visual.index, hit));
+        }
         paint.line(frame, visual, &measured);
     }
 }
@@ -946,8 +957,44 @@ pub fn over(layout: &Layout, at: Point) -> bool {
     layout.rail.contains(at)
 }
 
-/// A line's scale with its font size on a quarter-pixel grid, so a spring reuses glyph sizes instead of minting new
-/// ones every frame.
+/// The line drawn under `at` in the last frame, when a press there should play from it.
+pub fn hit(rail: &Rail, at: Point) -> Option<usize> {
+    rail.hits.iter().rev().find(|(_, rect)| rect.contains(at)).map(|(index, _)| *index)
+}
+
+/// The line boxes the rail lays out at `scene.time`, for tests and for callers that need the geometry without a draw.
+pub fn boxes(scene: &Scene<'_>, layout: &Layout) -> Vec<(usize, Rectangle)> {
+    let ctx = Ctx::new(scene, layout);
+    let mut rail = Rail::default();
+    let visuals = rail.visuals(&ctx, scene.time, 3);
+    visuals
+        .iter()
+        .filter_map(|visual| {
+            let measured = rail.measured(&ctx, visual.index, visual.status == Status::Active);
+            let hit = clip_to(
+                Rectangle {
+                    x: layout.rail.x,
+                    y: layout.rail.y + visual.y,
+                    width: layout.rail.width,
+                    height: measured.height * visual.scale,
+                },
+                layout.rail,
+            );
+            (hit.height > 0.0).then_some((visual.index, hit))
+        })
+        .collect()
+}
+
+/// Drops a held manual anchor, so the rail returns to the playing position (`setManualScrollAnchorIndex(null)`).
+pub fn end_manual(rail: &mut Rail) {
+    rail.scroll.anchor = None;
+    rail.scroll.from = None;
+    rail.scroll.released = None;
+    rail.scroll.wheel = 0.0;
+    rail.scroll.direction = 0.0;
+}
+
+/// Scale with the font size snapped to a quarter pixel, so a spring reuses glyph sizes.
 fn snap_scale(px: f32, scale: f32) -> f32 {
     if px <= 0.0 {
         return scale;

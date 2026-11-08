@@ -254,6 +254,8 @@ pub struct Row<'a, M> {
     pub hint: Option<String>,
     /// Belongs under the row above it: indented 40px instead of 16px.
     pub sub: bool,
+    /// A block under the label and control, as the kit's `below` pictures and tile grids.
+    pub below: Option<Element<'a, M>>,
     pub control: Element<'a, M>,
 }
 
@@ -295,10 +297,22 @@ fn row_view<'a, M: 'a>(tokens: Tokens, entry: Row<'a, M>) -> Element<'a, M> {
     let left = if entry.sub { 40.0 } else { 16.0 };
     let content = row![container(label).width(Length::Fill), entry.control].spacing(24).align_y(Alignment::Center);
     // The zero-width strut keeps the row at its 56px minimum, `min-h-14`.
-    row![space().height(36), content]
-        .align_y(Alignment::Center)
-        .padding(Padding { top: 10.0, right: 16.0, bottom: 10.0, left })
-        .into()
+    let mut row = column![];
+    row = row.push(iced::widget::row![space().height(36), content].align_y(Alignment::Center).padding(Padding {
+        top: 10.0,
+        right: 16.0,
+        bottom: 10.0,
+        left,
+    }));
+    if let Some(below) = entry.below {
+        row = row.push(container(below).width(Length::Fill).padding(Padding {
+            top: 0.0,
+            right: 16.0,
+            bottom: 10.0,
+            left,
+        }));
+    }
+    row.into()
 }
 
 /// The on/off switch; `position` runs from 0 (off) to 1 (on) and is between the two while the thumb glides.

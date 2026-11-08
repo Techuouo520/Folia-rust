@@ -237,6 +237,74 @@ pub async fn lyrics(client: &Client, id: &str) -> Result<Option<ProviderLyrics>,
     Ok((!parsed.lines.is_empty()).then_some(ProviderLyrics { lyrics: parsed, source: Some(lrc) }))
 }
 
+/// `mutations.likeSong`: the track goes in or out of the account's library.
+pub async fn like_song(client: &Client, song: &str, liked: bool) -> Result<(), OmniError> {
+    let uri = format!("spotify:track:{song}");
+    let name = if liked { "addToLibrary" } else { "removeFromLibrary" };
+    client.change(name, json!({ "uris": [uri] })).await
+}
+
+/// `getLikedSongIds`: every page of the liked songs.
+pub async fn liked_song_ids(client: &Client) -> Result<Vec<String>, OmniError> {
+    let mut ids = Vec::new();
+    for page in 0..MAX_PAGES {
+        let data =
+            client.query("fetchLibraryTracks", json!({ "offset": page * MAX_ROWS, "limit": MAX_ROWS }), None).await?;
+        let tracks = data.pointer("/me/library/tracks").unwrap_or(&Value::Null);
+        let items = tracks.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+        ids.extend(
+            items
+                .iter()
+                .filter_map(|row| row.pointer("/track/data"))
+                .filter_map(song_of)
+                .filter_map(|song| song.online.map(|online| online.id)),
+        );
+        let total = tracks.get("totalCount").and_then(Value::as_u64).unwrap_or(0);
+        if items.is_empty() || (page + 1) * MAX_ROWS >= total {
+            break;
+        }
+    }
+    Ok(ids)
+}
+
+/// `mutations.updatePlaylistTracks` with `add`: `addToPlaylist` takes the playlist's uri and the track uris.
+pub async fn add_to_playlist(client: &Client, playlist: &str, songs: &[String]) -> Result<(), OmniError> {
+    let uris: Vec<String> = songs.iter().map(|song| format!("spotify:track:{song}")).collect();
+    client
+        .change(
+            "addToPlaylist",
+            json!({
+                "playlistUri": format!("spotify:playlist:{playlist}"),
+                "uris": uris,
+                "newPosition": { "move": false, "fromUid": null },
+            }),
+        )
+        .await
+}
+
+/// `mutations.createPlaylist`: `POST /v1/me/playlists` with the account's token.
+pub async fn create_playlist(client: &Client, name: &str) -> Result<Collection, OmniError> {
+    let body = json!({ "name": name, "public": false });
+    let answer = client.call("https://api.spotify.com/v1/me/playlists", Some(body), None, &[]).await?;
+    let answer = answer.unwrap_or(Value::Null);
+    let id = answer
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| OmniError::Response("Spotify did not name the new playlist".to_owned()))?;
+    Ok(Collection {
+        provider: super::ID.to_owned(),
+        id: id.to_owned(),
+        kind: CollectionKind::Playlist,
+        name: answer.get("name").and_then(Value::as_str).unwrap_or(name).to_owned(),
+        cover_url: None,
+        track_count: Some(0),
+        creator: None,
+        description: None,
+        owned: true,
+    })
+}
+
 /// `getUserPlaylists`: the liked songs first, then `libraryV3`'s playlists page by page.
 pub async fn user_playlists(client: &Client) -> Result<Vec<Collection>, OmniError> {
     let liked = client.query("fetchLibraryTracks", json!({ "offset": 0, "limit": 1 }), None).await?;
@@ -251,6 +319,7 @@ pub async fn user_playlists(client: &Client) -> Result<Vec<Collection>, OmniErro
         track_count: tracks.get("totalCount").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()),
         creator: None,
         description: None,
+        owned: false,
     }];
     all.extend(library_items(client, "Playlists").await?.iter().filter_map(playlist_of));
     Ok(all)

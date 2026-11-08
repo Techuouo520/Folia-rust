@@ -6,16 +6,16 @@ use std::time::Instant;
 use folia_core::Track;
 use folia_i18n::I18n;
 use folia_visualizer::Ease;
-use iced::widget::operation::{self, AbsoluteOffset};
 use iced::widget::scrollable::Viewport;
 use iced::widget::{Id, button, column, container, mouse_area, pin, row, scrollable, space, stack, text, tooltip};
-use iced::{Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Shadow, Task, Vector};
+use iced::{Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Shadow, Task, Vector, mouse};
 use lucide_static_svg::Icon;
 
 use crate::drag_capture::Capture;
 use crate::icons::icon;
 use crate::motion::Tween;
 use crate::settings_kit::{self, Tokens};
+use crate::smooth_scroll::{self, Scroll};
 
 /// `QUEUE_ISLAND_ROW_HEIGHT`.
 pub const ROW: f32 = 40.0;
@@ -34,9 +34,6 @@ const MAX_SPEED: f32 = 14.0;
 /// `.is-dragging { transition: transform 140ms ease }`.
 const SHIFT_MS: f64 = 140.0;
 const CSS_EASE: Ease = Ease::new(0.25, 0.1, 0.25, 1.0);
-/// `behavior: 'smooth'`: the browser picks the length; this one is Chromium's usual 300ms ease-in-out.
-const SMOOTH_MS: f64 = 300.0;
-const SMOOTH_EASE: Ease = Ease::new(0.42, 0.0, 0.58, 1.0);
 
 /// `queueIslandHeight` without the header and the borders: up to eight rows, at least 74.
 pub fn list_height(rows: usize) -> f32 {
@@ -46,6 +43,8 @@ pub fn list_height(rows: usize) -> f32 {
 #[derive(Debug, Clone)]
 pub enum Message {
     Scrolled(Viewport),
+    /// A wheel notch or a touchpad move over the list.
+    Wheel(mouse::ScrollDelta),
     Press(Point),
     Move(Point),
     Release,
@@ -95,11 +94,10 @@ struct Drag {
 
 pub struct QueueList {
     id: Id,
-    offset: f32,
+    scroll: Scroll,
     /// Waiting for the list to be on screen to centre the playing row (`centeredRef`).
     center_pending: bool,
     following: Option<i64>,
-    scroll: Option<Tween>,
     drag: Option<Drag>,
     shifts: HashMap<usize, Tween>,
     hover: Option<usize>,
@@ -111,10 +109,9 @@ impl Default for QueueList {
     fn default() -> Self {
         Self {
             id: Id::unique(),
-            offset: 0.0,
+            scroll: Scroll::default(),
             center_pending: false,
             following: None,
-            scroll: None,
             drag: None,
             shifts: HashMap::new(),
             hover: None,
@@ -127,15 +124,14 @@ impl Default for QueueList {
 impl QueueList {
     /// The list came on screen: centre the playing row once it is laid out (`scrollToRow align: 'center'`).
     pub fn opened(&mut self) {
-        self.offset = 0.0;
-        self.scroll = None;
+        self.scroll.reset();
         self.center_pending = true;
         self.finish(None);
     }
 
     pub fn animating(&self, now: Instant) -> bool {
         self.center_pending
-            || self.scroll.is_some_and(|tween| tween.running(now))
+            || self.scroll.animating(now)
             || self.shifts.values().any(|tween| tween.running(now))
             || self.drag.as_ref().is_some_and(|drag| drag.active)
     }
@@ -143,27 +139,29 @@ impl QueueList {
     /// One frame: the pending centring, the smooth scroll, the drag's edge scrolling.
     pub fn frame(&mut self, queue: &[Track], current: Option<usize>, list_h: f32, now: Instant) -> Task<Message> {
         let max = max_offset(queue.len(), list_h);
+        self.scroll.set_max(max);
         if self.center_pending {
             self.center_pending = false;
             self.following = current.and_then(|index| queue.get(index)).map(|track| track.id);
             let Some(index) = current else { return Task::none() };
-            return self.jump_to((index as f32 * ROW + ROW / 2.0 - list_h / 2.0).clamp(0.0, max));
+            self.scroll.jump((index as f32 * ROW + ROW / 2.0 - list_h / 2.0).clamp(0.0, max));
+            return self.scroll.apply(self.id.clone());
         }
-        if let Some(tween) = self.scroll {
-            let value = tween.value(now).clamp(0.0, max);
-            if !tween.running(now) {
-                self.scroll = None;
-            }
-            return self.jump_to(value);
+        if self.scroll.animating(now) {
+            return match self.scroll.frame(now) {
+                Some(_) => self.scroll.apply(self.id.clone()),
+                None => Task::none(),
+            };
         }
         let Some(drag) = self.drag.as_mut().filter(|drag| drag.active) else { return Task::none() };
         let (velocity, suppressed) = auto_scroll(drag.pointer, list_h, drag.suppressed);
         drag.suppressed = suppressed;
-        let next = (self.offset + velocity).clamp(0.0, max);
-        if (next - self.offset).abs() < 0.01 {
+        let next = (self.scroll.offset() + velocity).clamp(0.0, max);
+        if (next - self.scroll.offset()).abs() < 0.01 {
             return Task::none();
         }
-        let task = self.jump_to(next);
+        self.scroll.jump(next);
+        let task = self.scroll.apply(self.id.clone());
         self.retarget(queue.len(), now);
         task
     }
@@ -176,8 +174,10 @@ impl QueueList {
         }
         self.following = id;
         let Some(index) = current.filter(|_| self.drag.is_none() && !self.center_pending) else { return };
+        let max = max_offset(queue.len(), list_h);
+        self.scroll.set_max(max);
         let (top, bottom) = (index as f32 * ROW, index as f32 * ROW + ROW);
-        let (view_top, view_bottom) = (self.offset, self.offset + list_h);
+        let (view_top, view_bottom) = (self.scroll.offset(), self.scroll.offset() + list_h);
         let goal = if top >= view_top && bottom <= view_bottom {
             return;
         } else if bottom < view_top - list_h || top > view_bottom + list_h {
@@ -187,33 +187,35 @@ impl QueueList {
         } else {
             bottom - list_h
         };
-        let goal = goal.clamp(0.0, max_offset(queue.len(), list_h));
-        let mut tween = Tween::new(self.offset, SMOOTH_MS, SMOOTH_EASE, now);
-        tween.set(goal, now);
-        self.scroll = Some(tween);
+        self.scroll.scroll_to(goal.clamp(0.0, max), now);
     }
 
     pub fn update(&mut self, message: Message, queue: &[Track], list_h: f32) -> (Task<Message>, Option<Change>) {
         let now = Instant::now();
+        self.scroll.set_max(max_offset(queue.len(), list_h));
         match message {
             Message::Scrolled(viewport) => {
-                self.offset = viewport.absolute_offset().y;
+                self.scroll.scrolled(&viewport, now);
                 if self.drag.as_ref().is_some_and(|drag| drag.active) {
                     self.retarget(queue.len(), now);
                 }
                 (Task::none(), None)
             }
+            Message::Wheel(delta) => {
+                self.scroll.wheel(delta, now);
+                (self.scroll.apply(self.id.clone()), None)
+            }
             Message::Press(at) => {
-                let index = ((at.y + self.offset) / ROW).floor().max(0.0) as usize;
+                let index = ((at.y + self.scroll.offset()) / ROW).floor().max(0.0) as usize;
                 if let Some(track) = queue.get(index) {
-                    self.scroll = None;
+                    self.scroll.jump(self.scroll.offset());
                     self.drag = Some(Drag {
                         from: index,
                         to: index,
                         track: track.id,
                         start: at,
                         pointer: at.y,
-                        grab: at.y + self.offset - index as f32 * ROW,
+                        grab: at.y + self.scroll.offset() - index as f32 * ROW,
                         suppressed: edge_at(at.y, list_h),
                         active: false,
                     });
@@ -272,15 +274,10 @@ impl QueueList {
         }
     }
 
-    fn jump_to(&mut self, offset: f32) -> Task<Message> {
-        self.offset = offset;
-        operation::scroll_to(self.id.clone(), AbsoluteOffset { x: None, y: Some(offset) })
-    }
-
     /// `resolveDropIndex` for the pointer, and the rows between the old and new place start moving aside.
     fn retarget(&mut self, count: usize, now: Instant) {
         let Some(drag) = self.drag.as_mut() else { return };
-        let center = drag.pointer + self.offset - drag.grab + ROW / 2.0;
+        let center = drag.pointer + self.scroll.offset() - drag.grab + ROW / 2.0;
         let to = ((center / ROW).floor().max(0.0) as usize).min(count.saturating_sub(1));
         if to == drag.to {
             return;
@@ -316,8 +313,9 @@ impl QueueList {
         let count = queue.len();
         let total = count as f32 * ROW;
         let dragging = self.drag.as_ref().filter(|drag| drag.active);
-        let first = ((self.offset / ROW).floor().max(0.0) as usize).saturating_sub(OVERSCAN);
-        let last = (((self.offset + list_h) / ROW).ceil().max(0.0) as usize + OVERSCAN).min(count);
+        let offset = self.scroll.offset();
+        let first = ((offset / ROW).floor().max(0.0) as usize).saturating_sub(OVERSCAN);
+        let last = (((offset + list_h) / ROW).ceil().max(0.0) as usize + OVERSCAN).min(count);
         let mut layers = vec![space().width(Length::Fill).height(Length::Fixed(total)).into()];
         for (index, track) in queue.iter().enumerate().take(last).skip(first) {
             if dragging.is_some_and(|drag| drag.from == index) {
@@ -335,8 +333,9 @@ impl QueueList {
             .on_scroll(Message::Scrolled)
             .width(Length::Fill)
             .height(Length::Fixed(list_h));
+        let list = smooth_scroll::smooth(list, Message::Wheel);
         if !look.reorder {
-            return list.into();
+            return list;
         }
         let mut face = stack![list].width(Length::Fill).height(Length::Fixed(list_h));
         if let Some(drag) = dragging {
@@ -344,7 +343,7 @@ impl QueueList {
             let ghost = container(ghost(look, &queue[drag.from])).padding([0.0, SIDE]);
             face = face.push(pin(ghost).y(y).width(Length::Fill));
         }
-        let handle = Rectangle { x: SIDE, y: 0.0, width: HANDLE_W, height: (total - self.offset).clamp(0.0, list_h) };
+        let handle = Rectangle { x: SIDE, y: 0.0, width: HANDLE_W, height: (total - offset).clamp(0.0, list_h) };
         let held = self.drag.is_some();
         Capture::new(face, handle, Message::Press, Message::Move, Message::Release, Message::Cancel)
             .held(held, dragging.is_some())

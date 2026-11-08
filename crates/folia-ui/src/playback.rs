@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use folia_core::{AudioFrame, AudioQuality, ChorusRange, Lyrics, Queue, Repeat, Track};
+use folia_core::{AudioFrame, AudioQuality, ChorusRange, Lyrics, Queue, Repeat, ReplayGain, Track};
 use folia_lyrics::{ChorusSource, chorus_ranges_of, resolve_chorus};
 use folia_omni::{Collection, Omni};
 use folia_player::{Player, PlayerState, Status};
-use folia_store::{PlaybackSettings, Store};
+use folia_store::{PlaybackSettings, ReplayGainMode, Store};
 use iced::Task;
 
 use crate::background::{blocking, error_chain, save};
@@ -35,6 +35,10 @@ pub struct Playback {
     request: u64,
     /// `cachedNeteaseChorusRanges`: the chorus ranges kept for one song, from lyrics that came marked.
     kept_chorus: Option<(i64, Vec<ChorusRange>)>,
+    /// `replayGainMode` and the gains of the playing song.
+    pub replay_gain: ReplayGainMode,
+    gain: Option<ReplayGain>,
+    applied_db: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +120,9 @@ impl Playback {
             notice_serial: 0,
             request: 0,
             kept_chorus: None,
+            replay_gain: ReplayGainMode::Off,
+            gain: None,
+            applied_db: 0.0,
         }
     }
 
@@ -129,6 +136,50 @@ impl Playback {
 
     pub fn is_playing(&self) -> bool {
         self.status.state == PlayerState::Playing
+    }
+
+    /// Hands the equalizer settings to the audio callback.
+    pub fn set_equalizer(&mut self, parameters: folia_player::Parameters) {
+        if let Some(player) = self.player.as_mut() {
+            player.set_equalizer(parameters);
+        }
+    }
+
+    /// `replayGainMode` and the gains of the song that is playing.
+    pub fn set_replay_gain(&mut self, mode: ReplayGainMode, gain: Option<ReplayGain>) {
+        self.replay_gain = mode;
+        self.gain = gain;
+        self.apply_gain();
+    }
+
+    pub fn applied_gain_db(&self) -> f32 {
+        self.applied_db
+    }
+
+    /// Replaces the shown lyrics, for a match or an imported file.
+    pub fn set_lyrics(&mut self, lyrics: Option<Lyrics>) {
+        self.lyrics = lyrics;
+    }
+
+    /// The gain the mode applies to the playing song's tags.
+    fn gain_factor(&self) -> f32 {
+        let Some(gain) = self.gain else { return 1.0 };
+        let db = match self.replay_gain {
+            ReplayGainMode::Off => return 1.0,
+            ReplayGainMode::Auto | ReplayGainMode::Track => gain.gain_db(false),
+            ReplayGainMode::Album => gain.gain_db(true),
+        };
+        let Some(db) = db else { return 1.0 };
+        10f32.powf(db / 20.0)
+    }
+
+    fn apply_gain(&mut self) {
+        self.applied_db = 20.0 * self.gain_factor().max(1e-6).log10();
+        if self.replay_gain == ReplayGainMode::Off || self.gain.is_none() {
+            self.applied_db = 0.0;
+        }
+        let level = if self.muted { 0.0 } else { self.settings.volume * self.gain_factor() };
+        self.with_player(|player| player.set_volume(level.clamp(0.0, 1.0)));
     }
 
     /// Spectrum for the frame about to be drawn. Stopped playback is the idle breath.
@@ -192,6 +243,14 @@ impl Playback {
         self.queue.append(tracks, |a, b| a.id == b.id)
     }
 
+    /// Shuffles the queue (`shuffleQueue`): the playing song to the head, the rest drawn from `seed`.
+    pub fn shuffle(&mut self, seed: u64) -> bool {
+        if self.fm.is_some() {
+            return false;
+        }
+        self.queue.shuffle(seed)
+    }
+
     /// `clearQueue`: every queued item except the playing one leaves; the player keeps running.
     pub fn clear_queue(&mut self) -> bool {
         let cleared = self.queue.clear_except_current();
@@ -212,6 +271,8 @@ impl Playback {
         self.lyrics = None;
         self.lyric_offset = 0.0;
         self.seeking = None;
+        self.gain = None;
+        self.apply_gain();
         self.refresh();
     }
 
@@ -242,7 +303,7 @@ impl Playback {
             Message::Volume(volume) => {
                 self.settings.volume = volume;
                 self.muted = false;
-                self.with_player(|player| player.set_volume(volume));
+                self.apply_gain();
                 Task::none()
             }
             Message::LyricOffset(seconds) => {
@@ -251,8 +312,7 @@ impl Playback {
             }
             Message::ToggleMute => {
                 self.muted = !self.muted;
-                let level = if self.muted { 0.0 } else { self.settings.volume };
-                self.with_player(|player| player.set_volume(level));
+                self.apply_gain();
                 Task::none()
             }
             Message::VolumeDone => save(store, &self.settings),
@@ -433,6 +493,8 @@ impl Playback {
         self.lyrics = None;
         self.lyric_offset = 0.0;
         self.seeking = None;
+        self.gain = track.replay_gain;
+        self.apply_gain();
         tracing::info!(track = %track.display_name(), "playing");
         let id = track.id;
         let kept = self.kept_chorus.as_ref().filter(|(song, _)| *song == id).map(|(_, ranges)| ranges.clone());

@@ -3,6 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use folia_core::Theme;
+use iced::Rectangle;
+use iced::widget::canvas::Frame;
+
 /// One choice of a [`Item::Select`].
 #[derive(Clone, Copy, Debug)]
 pub struct Choice {
@@ -10,6 +14,17 @@ pub struct Choice {
     pub label_key: &'static str,
     /// The choice stays unselectable until this saved path is non-empty.
     pub requires: Option<&'static str>,
+}
+
+/// An option drawn as a small picture instead of a word, as the original `PictureGrid` choices are.
+#[derive(Clone, Copy, Debug)]
+pub struct PictureChoice {
+    pub value: &'static str,
+    pub label_key: &'static str,
+    /// The choice stays unselectable until this saved path is non-empty.
+    pub requires: Option<&'static str>,
+    /// Paints the 16:10 picture inside `rect`; the style owns its look.
+    pub picture: fn(&mut Frame, Rectangle, &Theme),
 }
 
 /// One row. Keys are the original tuning's field names and never change.
@@ -44,6 +59,14 @@ pub enum Item {
         options: &'static [Choice],
         default: &'static str,
     },
+    /// Like [`Item::Select`], drawn as pictures.
+    Picture {
+        key: &'static str,
+        label_key: &'static str,
+        hint_key: Option<&'static str>,
+        options: &'static [PictureChoice],
+        default: &'static str,
+    },
     /// A button. `path_key` shows that saved path's file name as the hint.
     Button {
         key: &'static str,
@@ -59,6 +82,7 @@ impl Item {
             | Item::Switch { key, .. }
             | Item::Member { key, .. }
             | Item::Select { key, .. }
+            | Item::Picture { key, .. }
             | Item::Button { key, .. } => key,
         }
     }
@@ -84,6 +108,8 @@ pub struct Manifest {
     pub locked: &'static [&'static str],
     /// Hide `item` while the gate flag is on, or its choice is `"true"`.
     pub hidden_when: &'static [(&'static str, &'static str)],
+    /// Hide `item` while the gate flag is off.
+    pub hidden_unless: &'static [(&'static str, &'static str)],
     /// Stored and read, never drawn. Monet's portrait offset is set by dragging.
     pub concealed: &'static [&'static str],
     /// Free strings kept in the table beside the rows, such as an uploaded path.
@@ -104,6 +130,7 @@ impl Manifest {
             groups,
             locked: &[],
             hidden_when: &[],
+            hidden_unless: &[],
             concealed: &[],
             paths: &[],
             reset_key: None,
@@ -120,6 +147,7 @@ impl Manifest {
                 .hidden_when
                 .iter()
                 .any(|(item, gate)| *item == key && (values.flag(self, gate) || values.choice(self, gate) == "true"))
+            || self.hidden_unless.iter().any(|(item, gate)| *item == key && !values.flag(self, gate))
     }
 }
 
@@ -169,7 +197,11 @@ impl Values {
         manifest
             .items()
             .find_map(|item| match item {
-                Item::Select { key: item_key, default, .. } if item_key == key => Some(default),
+                Item::Select { key: item_key, default, .. } | Item::Picture { key: item_key, default, .. }
+                    if item_key == key =>
+                {
+                    Some(default)
+                }
                 _ => None,
             })
             .unwrap_or("")
@@ -202,6 +234,9 @@ impl Values {
     pub fn set_choice(&mut self, manifest: Manifest, key: &str, value: &str) {
         let known = manifest.items().any(|item| match item {
             Item::Select { key: item_key, options, .. } => {
+                item_key == key && options.iter().any(|choice| choice.value == value)
+            }
+            Item::Picture { key: item_key, options, .. } => {
                 item_key == key && options.iter().any(|choice| choice.value == value)
             }
             _ => false,
@@ -242,6 +277,24 @@ impl Values {
         true
     }
 
+    /// Makes exactly `options` the list at `key` (`setMembers`); an empty list is refused.
+    pub fn set_members(&mut self, manifest: Manifest, key: &str, options: &[&str]) -> bool {
+        let allowed: Vec<&str> = manifest
+            .items()
+            .filter_map(|item| match item {
+                Item::Member { key: item_key, option, .. } if item_key == key => Some(option),
+                _ => None,
+            })
+            .collect();
+        let list: Vec<String> =
+            allowed.iter().filter(|option| options.contains(*option)).map(|option| (*option).to_owned()).collect();
+        if list.is_empty() {
+            return false;
+        }
+        self.lists.insert(key.to_owned(), list);
+        true
+    }
+
     pub fn path<'a>(&'a self, key: &str) -> Option<&'a str> {
         self.paths.get(key).map(String::as_str).filter(|text| !text.is_empty())
     }
@@ -270,6 +323,9 @@ impl Values {
                     self.flags.remove(key);
                 }
                 Item::Select { key, .. } => {
+                    self.choices.remove(key);
+                }
+                Item::Picture { key, .. } => {
                     self.choices.remove(key);
                 }
                 Item::Member { key, .. } => {
@@ -341,6 +397,18 @@ impl Values {
                         values.choices.insert(key.to_owned(), text);
                     }
                 }
+                Item::Picture { key, options, .. } => {
+                    let text = match table.get(key) {
+                        Some(toml::Value::String(text)) => Some(text.clone()),
+                        Some(toml::Value::Boolean(flag)) => Some(if *flag { "true" } else { "false" }.to_owned()),
+                        _ => None,
+                    };
+                    if let Some(text) = text
+                        && options.iter().any(|choice| choice.value == text)
+                    {
+                        values.choices.insert(key.to_owned(), text);
+                    }
+                }
                 Item::Button { .. } => {}
                 Item::Member { key, .. } => {
                     if values.lists.contains_key(key) {
@@ -398,6 +466,9 @@ impl Values {
                         toml::Value::String(value.to_owned())
                     };
                     table.insert(key.to_owned(), stored);
+                }
+                Item::Picture { key, .. } => {
+                    table.insert(key.to_owned(), toml::Value::String(self.choice(manifest, key).to_owned()));
                 }
                 Item::Button { .. } => {}
                 Item::Member { key, option, .. } => {

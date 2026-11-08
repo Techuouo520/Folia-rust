@@ -48,6 +48,23 @@ pub fn sync_view<'a, M: 'a>(
     plate(mark_faded(platform, 20.0, opacity), title, daylight, width, opacity, shift)
 }
 
+/// A status line for the panel's actions: a tick or an exclamation, then the words.
+pub fn message_view<'a, M: 'a>(
+    ok: bool,
+    words: String,
+    daylight: bool,
+    width: f32,
+    opacity: f32,
+    shift: f32,
+) -> Element<'a, M> {
+    let colour = if ok { Color::from_rgb8(0x22, 0xc5, 0x5e) } else { Color::from_rgb8(0xef, 0x44, 0x44) };
+    let mark = iced::widget::container(
+        iced::widget::text(if ok { "\u{2713}" } else { "!" }).size(13).color(Color { a: opacity, ..colour }),
+    )
+    .center(Length::Fixed(20.0));
+    plate(mark.into(), words, daylight, width, opacity, shift)
+}
+
 fn plate<'a, M: 'a>(
     mark: Element<'a, M>,
     title: String,

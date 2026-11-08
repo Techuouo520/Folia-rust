@@ -1,15 +1,22 @@
 // Settings persistence: each domain is one versioned TOML file in the config directory.
 
 mod appearance;
+mod audio;
 mod general;
 mod playback;
 mod player;
+mod theme;
 mod visualizer;
 
-pub use appearance::{AppearanceSettings, FrameRate, ThemeMode};
+pub use appearance::{
+    AppearanceSettings, FontSettings, FontStyle, FrameRate, RowSource, SubtitleContentMode, SubtitleLayout,
+    SubtitleSettings, ThemeMode,
+};
+pub use audio::{AudioSettings, ReplayGainMode};
 pub use general::{GeneralSettings, HomeTab};
 pub use playback::PlaybackSettings;
 pub use player::{BOTTOM_BAR_BASE, PlayerSettings, bottom_bar_max_offset, clamp_bottom_bar_offset};
+pub use theme::{DualTheme, StoredTheme, ThemeSettings, ThemeSource};
 pub use visualizer::VisualizerSettings;
 
 use std::fs;

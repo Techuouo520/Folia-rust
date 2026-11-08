@@ -1,16 +1,20 @@
 // Lyric animation styles drawn on an iced canvas. A frame is playback time plus the current audio frame.
 
 mod anim;
+mod background;
 mod preview;
+mod quick;
 mod registry;
 pub mod styles;
 mod tuning;
 
 pub use anim::{Ease, keyframes, spring, tween};
+pub use background::Background;
 pub use preview::{
     Frozen, POSTER_TIME, PREVIEW_LOOP, Pictures, Playing, RESERVED_LOOP, STAGE_HEIGHT, STAGE_WIDTH, preview_lyrics,
     preview_reserved,
 };
+pub use quick::{QuickControl, QuickKind, apply_quick, quick_controls};
 pub use registry::Style;
 pub use tuning::{Group, Item, Manifest, Values};
 
@@ -73,8 +77,8 @@ pub struct SceneState {
     still: styles::still::StillCache,
 }
 
-/// Monet publishes the dragged portrait offset, so the message type must take one.
-impl<Message: From<styles::monet::PortraitOffset>> canvas::Program<Message> for Scene<'_> {
+/// Monet publishes the dragged portrait offset and lyric-line seeks, so the message type must take its event.
+impl<Message: From<styles::monet::Event>> canvas::Program<Message> for Scene<'_> {
     type State = SceneState;
 
     fn draw(
@@ -131,8 +135,7 @@ impl Scene<'_> {
         (size, Place { offset, scale })
     }
 
-    /// Monet's springing text sizes churn glyphs. Its own cache keeps them in a text atlas apart from the UI's, and a
-    /// fresh cache every `MONET_ATLAS_FRAMES` draws drops that atlas before it fragments up to the size limit.
+    /// Monet's own text atlas, away from the UI's, renewed every `MONET_ATLAS_FRAMES` draws before it fragments.
     fn monet_geometry(&self, state: &SceneState, renderer: &Renderer, target: Size) -> Geometry {
         let draws = state.monet_draws.get().wrapping_add(1);
         state.monet_draws.set(draws);
@@ -265,7 +268,7 @@ impl<T> LayoutCache<T> {
 
 /// The playing picture. Canvas styles draw alone. Nebbia puts its shader under a clear lyric canvas; lumiere draws its
 /// lyrics in its own pass, then the front bokeh, then a clear canvas with the corner frame.
-pub fn lyric_view<'a, Message: From<styles::monet::PortraitOffset> + 'a>(scene: Scene<'a>) -> Element<'a, Message> {
+pub fn lyric_view<'a, Message: From<styles::monet::Event> + 'a>(scene: Scene<'a>) -> Element<'a, Message> {
     if !matches!(scene.style, Style::Nebbia | Style::Lumiere) {
         return iced::widget::canvas(scene).width(Length::Fill).height(Length::Fill).into();
     }

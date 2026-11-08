@@ -52,6 +52,15 @@ impl Style {
         Style::ALL[(mixed % Style::ALL.len() as u64) as usize]
     }
 
+    /// `resolveRandomLyricStyle`: one of `pool` for the song; the whole registry when the pool is empty.
+    pub fn random_in(pool: &[Style], song_id: i64) -> Style {
+        if pool.is_empty() {
+            return Style::random_for(song_id);
+        }
+        let mixed = (song_id as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29);
+        pool[(mixed % pool.len() as u64) as usize]
+    }
+
     /// i18n key of the style's display name.
     /// The style's 24×24 line glyph from its original `entry.tsx`, as SVG; `modeGlyphs.tsx` frames it
     /// with `stroke-width: 1.6` and round caps.
@@ -160,5 +169,13 @@ impl Style {
     /// inside its own rail (`VisualizerMonet.tsx:86`).
     pub fn shared_subtitle(self) -> bool {
         !matches!(self, Style::Still | Style::Monet)
+    }
+
+    /// The original `ownFontSizeNoticeKey`: the style sizes its own lyrics, so the font size row is off.
+    pub fn own_font_size_notice(self) -> Option<&'static str> {
+        match self {
+            Style::Lumiere => Some("options.lumiereFontSizeAutoNotice"),
+            _ => None,
+        }
     }
 }

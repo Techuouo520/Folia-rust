@@ -184,6 +184,8 @@ pub struct Collection {
     /// The playlist's creator, or the album's artists joined with `, `.
     pub creator: Option<String>,
     pub description: Option<String>,
+    /// The signed-in account made it, so its songs can be changed (`isOwned`).
+    pub owned: bool,
 }
 
 impl Collection {
@@ -247,6 +249,16 @@ pub struct ProviderLyrics {
 }
 
 /// What one platform can do. Search results are tracks whose `online` id points back at the platform.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// `likes`: songs can be liked and the account's liked ids read.
+    pub likes: bool,
+    /// `playlistTrackMutations`: a song can be added to one of the account's own playlists.
+    pub playlist_track_mutations: bool,
+    /// `mutations.createPlaylist`: a playlist can be made on the spot.
+    pub create_playlist: bool,
+}
+
 pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
@@ -308,6 +320,32 @@ pub trait Provider: Send + Sync {
     fn explore(&self) -> BoxFuture<'_, Result<Vec<ExploreSection>, OmniError>>;
     /// The address of `url` resized to `px` square on the platform's image CDN, when `url` is on it.
     fn sized_cover(&self, url: &str, px: u32) -> Option<String>;
+    /// What the platform does with songs and playlists; all false unless a provider implements it.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+    /// Likes or unlikes a song for the signed-in account (`mutations.likeSong`).
+    fn like_song<'a>(&'a self, _song: &'a OnlineId, _liked: bool) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("liking songs")) })
+    }
+    /// The ids the account's liked list holds (`library.getLikedSongIds`); `None` where the platform reads none.
+    fn liked_song_ids(&self) -> BoxFuture<'_, Result<Option<Vec<String>>, OmniError>> {
+        Box::pin(async { Ok(None) })
+    }
+    /// Adds (`add`) songs to or removes them from one of the account's own playlists
+    /// (`mutations.updatePlaylistTracks`). The songs carry the ids this provider gave them.
+    fn update_playlist_tracks<'a>(
+        &'a self,
+        _playlist: &'a Collection,
+        _songs: &'a [OnlineId],
+        _add: bool,
+    ) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("playlist track mutations")) })
+    }
+    /// Makes a playlist for the signed-in account (`mutations.createPlaylist`).
+    fn create_playlist(&self, _name: &str) -> BoxFuture<'_, Result<Collection, OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("creating playlists")) })
+    }
 }
 
 /// Cover downloads at once: what a browser opens to one host, so the first screen of tiles does not queue dozens.
@@ -478,6 +516,66 @@ impl Omni {
 
     pub async fn explore(&self, provider: &str) -> Result<Vec<ExploreSection>, OmniError> {
         self.provider(provider)?.explore().await
+    }
+
+    /// What `provider` does with songs and playlists.
+    pub fn capabilities(&self, provider: &str) -> Capabilities {
+        self.provider(provider).map_or(Capabilities::default(), |found| found.capabilities())
+    }
+
+    /// `canLikeSong`: the song's platform takes hearts.
+    pub fn can_like(&self, song: &OnlineId) -> bool {
+        self.capabilities(&song.provider).likes
+    }
+
+    /// `canAddSongToPlaylist`.
+    pub fn can_add_to_playlist(&self, song: &OnlineId) -> bool {
+        self.capabilities(&song.provider).playlist_track_mutations
+    }
+
+    /// `canCreatePlaylistForSong`.
+    pub fn can_create_playlist(&self, song: &OnlineId) -> bool {
+        let capabilities = self.capabilities(&song.provider);
+        capabilities.playlist_track_mutations && capabilities.create_playlist
+    }
+
+    pub async fn like_song(&self, song: &OnlineId, liked: bool) -> Result<(), OmniError> {
+        let provider = self.provider(&song.provider)?;
+        if !provider.capabilities().likes {
+            return Err(OmniError::Unsupported("liking songs"));
+        }
+        provider.like_song(song, liked).await
+    }
+
+    /// The account's liked song ids, when the platform can read them.
+    pub async fn liked_song_ids(&self, provider: &str) -> Result<Option<Vec<String>>, OmniError> {
+        self.provider(provider)?.liked_song_ids().await
+    }
+
+    /// `addSongToPlaylist` and the liked list's edits: the songs go in or come out of one of the account's own
+    /// playlists.
+    pub async fn update_playlist_tracks(
+        &self,
+        playlist: &Collection,
+        songs: &[OnlineId],
+        add: bool,
+    ) -> Result<(), OmniError> {
+        if songs.is_empty() {
+            return Ok(());
+        }
+        let provider = self.provider(&playlist.provider)?;
+        if playlist.kind != CollectionKind::Playlist || !provider.capabilities().playlist_track_mutations {
+            return Err(OmniError::Unsupported("playlist track mutations"));
+        }
+        if songs.iter().any(|song| song.provider != playlist.provider) {
+            return Err(OmniError::Unsupported("songs of another platform in this playlist"));
+        }
+        provider.update_playlist_tracks(playlist, songs, add).await
+    }
+
+    /// `createPlaylistWithSong`'s first half.
+    pub async fn create_playlist(&self, provider: &str, name: &str) -> Result<Collection, OmniError> {
+        self.provider(provider)?.create_playlist(name).await
     }
 
     /// Downloads the song once into the cache at the resolved level and returns the file to play. Cached files are

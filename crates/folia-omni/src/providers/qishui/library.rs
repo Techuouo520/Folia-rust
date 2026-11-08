@@ -438,6 +438,7 @@ pub async fn user_playlists(client: &Client) -> Result<Vec<Collection>, OmniErro
         track_count: None,
         creator: None,
         description: None,
+        owned: false,
     }];
     for (path, field) in [("/me/playlist/", "playlists"), ("/me/collection/mixed/", "mixed_collections")] {
         let mut cursor = String::new();
@@ -590,6 +591,7 @@ async fn feed_modes(client: &Client) -> Result<Vec<Collection>, OmniError> {
                 track_count: None,
                 creator: None,
                 description: group.clone(),
+                owned: false,
             });
         }
     }

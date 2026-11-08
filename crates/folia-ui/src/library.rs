@@ -10,12 +10,14 @@ use folia_render::{Glow, Veil, Wash};
 use folia_store::HomeTab;
 use std::time::Instant;
 
+use iced::widget::scrollable::Viewport;
 use iced::widget::{canvas, column, container, shader, stack, text};
-use iced::{Alignment, Color, Element, Length, Task};
+use iced::{Alignment, Color, Element, Length, Task, mouse};
 
 use crate::background::{blocking, error_chain};
 use crate::lots;
 use crate::online::{self, AccountState, Feed, Online};
+use crate::smooth_scroll::Scroll;
 use crate::wall::{self, CoverSource, Shape, Tile, Wall};
 
 /// `resolveHomeTabs`: playlists, radio, explore, albums, local.
@@ -238,6 +240,8 @@ pub struct LibraryPage {
     flight: Option<crate::cover_flight::Flight>,
     /// The flight back lands on the tile of this collection.
     flight_home: Option<i64>,
+    /// The song list panel's smooth scroll.
+    list_scroll: Scroll,
 }
 
 /// The wall a queue was started from: a tab's own wall or a collection's.
@@ -283,7 +287,8 @@ pub enum Message {
     Query(String),
     OpenList,
     CloseList,
-    ListScrolled(f32),
+    ListScrolled(Viewport),
+    ListWheel(mouse::ScrollDelta),
     /// A list row: click flies the camera to the song, double-click plays it.
     LocateRow(usize),
     PlayRow(usize),
@@ -317,6 +322,7 @@ impl LibraryPage {
             poster_cover: None,
             flight: None,
             flight_home: None,
+            list_scroll: Scroll::default(),
             tiles: Vec::new(),
             actions: Vec::new(),
         };
@@ -352,6 +358,7 @@ impl LibraryPage {
             || self.poster_entry(now).0.is_some()
             || self.flight.as_ref().is_some_and(|flight| flight.alive(now))
             || self.wall.tilt.running(now)
+            || self.list_scroll.animating(now)
     }
 
     /// The layer is turned with the poster: the seam's own ground and strip give way to the wall's turned band.
@@ -789,6 +796,13 @@ impl LibraryPage {
             }
             Message::Frame => {
                 let now = Instant::now();
+                let scroll = match self.list_scroll.frame(now) {
+                    Some(_) => self.list_scroll.apply(iced::widget::Id::new(crate::home::LIST_SCROLL)),
+                    None => Task::none(),
+                };
+                if let Some(layer) = self.layer.as_mut() {
+                    layer.list_offset = self.list_scroll.offset();
+                }
                 let target = self.flight_target();
                 if let Some(flight) = self.flight.as_mut() {
                     flight.step(target, now);
@@ -798,9 +812,11 @@ impl LibraryPage {
                 }
                 if (self.wall.focus.animating(now) || self.wall.focus.expanded().is_some()) && self.wall.tick_focus(now)
                 {
-                    return (self.wall.show_visible(&self.tiles, self.online.omni()).map(Message::Wall), None);
+                    let wall = self.wall.show_visible(&self.tiles, self.online.omni()).map(Message::Wall);
+                    return (Task::batch([scroll, wall]), None);
                 }
-                (self.wall.tick_coast(now, &self.tiles, self.online.omni()).map(Message::Wall), None)
+                let wall = self.wall.tick_coast(now, &self.tiles, self.online.omni()).map(Message::Wall);
+                (Task::batch([scroll, wall]), None)
             }
             Message::Tab(tab) => {
                 if tab == self.tab && self.layer.is_none() {
@@ -928,6 +944,7 @@ impl LibraryPage {
                 layer.query = query;
                 layer.refilter();
                 layer.list_offset = 0.0;
+                self.list_scroll.reset();
                 if !was && !layer.filtering() {
                     return (Task::none(), None);
                 }
@@ -937,14 +954,21 @@ impl LibraryPage {
                 if let Some(layer) = self.layer.as_mut() {
                     layer.list = matches!(message, Message::OpenList);
                     layer.menu = false;
+                    layer.list_offset = 0.0;
+                }
+                self.list_scroll.reset();
+                (Task::none(), None)
+            }
+            Message::ListScrolled(viewport) => {
+                self.list_scroll.scrolled(&viewport, Instant::now());
+                if let Some(layer) = self.layer.as_mut() {
+                    layer.list_offset = self.list_scroll.offset();
                 }
                 (Task::none(), None)
             }
-            Message::ListScrolled(offset) => {
-                if let Some(layer) = self.layer.as_mut() {
-                    layer.list_offset = offset;
-                }
-                (Task::none(), None)
+            Message::ListWheel(delta) => {
+                self.list_scroll.wheel(delta, Instant::now());
+                (self.list_scroll.apply(iced::widget::Id::new(crate::home::LIST_SCROLL)), None)
             }
             Message::LocateRow(row) => {
                 // The list's rows are the wall's tiles in order: the camera flies to the copy nearest it.
@@ -1583,6 +1607,7 @@ fn radio_cards(feed: &folia_omni::RadioFeed, provider: &str, daily: bool, i18n: 
             creator: None,
             // `personalFmModeLabel`: NetEase has FM modes, and the mode in use is the default one.
             description: Some(i18n.t("personalFmMode.mode.DEFAULT").to_owned()),
+            owned: false,
         });
     }
     if !daily {
@@ -1598,6 +1623,7 @@ fn radio_cards(feed: &folia_omni::RadioFeed, provider: &str, daily: bool, i18n: 
         track_count: Some(feed.daily_songs.len() as u32),
         creator: None,
         description: Some(i18n.t("home.dailyRecommendationsDescription").to_owned()),
+        owned: false,
     });
     cards.extend(feed.recommended.iter().cloned());
     cards

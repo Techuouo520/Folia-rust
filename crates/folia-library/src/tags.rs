@@ -31,7 +31,18 @@ pub fn read(path: &Path) -> Track {
         tag.get_string(ItemKey::AlbumArtist).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
     track.track_no = tag.track();
     track.disc_no = tag.disk();
+    let gain = |key: ItemKey| tag.get_string(key).and_then(gain_from_tag);
+    let track_gain = gain(ItemKey::ReplayGainTrackGain);
+    let album_gain = gain(ItemKey::ReplayGainAlbumGain);
+    track.replay_gain = (track_gain.is_some() || album_gain.is_some())
+        .then_some(folia_core::ReplayGain { track_db: track_gain, album_db: album_gain });
     track
+}
+
+/// `-6.54 dB`, `-6.54` or `-6,54 dB` into dB, as the ReplayGain tags write it.
+pub fn gain_from_tag(text: &str) -> Option<f32> {
+    let first = text.split_whitespace().next()?.replace(',', ".");
+    first.parse::<f32>().ok().filter(|gain| gain.is_finite())
 }
 
 /// Lyrics stored inside the file's tags, if any.

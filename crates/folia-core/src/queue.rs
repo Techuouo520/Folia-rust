@@ -195,6 +195,32 @@ impl<T> Queue<T> {
         true
     }
 
+    /// Shuffles the queue as the original's `shuffleQueue`: the current item goes to the head and the rest are
+    /// permuted with a seeded generator. Returns false where nothing plays or only one item is queued.
+    pub fn shuffle(&mut self, seed: u64) -> bool {
+        let Some(current) = self.current.filter(|&index| index < self.items.len()) else { return false };
+        if self.items.len() < 2 {
+            return false;
+        }
+        let mut rest = std::mem::take(&mut self.items);
+        let current_item = rest.remove(current);
+        let mut state = seed | 1;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for index in (1..rest.len()).rev() {
+            let other = (next() % (index as u64 + 1)) as usize;
+            rest.swap(index, other);
+        }
+        rest.insert(0, current_item);
+        self.items = rest;
+        self.current = Some(0);
+        true
+    }
+
     /// Moves to the next item. `finished` is true when the current item played to its end,
     /// in which case repeat-one replays it.
     pub fn advance(&mut self, finished: bool) -> Option<&T> {

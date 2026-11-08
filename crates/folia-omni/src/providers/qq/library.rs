@@ -504,6 +504,74 @@ pub async fn favorite_albums(client: &Client) -> Result<Vec<Collection>, OmniErr
     }
 }
 
+/// `mutations.likeSong`: the liked list is directory 201, written through `PlaylistDetailWrite`.
+pub async fn like_song(client: &Client, song: &str, liked: bool) -> Result<(), OmniError> {
+    let id: u64 = song
+        .split('-')
+        .nth(1)
+        .and_then(|id| id.parse().ok())
+        .ok_or_else(|| OmniError::Response("QQ song has no numeric id for a like write".to_owned()))?;
+    let method = if liked { "AddSonglist" } else { "DelSonglist" };
+    let param = json!({ "dirId": 201, "v_songInfo": [{ "songId": id, "songType": 0 }] });
+    client.android("music.musicasset.PlaylistDetailWrite", method, param).await.map(|_| ())
+}
+
+/// The account's liked song ids: `CgiGetDiss` of directory 201.
+pub async fn liked_song_ids(client: &Client) -> Result<Vec<String>, OmniError> {
+    let param = json!({
+        "disstid": 0, "dirid": 201, "tag": true, "song_begin": 0, "song_num": 100000,
+        "userinfo": true, "orderlist": true, "enc_host_uin": "",
+    });
+    let data = client.android("music.srfDissInfo.DissInfo", "CgiGetDiss", param).await?;
+    Ok(super::tracks(data.get("songlist"))
+        .into_iter()
+        .filter_map(|track| track.online.map(|online| online.id))
+        .collect())
+}
+
+/// `updatePlaylistTracks`: `PlaylistDetailWrite`, a song list of numeric ids.
+pub async fn update_playlist_tracks(
+    client: &Client,
+    playlist: &str,
+    songs: &[String],
+    add: bool,
+) -> Result<(), OmniError> {
+    let id = playlist.strip_prefix("dir-").unwrap_or(playlist);
+    let dir: u64 = id.parse().map_err(|_| OmniError::Response(format!("not a QQ playlist id: {playlist}")))?;
+    let infos: Vec<Value> = songs
+        .iter()
+        .filter_map(|song| song.split('-').nth(1).and_then(|id| id.parse::<u64>().ok()))
+        .map(|song| json!({ "songId": song, "songType": 0 }))
+        .collect();
+    if infos.is_empty() {
+        return Ok(());
+    }
+    let method = if add { "AddSonglist" } else { "DelSonglist" };
+    let param = json!({ "dirId": dir, "tid": dir, "bFmtUtf8": true, "v_songInfo": infos });
+    client.android("music.musicasset.PlaylistDetailWrite", method, param).await.map(|_| ())
+}
+
+/// `mutations.createPlaylist`: `PlaylistBaseWrite/AddPlaylist`.
+pub async fn create_playlist(client: &Client, name: &str) -> Result<Collection, OmniError> {
+    let data = client.android("music.musicasset.PlaylistBaseWrite", "AddPlaylist", json!({ "dirName": name })).await?;
+    let result = data.get("result").unwrap_or(&Value::Null);
+    let tid = result.get("tid").or_else(|| result.get("dirId")).and_then(super::musicu::identifier);
+    let Some(id) = tid else {
+        return Err(OmniError::Response("QQ did not name the new playlist".to_owned()));
+    };
+    Ok(Collection {
+        provider: super::ID.to_owned(),
+        id,
+        kind: CollectionKind::Playlist,
+        name: result.get("dirName").and_then(Value::as_str).unwrap_or(name).to_owned(),
+        cover_url: None,
+        track_count: Some(0),
+        creator: None,
+        description: None,
+        owned: true,
+    })
+}
+
 /// `getHomeFeed`: guess-you-like as personal FM, the daily songs and the recommended playlists.
 pub async fn radio_feed(client: &Client, limit: u32) -> Result<RadioFeed, OmniError> {
     let fm = guess_you_like(client).await;
@@ -670,6 +738,7 @@ fn chart(raw: &Value) -> Option<Collection> {
         track_count: raw.get("totalNum").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()),
         creator: None,
         description: text(raw, &["updateTime", "intro"]),
+        owned: false,
     })
 }
 

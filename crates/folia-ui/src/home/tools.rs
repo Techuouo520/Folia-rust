@@ -638,11 +638,13 @@ fn help_list<'a>(face: Face<'a>, panel_w: f32, visible: f32, amount: f32) -> Ele
     .width(Length::Fill);
     let content: Element<'a, Message> = if full > visible {
         let padding = Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 };
-        scrollable(container(body).padding(padding).width(Length::Fill))
+        let list = scrollable(container(body).padding(padding).width(Length::Fill))
+            .id(super::HELP_SCROLL)
             .direction(crate::settings_kit::scrollbar())
             .width(Length::Fill)
             .height(Length::Fixed(visible))
-            .into()
+            .on_scroll(Message::HelpScrolled);
+        crate::smooth_scroll::smooth(list, Message::HelpWheel)
     } else {
         container(body)
             .padding(Padding { top: 7.0, right: 12.0, bottom: 7.0, left: 12.0 })

@@ -234,6 +234,7 @@ fn collection(raw: &Value, kind: CollectionKind, source: u32) -> Option<Collecti
             .and_then(|n| u32::try_from(n).ok()),
         creator,
         description: text(raw, &["description", "info", "desc"]),
+        owned: source == 5,
     })
 }
 

@@ -55,6 +55,8 @@ fn main() -> anyhow::Result<()> {
 
     let init = Init {
         appearance: store.load_or_default::<AppearanceSettings>(),
+        theme: store.load_or_default::<folia_store::ThemeSettings>(),
+        audio: store.load_or_default::<folia_store::AudioSettings>(),
         playback: store.load_or_default::<PlaybackSettings>(),
         player: store.load_or_default::<PlayerSettings>(),
         visualizer: store.load_or_default::<folia_store::VisualizerSettings>(),

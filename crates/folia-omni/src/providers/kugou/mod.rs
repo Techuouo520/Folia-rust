@@ -474,5 +474,6 @@ fn collection(raw: &Value, kind: CollectionKind) -> Option<Collection> {
         track_count: count.filter(|count| *count >= 0.0).map(|count| count as u32),
         creator,
         description: text_of(raw, &["intro", "description", "brief_desc", "briefDesc", "brief_description", "desc"]),
+        owned: false,
     })
 }

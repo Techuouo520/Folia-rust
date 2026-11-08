@@ -24,7 +24,16 @@ pub async fn user_playlists(client: &Client, user: &str) -> Result<Vec<Collectio
         eapi::check(&answer.body)?;
         let rows = answer.body.get("playlist").and_then(Value::as_array).cloned().unwrap_or_default();
         let count = rows.len() as u64;
-        all.extend(rows.iter().filter_map(|row| collection(row, CollectionKind::Playlist)));
+        for row in &rows {
+            if let Some(mut found) = collection(row, CollectionKind::Playlist) {
+                found.owned = row
+                    .pointer("/creator/userId")
+                    .and_then(Value::as_u64)
+                    .map(|creator| creator.to_string())
+                    .is_some_and(|creator| creator == user);
+                all.push(found);
+            }
+        }
         let more = answer.body.get("more").and_then(Value::as_bool).unwrap_or(count == PLAYLIST_PAGE);
         if !more || count == 0 {
             return Ok(all);
@@ -67,6 +76,47 @@ pub async fn set_subscribed(client: &Client, collection: &Collection, subscribed
         }
     };
     let answer = client.post(path, object(json!({ "id": digits(&collection.id)? }))).await?;
+    eapi::check(&answer.body)
+}
+
+/// `mutations`: the heart, the liked ids and the songs of the account's own playlists.
+pub async fn like_song(client: &Client, song: &str, liked: bool) -> Result<(), OmniError> {
+    let params = object(json!({ "trackId": digits(song)?, "like": liked, "alg": "itembased", "time": 3 }));
+    let answer = client.post("/api/song/like", params).await?;
+    eapi::check(&answer.body)
+}
+
+/// `getLikedSongIds`: `/api/song/like/list` for the account's liked ids.
+pub async fn liked_song_ids(client: &Client, user: &str) -> Result<Vec<String>, OmniError> {
+    let answer = client.post("/api/song/like/list", object(json!({ "uid": user }))).await?;
+    eapi::check(&answer.body)?;
+    Ok(answer
+        .body
+        .get("ids")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.as_u64().map(|id| id.to_string()).or_else(|| row.as_str().map(str::to_owned)))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// `updatePlaylistTracks`: `/api/playlist/manipulate/tracks`, ids as a JSON string.
+pub async fn update_playlist_tracks(
+    client: &Client,
+    playlist: &str,
+    tracks: &[String],
+    add: bool,
+) -> Result<(), OmniError> {
+    let ids: Vec<u64> = tracks.iter().filter_map(|track| digits(track).ok()?.parse().ok()).collect();
+    let params = object(json!({
+        "op": if add { "add" } else { "del" },
+        "pid": digits(playlist)?,
+        "trackIds": Value::Array(ids.into_iter().map(|id| json!(id)).collect()).to_string(),
+        "imme": "true",
+    }));
+    let answer = client.post("/api/playlist/manipulate/tracks", params).await?;
     eapi::check(&answer.body)
 }
 

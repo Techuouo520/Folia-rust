@@ -15,6 +15,7 @@ use folia_store::HomeTab;
 
 use crate::motion::Tween;
 use crate::queue_island::{self, QueueList};
+use crate::smooth_scroll::Scroll;
 use crate::wall::Seam;
 use iced::widget::{mouse_area, space};
 use iced::{Color, Element, Length, Task};
@@ -37,6 +38,9 @@ const CLEAR_GUARD_MS: u64 = 400;
 /// The help list's rows: their height and the list's padding (`li` 30px, `ul` 7px 12px).
 pub const HELP_ROW_H: f32 = 30.0;
 pub const HELP_PAD: f32 = 14.0;
+/// Scrollable ids for the two lists the home layer scrolls.
+pub const LIST_SCROLL: &str = "bravais-list-panel";
+pub const HELP_SCROLL: &str = "wall-tools-help";
 /// The help rows this build actually has keys for, in the original's order.
 pub const HELP_ROWS: usize = 6;
 
@@ -183,7 +187,14 @@ pub enum Message {
     PosterCover(iced::Rectangle),
     /// Enter in the collection filter.
     FilterSubmit,
-    ListScrolled(f32),
+    /// The song list panel scrolled.
+    ListScrolled(iced::widget::scrollable::Viewport),
+    /// A wheel event over the song list panel.
+    ListWheel(iced::mouse::ScrollDelta),
+    /// The help list scrolled.
+    HelpScrolled(iced::widget::scrollable::Viewport),
+    /// A wheel event over the help list.
+    HelpWheel(iced::mouse::ScrollDelta),
     LocateRow(usize),
     PlayRow(usize),
     ToggleSubscribe,
@@ -217,6 +228,7 @@ pub struct HomeChrome {
     /// The clear button is armed; `None` after the 3s window or a successful clear.
     queue_clear: Option<Instant>,
     clear_serial: u64,
+    help_scroll: Scroll,
     help_from: f32,
     help_goal: f32,
     help_at: Instant,
@@ -272,6 +284,7 @@ impl HomeChrome {
             queue: QueueList::default(),
             queue_clear: None,
             clear_serial: 0,
+            help_scroll: Scroll::default(),
             help_from: 0.0,
             help_goal: 0.0,
             help_at: now,
@@ -472,11 +485,14 @@ impl HomeChrome {
             }
             Message::Composing(composing) => self.composing = *composing,
             Message::Frame
+            | Message::HelpScrolled(_)
+            | Message::HelpWheel(_)
+            | Message::ListScrolled(_)
+            | Message::ListWheel(_)
             | Message::Volume(_)
             | Message::VolumeDone
             | Message::Mute
             | Message::Query(_)
-            | Message::ListScrolled(_)
             | Message::LocateRow(_)
             | Message::PlayRow(_)
             | Message::CollectionMenu
@@ -613,6 +629,29 @@ impl HomeChrome {
         self.more || self.tools_open()
     }
 
+    /// The help list's wheel: the list eases towards the stacked target.
+    pub fn help_wheel(&mut self, delta: iced::mouse::ScrollDelta) -> Task<Message> {
+        self.help_scroll.wheel(delta, Instant::now());
+        self.help_scroll.apply(iced::widget::Id::new(HELP_SCROLL))
+    }
+
+    pub fn help_scrolled(&mut self, viewport: &iced::widget::scrollable::Viewport) {
+        self.help_scroll.scrolled(viewport, Instant::now());
+    }
+
+    /// One frame of the help list's smooth scroll; the shell asks for frames while it moves.
+    pub fn scroll_frame(&mut self) -> Task<Message> {
+        let now = Instant::now();
+        match self.help_scroll.frame(now) {
+            Some(_) => self.help_scroll.apply(iced::widget::Id::new(HELP_SCROLL)),
+            None => Task::none(),
+        }
+    }
+
+    pub fn scrolling(&self, now: Instant) -> bool {
+        self.help_scroll.animating(now)
+    }
+
     /// The tools panel is open. It leaves the wall its keys except Escape, as `WallToolsSurface` does.
     pub fn tools_open(&self) -> bool {
         self.tools_goal > 0.5
@@ -627,6 +666,7 @@ impl HomeChrome {
         self.busy(self.tools_from, self.tools_goal, self.tools_at, now, PANEL_MS)
             || self.busy(self.island_from, self.island_goal, self.island_at, now, ISLAND_MS)
             || self.busy(self.help_from, self.help_goal, self.help_at, now, HELP_MS)
+            || self.help_scroll.animating(now)
             || self.queue.animating(now)
             || self.busy(self.seam_from, self.seam_goal, self.seam_at, now, SEAM_MS)
             || self.busy(self.back_from, self.back_goal, self.back_at, now, BACK_MS)

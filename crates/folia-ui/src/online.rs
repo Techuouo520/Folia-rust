@@ -64,6 +64,10 @@ pub enum Message {
     Avatar(&'static str, String, Option<folia_library::Cover>),
     /// The sync button's read came back: the account and the playlists kept with it.
     Synced(&'static str, Result<Option<(Account, Vec<Collection>)>, String>),
+    /// The account's liked ids.
+    Liked(&'static str, Result<Option<Vec<String>>, String>),
+    /// A heart's request settled; the id, what was asked and whether the platform took it.
+    LikeSettled(&'static str, String, bool, Result<(), String>),
     SyncLeaving(u64),
     SyncGone(u64),
     SyncFrame,
@@ -106,6 +110,15 @@ pub struct Online {
     syncing: Option<&'static str>,
     sync_notice: Option<SyncNotice>,
     sync_serial: u64,
+    /// Each platform's liked ids and hearts asked for but not settled yet (`likedSongIds`, `wantedLikes`).
+    liked: HashMap<&'static str, LikedSet>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LikedSet {
+    ids: std::collections::HashSet<String>,
+    wanted: HashMap<String, bool>,
+    loaded: bool,
 }
 
 impl Online {
@@ -148,6 +161,7 @@ impl Online {
             syncing: None,
             sync_notice: None,
             sync_serial: 0,
+            liked: HashMap::new(),
         };
         (online, task)
     }
@@ -182,6 +196,52 @@ impl Online {
 
     pub fn avatar_for(&self, provider: &str) -> Option<&iced::widget::image::Handle> {
         self.avatars.get(provider)
+    }
+
+    /// `isSongLiked`: a heart pressed and not yet settled answers with what was asked for.
+    pub fn is_liked(&self, provider: &str, id: &str) -> bool {
+        let Some(set) = self.liked.get(provider) else { return false };
+        if let Some(wanted) = set.wanted.get(id) {
+            return *wanted;
+        }
+        set.ids.contains(id)
+    }
+
+    /// Whether the platform takes hearts at all.
+    pub fn can_like(&self, provider: &str) -> bool {
+        self.omni.as_ref().is_some_and(|omni| omni.capabilities(provider).likes)
+    }
+
+    /// Reads the account's liked ids once, when the platform offers them.
+    pub fn ensure_liked(&mut self) -> Task<Message> {
+        let (Some(omni), Some(account)) = (self.omni.clone(), self.signed_in().cloned()) else { return Task::none() };
+        let provider = self.provider;
+        if self.liked.get(provider).is_some_and(|set| set.loaded) {
+            return Task::none();
+        }
+        if !omni.capabilities(provider).likes {
+            return Task::none();
+        }
+        let _ = account;
+        self.liked.entry(provider).or_default().loaded = true;
+        Task::perform(
+            async move { omni.liked_song_ids(provider).await.map_err(|err| error_chain(&err)) },
+            move |result| Message::Liked(provider, result),
+        )
+    }
+
+    /// `pressSongLike`: the heart answers at once and the request follows.
+    pub fn press_like(&mut self, provider: &'static str, id: String, liked: bool) -> Task<Message> {
+        let Some(omni) = self.omni.clone() else { return Task::none() };
+        if !omni.capabilities(provider).likes {
+            return Task::none();
+        }
+        self.liked.entry(provider).or_default().wanted.insert(id.clone(), liked);
+        let song = folia_core::OnlineId { provider: provider.to_owned(), id: id.clone() };
+        Task::perform(
+            async move { omni.like_song(&song, liked).await.map_err(|err| error_chain(&err)) },
+            move |result| Message::LikeSettled(provider, id.clone(), liked, result),
+        )
     }
 
     /// `requestSwitch`: shows another platform whose session is kept, reading its account anew.
@@ -233,7 +293,7 @@ impl Online {
                 }
                 self.account = AccountState::SignedIn(account.clone());
                 self.reset_feeds();
-                (Task::batch([self.load_playlists(&account), avatar]), true)
+                (Task::batch([self.load_playlists(&account), avatar, self.ensure_liked()]), true)
             }
             Message::Account(provider, Ok(None)) => {
                 let ran_out = self.kept.remove(provider);
@@ -355,6 +415,44 @@ impl Online {
                 (Task::none(), false)
             }
             Message::SyncLeaving(_) | Message::SyncGone(_) | Message::SyncFrame => (Task::none(), false),
+            Message::Liked(provider, result) => {
+                match result {
+                    Ok(Some(ids)) => {
+                        let set = self.liked.entry(provider).or_default();
+                        set.ids = ids.into_iter().collect();
+                        set.loaded = true;
+                    }
+                    Ok(None) => {
+                        self.liked.remove(provider);
+                    }
+                    Err(err) => {
+                        tracing::warn!(provider, error = %err, "the liked songs could not be read");
+                        if let Some(set) = self.liked.get_mut(provider) {
+                            set.loaded = false;
+                        }
+                    }
+                }
+                (Task::none(), false)
+            }
+            Message::LikeSettled(provider, id, liked, result) => {
+                let took = result.is_ok();
+                if let Some(set) = self.liked.get_mut(provider) {
+                    set.wanted.remove(&id);
+                    match result {
+                        Ok(()) => {
+                            if liked {
+                                set.ids.insert(id);
+                            } else {
+                                set.ids.remove(&id);
+                            }
+                        }
+                        Err(err) => tracing::warn!(provider, error = %err, "the heart was not kept"),
+                    }
+                }
+                // A saved or removed heart changes the liked list among the account's playlists, which the wall shows.
+                let reload = if took { self.reload_playlists() } else { Task::none() };
+                (reload, took)
+            }
             Message::Forgotten => (Task::none(), false),
         }
     }
@@ -522,6 +620,14 @@ impl Online {
 
     pub fn can_refresh_explore(&self) -> bool {
         !self.explore_refreshing && matches!(self.explore, Feed::Ready(_) | Feed::Failed(_))
+    }
+
+    /// Reads the playlists again after a change made here (`refreshProviderPlaylists`).
+    pub fn reload_playlists(&mut self) -> Task<Message> {
+        match self.signed_in().cloned() {
+            Some(account) => self.load_playlists(&account),
+            None => Task::none(),
+        }
     }
 
     fn load_playlists(&mut self, account: &Account) -> Task<Message> {

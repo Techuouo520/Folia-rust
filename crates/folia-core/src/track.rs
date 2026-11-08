@@ -21,6 +21,20 @@ impl OnlineId {
     }
 }
 
+/// The gains a file's ReplayGain tags carry, in dB.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReplayGain {
+    pub track_db: Option<f32>,
+    pub album_db: Option<f32>,
+}
+
+impl ReplayGain {
+    /// What the mode applies: the track gain, the album gain falling back to the track gain, or none.
+    pub fn gain_db(self, album: bool) -> Option<f32> {
+        if album { self.album_db.or(self.track_db) } else { self.track_db }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub id: i64,
@@ -39,6 +53,9 @@ pub struct Track {
     /// Cover image address from an online search, when the platform sent one.
     #[serde(default)]
     pub cover_url: Option<String>,
+    /// Gains the file's tags carry; online platforms do not hand any out.
+    #[serde(default)]
+    pub replay_gain: Option<ReplayGain>,
 }
 
 impl Track {

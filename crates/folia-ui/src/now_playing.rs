@@ -4,7 +4,7 @@ use folia_i18n::I18n;
 use folia_render::{Atmosphere, Program};
 use folia_visualizer::{Scene, lyric_view};
 use iced::widget::{column, container, shader, stack, text};
-use iced::{Alignment, Color, Element, Length, Size};
+use iced::{Alignment, Color, Element, Font, Length, Size};
 
 use crate::overlay::{self, Subtitle};
 
@@ -15,40 +15,53 @@ pub struct Foot {
 }
 
 /// `subtitle` is the translation and the next line. `foot.bottom` is how far the block sits above the window edge.
-pub fn view<'a, M: From<folia_visualizer::styles::monet::PortraitOffset> + 'a>(
+/// Where the picture is and how strong its vignette and bottom subtitle are.
+#[derive(Clone, Copy)]
+pub struct Screen {
+    pub window: Size,
+    pub vignette: f32,
+    pub subtitle_opacity: f32,
+    pub subtitle_scale: f32,
+    pub subtitle_font: Font,
+}
+
+pub fn view<'a, M: From<folia_visualizer::styles::monet::Event> + 'a>(
     scene: Scene<'a>,
     i18n: &'a I18n,
     muted: Color,
     background: Color,
-    window: Size,
+    screen: Screen,
     subtitle: Subtitle<'a>,
     foot: Foot,
 ) -> Element<'a, M> {
     let has_lyrics = !scene.lyrics.lines.is_empty();
-    let font_scale = scene.font_scale;
     let time = scene.time as f32;
     let glass = foot.glass;
     let bottom = foot.bottom;
+    let window = screen.window;
+    let subtitle_opacity = screen.subtitle_opacity;
+    let subtitle_scale = screen.subtitle_scale;
     let flat = !matches!(scene.style, folia_visualizer::Style::Nebbia | folia_visualizer::Style::Lumiere);
     let visualizer = lyric_view(scene);
     let show_glow = subtitle.translation.is_some() || subtitle.upcoming.is_some();
+    let alpha = overlay::OVERLAY_ALPHA * subtitle_opacity.clamp(0.0, 1.0);
     let ellipse = overlay::glow_ellipse(
         window.width,
         window.height,
         bottom,
-        overlay::translation_px(window.width, font_scale),
-        overlay::upcoming_px(window.width, font_scale),
+        overlay::translation_px(window.width, subtitle_scale),
+        overlay::upcoming_px(window.width, subtitle_scale),
         subtitle.translation,
         subtitle.upcoming,
     );
     let atmosphere = shader(Program::new(Atmosphere {
         time,
-        vignette: 0.28,
+        vignette: screen.vignette.clamp(0.0, 1.0),
         grain: 0.04,
         glow_center: ellipse.center,
         glow_radius: ellipse.radius,
         glow_rgb: [background.r, background.g, background.b],
-        glow_alpha: if show_glow { overlay::OVERLAY_ALPHA } else { 0.0 },
+        glow_alpha: if show_glow { alpha } else { 0.0 },
     }))
     .width(Length::Fill)
     .height(Length::Fill);
@@ -70,7 +83,8 @@ pub fn view<'a, M: From<folia_visualizer::styles::monet::PortraitOffset> + 'a>(
     }
     let mut layers = layers.push(visualizer).push(atmosphere);
     if show_glow {
-        let block = subtitle_block(subtitle, muted, background, window.width, font_scale);
+        let block =
+            subtitle_block(subtitle, muted, background, window.width, subtitle_scale, alpha, screen.subtitle_font);
         let subtitle = container(block)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -91,29 +105,31 @@ fn subtitle_block<'a, M: 'a>(
     background: Color,
     width: f32,
     scale: f32,
+    alpha: f32,
+    font: Font,
 ) -> Element<'a, M> {
     let translation_size = overlay::translation_px(width, scale);
-    let base = Color { a: overlay::OVERLAY_ALPHA, ..muted };
+    let base = Color { a: alpha, ..muted };
     let mut rows = column![].spacing(overlay::row_gap(translation_size)).align_x(Alignment::Center);
     if let Some(translation) = subtitle.translation {
-        rows = rows.push(lined(translation, translation_size, base, background));
+        rows = rows.push(lined(translation, translation_size, font, base, background));
     }
     if let Some(upcoming) = subtitle.upcoming {
-        let (size, alpha) = overlay::upcoming_look(width, scale, subtitle.translation.is_some());
-        let color = Color { a: alpha, ..muted };
-        rows = rows.push(lined(upcoming, size, color, background));
+        let (size, looked) = overlay::upcoming_look(width, scale, subtitle.translation.is_some());
+        let color = Color { a: looked * alpha / overlay::OVERLAY_ALPHA, ..muted };
+        rows = rows.push(lined(upcoming, size, font, color, background));
     }
     rows.into()
 }
 
 /// The line, with a 1px-down copy of the theme background standing in for `0 1px 2px`.
-fn lined<'a, M: 'a>(content: &'a str, size: f32, color: Color, background: Color) -> Element<'a, M> {
+fn lined<'a, M: 'a>(content: &'a str, size: f32, font: Font, color: Color, background: Color) -> Element<'a, M> {
     let shadow = Color { a: overlay::SHADOW_ALPHA * color.a, ..background };
-    let ghost = container(text(content).size(size).color(shadow).center()).padding(iced::Padding {
+    let ghost = container(text(content).size(size).font(font).color(shadow).center()).padding(iced::Padding {
         top: overlay::SHADOW_OFFSET_Y,
         right: 0.0,
         bottom: 0.0,
         left: 0.0,
     });
-    stack![ghost, text(content).size(size).color(color).center()].into()
+    stack![ghost, text(content).size(size).font(font).color(color).center()].into()
 }

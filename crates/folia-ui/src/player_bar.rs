@@ -66,6 +66,8 @@ pub enum Message {
     SlotHover(usize, bool),
     /// A press on the bar outside its controls: `onNavigateToPlayer`.
     Open,
+    /// The lyrics timeline slot: open the timeline window (the shell owns it).
+    Timeline,
 }
 
 /// A new title sliding in while `old` slides out, from `AnimatePresence mode="sync"`.
@@ -151,6 +153,8 @@ pub struct Look<'a> {
     pub bottom: f32,
     /// Settings, the workbench or sign-in is open: hover does not retarget the capsule.
     pub modal: bool,
+    /// Positioning mode owns the player controls, so the timeline slot greys out (`controlsDisabled`).
+    pub controls_disabled: bool,
 }
 
 impl PlayerBar {
@@ -194,7 +198,7 @@ impl PlayerBar {
     pub fn update(&mut self, message: Message, playback: &Playback, now: Instant) -> Option<playback::Message> {
         match message {
             Message::Inside(inside) => self.on_hover(inside, now),
-            Message::Frame | Message::Open => {}
+            Message::Frame | Message::Open | Message::Timeline => {}
             Message::Playback(message) => return Some(message),
             Message::TitleHover(hovered) => {
                 self.group_hover = hovered;
@@ -701,12 +705,21 @@ fn slots<'a>(
     let repeat =
         Slot { index: 0, active: playback.settings.repeat != Repeat::Off, disabled: false, hovered: bar.slot_hover[0] };
     let cycle = Some(Message::Playback(playback::Message::CycleRepeat));
-    // The lyrics timeline window is not ported, so its slot stays disabled.
-    let timeline = Slot { index: 1, active: false, disabled: true, hovered: bar.slot_hover[1] };
+    // `hasLyrics: !!lyrics`: the slot opens the timeline when a lyric set is loaded.
+    let open_timeline = playback.lyrics.is_some() && !look.controls_disabled;
+    let timeline = Slot { index: 1, active: false, disabled: !open_timeline, hovered: bar.slot_hover[1] };
     let timeline_label = look.i18n.t("options.playerControlSlotAction_lyricsTimeline");
     [
         slot_button(lucide, look.i18n.t(key), repeat, look, icon_px, shown, cycle),
-        slot_button(Icon::ChartBar, timeline_label, timeline, look, icon_px, shown, None),
+        slot_button(
+            Icon::ChartBar,
+            timeline_label,
+            timeline,
+            look,
+            icon_px,
+            shown,
+            open_timeline.then_some(Message::Timeline),
+        ),
     ]
 }
 
