@@ -2,7 +2,9 @@
 
 use folia_core::Track;
 use iced::widget::scrollable::Viewport;
-use iced::widget::{button, column, container, image, mouse_area, row, scrollable, space, stack, text, tooltip};
+use iced::widget::{
+    button, column, container, image, mouse_area, responsive, row, scrollable, space, stack, text, tooltip,
+};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 use lucide_static_svg::Icon;
 
@@ -115,7 +117,7 @@ fn row_view<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let card = container(card_row(index, track, cover, look, state, bindings))
         .width(Length::Fill)
-        .height(Length::Fill)
+        .center_y(Length::Fill)
         .padding([0.0, 12.0])
         .style(move |_| card_style(look.daylight, state.hovered));
     let body = container(card).padding([6.0, 8.0]).width(Length::Fill).height(Length::Fixed(ROW));
@@ -165,21 +167,25 @@ fn cover_button<'a, M: Clone + 'a>(
             .into(),
         None => container(icon(Icon::Disc, 22.0, Color { a: 0.3, ..ink })).center(Length::Fixed(COVER)).into(),
     };
-    let overlay =
-        container(variant(Variant::FilledPlay, 18.0, Color::WHITE)).center(Length::Fixed(COVER)).style(move |_| {
-            container::Style {
-                background: Some(Background::Color(Color { a: if hovered { 0.45 } else { 0.0 }, ..Color::BLACK })),
-                ..container::Style::default()
-            }
-        });
-    let face =
-        container(stack![face, overlay]).width(Length::Fixed(COVER)).height(Length::Fixed(COVER)).clip(true).style(
-            move |_| container::Style {
-                background: Some(Background::Color(plate)),
-                border: Border { radius: 12.0.into(), ..Border::default() },
-                ..container::Style::default()
-            },
+    // `opacity-0 group-hover:opacity-100`: the dim and the play mark only on the hovered row.
+    let mut layers = stack![face];
+    if hovered {
+        layers = layers.push(
+            container(variant(Variant::FilledPlay, 18.0, Color::WHITE)).center(Length::Fixed(COVER)).style(|_| {
+                container::Style {
+                    background: Some(Background::Color(Color { a: 0.45, ..Color::BLACK })),
+                    ..container::Style::default()
+                }
+            }),
         );
+    }
+    let face = container(layers).width(Length::Fixed(COVER)).height(Length::Fixed(COVER)).clip(true).style(move |_| {
+        container::Style {
+            background: Some(Background::Color(plate)),
+            border: Border { radius: 12.0.into(), ..Border::default() },
+            ..container::Style::default()
+        }
+    });
     button(face).padding(0).on_press(on_play(index)).style(bare).into()
 }
 
@@ -203,22 +209,32 @@ fn titles<'a, M: Clone + 'a>(
     column![name, meta_line(track, look)].spacing(4.0).width(Length::Fill).into()
 }
 
+/// `artist • album` on one 16px line. The album keeps its width up to 45%; the artist takes what is left.
 fn meta_line<'a, M: 'a>(track: &'a Track, look: Look<'a>) -> Element<'a, M> {
     let artist = track.artist.as_deref().unwrap_or("");
-    let artist = text(artist).size(12).color(look.secondary).wrapping(text::Wrapping::None);
     let Some(album) = track.album.as_deref().filter(|name| !name.is_empty()) else {
-        return container(artist).clip(true).into();
+        return container(meta_text(artist, look.secondary)).width(Length::Fill).clip(true).into();
     };
-    let dot = text("•").size(12).color(Color { a: look.secondary.a * 0.4, ..look.secondary });
-    let album = text(album).size(12).color(look.secondary).wrapping(text::Wrapping::None);
-    row![
-        container(artist).width(Length::FillPortion(55)).clip(true),
-        dot,
-        container(album).width(Length::FillPortion(45)).clip(true),
-    ]
-    .spacing(4.0)
-    .align_y(Alignment::Center)
-    .into()
+    let line = responsive(move |space| {
+        let natural = |value: &str| folia_visualizer::measure(value, 12.0, iced::Font::DEFAULT, f32::INFINITY).width;
+        let dot_w = natural("•").ceil() + 8.0;
+        let album_w = natural(album).ceil().min(space.width * 0.45);
+        let artist_w = natural(artist).ceil().min((space.width - album_w - dot_w).max(0.0));
+        let dot = text("•").size(12).color(Color { a: look.secondary.a * 0.4, ..look.secondary });
+        row![
+            container(meta_text(artist, look.secondary)).width(Length::Fixed(artist_w)).clip(true),
+            dot,
+            container(meta_text(album, look.secondary)).width(Length::Fixed(album_w)).clip(true),
+        ]
+        .spacing(4.0)
+        .align_y(Alignment::Center)
+        .into()
+    });
+    container(line).width(Length::Fill).height(Length::Fixed(16.0)).into()
+}
+
+fn meta_text<'a>(value: &'a str, color: Color) -> iced::widget::Text<'a> {
+    text(value).size(12).color(color).wrapping(text::Wrapping::None)
 }
 
 fn duration_text<'a, M: 'a>(track: &Track, ink: Color) -> Element<'a, M> {
