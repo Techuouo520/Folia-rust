@@ -14,7 +14,7 @@ pub use preview::{
 pub use registry::Style;
 pub use tuning::{Group, Item, Manifest, Values};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use folia_core::{AudioFrame, Line, Lyrics, Rgb, Theme};
@@ -55,6 +55,9 @@ pub struct Scene<'a> {
     pub audio: &'a AudioFrame,
 }
 
+/// Draws between fresh Monet text atlases: one minute at 60 fps.
+const MONET_ATLAS_FRAMES: u32 = 3600;
+
 /// Per-widget state: measured line layouts survive between frames.
 #[derive(Default)]
 pub struct SceneState {
@@ -65,6 +68,8 @@ pub struct SceneState {
     tilt: RefCell<LayoutCache<styles::tilt::TiltLayout>>,
     lumiere: RefCell<styles::lumiere::Cache>,
     monet: RefCell<styles::monet::Cache>,
+    monet_ink: RefCell<canvas::Cache>,
+    monet_draws: Cell<u32>,
     still: styles::still::StillCache,
 }
 
@@ -126,9 +131,26 @@ impl Scene<'_> {
         (size, Place { offset, scale })
     }
 
+    /// Monet's springing text sizes churn glyphs. Its own cache keeps them in a text atlas apart from the UI's, and a
+    /// fresh cache every `MONET_ATLAS_FRAMES` draws drops that atlas before it fragments up to the size limit.
+    fn monet_geometry(&self, state: &SceneState, renderer: &Renderer, target: Size) -> Geometry {
+        let draws = state.monet_draws.get().wrapping_add(1);
+        state.monet_draws.set(draws);
+        let mut ink = state.monet_ink.borrow_mut();
+        if draws.is_multiple_of(MONET_ATLAS_FRAMES) {
+            *ink = canvas::Cache::new();
+        } else {
+            ink.clear();
+        }
+        ink.draw(renderer, target, |frame| self.paint(state, frame, target))
+    }
+
     pub(crate) fn render(&self, state: &SceneState, renderer: &Renderer, target: Size) -> Vec<Geometry> {
         if self.style == Style::Still {
             return vec![styles::still::draw(self, state, renderer, target)];
+        }
+        if self.style == Style::Monet {
+            return vec![self.monet_geometry(state, renderer, target)];
         }
         let mut frame = Frame::new(renderer, target);
         self.paint(state, &mut frame, target);

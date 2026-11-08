@@ -652,7 +652,7 @@ struct Paint<'a> {
 impl Paint<'_> {
     fn line(&self, frame: &mut Frame, visual: &Visual, measured: &Measured) {
         let Some(line) = self.ctx.lines.get(visual.index) else { return };
-        let scale = visual.scale;
+        let scale = snap_scale(self.ctx.lyric_px, visual.scale);
         let opacity = visual.opacity * self.alpha;
         if opacity <= 0.002 {
             return;
@@ -944,4 +944,13 @@ fn clip_to(rect: Rectangle, bounds: Rectangle) -> Rectangle {
 /// Whether `at` is over the rail, where the wheel pages the lyrics.
 pub fn over(layout: &Layout, at: Point) -> bool {
     layout.rail.contains(at)
+}
+
+/// A line's scale with its font size on a quarter-pixel grid, so a spring reuses glyph sizes instead of minting new
+/// ones every frame.
+fn snap_scale(px: f32, scale: f32) -> f32 {
+    if px <= 0.0 {
+        return scale;
+    }
+    (px * scale * 4.0).round() / 4.0 / px
 }
