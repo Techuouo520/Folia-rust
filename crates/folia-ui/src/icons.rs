@@ -19,6 +19,8 @@ pub enum Variant {
     FilledPause,
     /// The saved star (`.bravais-seam-star.is-on svg { fill: currentColor }`).
     FilledStar,
+    /// `LikeButton`: a liked heart is `fill="currentColor"`.
+    FilledHeart,
     /// `strokeWidth={2.4}`.
     BoldChevronLeft,
     BoldChevronRight,
@@ -30,6 +32,8 @@ static FILLED_PAUSE: LazyLock<svg::Handle> =
     LazyLock::new(|| patched(Icon::Pause, "fill=\"none\"", "fill=\"currentColor\""));
 static FILLED_STAR: LazyLock<svg::Handle> =
     LazyLock::new(|| patched(Icon::Star, "fill=\"none\"", "fill=\"currentColor\""));
+static FILLED_HEART: LazyLock<svg::Handle> =
+    LazyLock::new(|| patched(Icon::Heart, "fill=\"none\"", "fill=\"currentColor\""));
 static BOLD_CHEVRON_LEFT: LazyLock<svg::Handle> =
     LazyLock::new(|| patched(Icon::ChevronLeft, "stroke-width=\"2\"", "stroke-width=\"2.4\""));
 static BOLD_CHEVRON_RIGHT: LazyLock<svg::Handle> =
@@ -40,6 +44,7 @@ pub fn variant<'a, M: 'a>(variant: Variant, size: f32, color: Color) -> Element<
         Variant::FilledPlay => &FILLED_PLAY,
         Variant::FilledPause => &FILLED_PAUSE,
         Variant::FilledStar => &FILLED_STAR,
+        Variant::FilledHeart => &FILLED_HEART,
         Variant::BoldChevronLeft => &BOLD_CHEVRON_LEFT,
         Variant::BoldChevronRight => &BOLD_CHEVRON_RIGHT,
     };

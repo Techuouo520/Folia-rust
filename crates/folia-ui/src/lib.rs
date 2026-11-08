@@ -7,6 +7,7 @@ mod chrome;
 mod cover_flight;
 mod design_size;
 mod drag_capture;
+mod equalizer_dialog;
 mod float_layer;
 mod focus_card;
 mod fonts;
@@ -30,6 +31,7 @@ mod platform_rows;
 mod playback;
 mod playback_navigation;
 mod player_bar;
+mod playlist_dialog;
 mod positioner;
 mod poster;
 mod poster_motion;
@@ -51,6 +53,7 @@ mod wall_shift;
 mod workbench;
 
 pub use background::{error_chain, format_time};
+pub use equalizer_dialog::{Look as EqualizerLook, view as equalizer_view};
 pub use focus_card::{Direction as CardDirection, Key as CardKey};
 pub use home::title::seam_title_activates;
 pub use home::{HELP_LIST, HelpRow, WallKey, default_level_is_spine, seam_safe_bottom, wall_key_of};
@@ -61,12 +64,13 @@ pub use overlay::{
     glow_ellipse, row_gap, subtitle_at, subtitle_bottom, subtitle_line_width, translation_px, upcoming_look,
     upcoming_px,
 };
-pub use panel::PlayerPanel;
+pub use panel::{LikeLook, Message as PanelMessage, PlayerPanel, Room as PanelRoom, View as PanelView, like_look};
 pub use platform_highlight::ProviderHighlight;
 pub use platform_rows::{ProviderRowStatus, order_provider_rows};
 pub use playback_navigation::PlaybackNavigation;
 /// The floating capsule. `shown` is its 0.26s ease-out hide, shared by opacity, offset and scale.
 pub use player_bar::{CapsuleBox, PlayerBar, capsule_box};
+pub use playlist_dialog::{Dialog as PlaylistDialog, Look as PlaylistLook, Message as PlaylistMessage, PlaylistChoice};
 pub use search_results::format_duration;
 pub use settings_kit::{Faded, Tokens, panel_glass, quick_tile_fill, tools_glass};
 pub use smooth_scroll::{LINE_PX, PROGRAM_EASE, PROGRAM_MS, Scroll, WHEEL_EASE, WHEEL_MS};
@@ -182,6 +186,8 @@ pub enum Message {
     SplashFrame,
     Home(home::Message),
     Panel(panel::Message),
+    /// The playlist picker over the window.
+    Playlists(playlist_dialog::Message),
     /// One of the sheets the panel opens over the window.
     Sheets(panel_sheets::Message),
     /// The local playlists after a write, or the write's failure.
@@ -261,6 +267,7 @@ pub struct Shell {
     /// The database the playlists live in; writes open it off the UI thread.
     db_path: PathBuf,
     sheets: panel_sheets::Sheets,
+    add_to_playlist: playlist_dialog::Dialog,
     /// The panel's data as the last update left it: the picker rows, the style's quick controls and the reasons a
     /// heart or star is out of reach. `view` borrows these, so they must outlive the frame.
     panel_choices: Vec<panel::PlaylistChoice>,
@@ -355,6 +362,7 @@ impl Shell {
             playlists: Vec::new(),
             db_path: db_path.clone(),
             sheets: panel_sheets::Sheets::default(),
+            add_to_playlist: playlist_dialog::Dialog::default(),
             panel_choices: Vec::new(),
             panel_quick: Vec::new(),
             panel_like_reason: None,
@@ -596,6 +604,8 @@ impl Shell {
         let seam = self.library.seam();
         self.home.sync_tab(self.home.is_hidden() || seam.collapsed, now);
         self.login.sync(&self.library.online);
+        let liked = self.song_liked();
+        self.panel.sync_like(liked, now);
         self.library.set_tab_chrome(&mut self.home, now);
         self.library.sync_hint(&self.i18n, now);
         self.bar.set_forced(self.positioning.is_some());
@@ -905,6 +915,22 @@ impl Shell {
                 let task = self.panel(message);
                 Task::batch([task, self.ensure_art()])
             }
+            Message::Playlists(message) => {
+                let prompt = matches!(&message, playlist_dialog::Message::Create);
+                let task = match self.add_to_playlist.update(message) {
+                    playlist_dialog::Event::None => Task::none(),
+                    playlist_dialog::Event::Pick(index) => self.add_to_playlist(index),
+                    playlist_dialog::Event::Create(name) => self.create_playlist(name),
+                };
+                if prompt {
+                    Task::batch([
+                        task,
+                        iced::widget::operation::focus(iced::widget::Id::new(playlist_dialog::NAME_INPUT)),
+                    ])
+                } else {
+                    task
+                }
+            }
             Message::Sheets(message) => {
                 let event = self.sheets.update(message, &self.audio_settings.equalizer);
                 self.sheet_event(event)
@@ -1013,6 +1039,9 @@ impl Shell {
             Message::PlayerEscape => {
                 if self.sheets.any_open() {
                     self.sheets.close_all();
+                    Task::none()
+                } else if self.add_to_playlist.is_open() {
+                    self.add_to_playlist.close();
                     Task::none()
                 } else if self.fullscreen {
                     self.toggle_fullscreen()
@@ -1493,15 +1522,9 @@ impl Shell {
             let (quality_levels, quality) = self.audio_quality();
             let style = self.style();
             let quick = &self.panel_quick;
-            let choices = &self.panel_choices;
             let like_reason = self.panel_like_reason.as_deref();
             let add_reason = self.panel_add_reason.as_deref();
             let can_match = self.omni.is_some() && self.playback.current().is_some_and(|track| track.online.is_some());
-            let can_create_playlist = match self.playback.current() {
-                Some(track) if track.online.is_none() => track.id > 0,
-                Some(track) => track.online.as_ref().is_some_and(|online| self.can_create_playlist(&online.provider)),
-                None => false,
-            };
             let panel_view = panel::View {
                 i18n: &self.i18n,
                 theme: &self.theme,
@@ -1533,10 +1556,8 @@ impl Shell {
                 audio: &self.audio,
                 liked: self.song_liked(),
                 like_disabled: like_reason,
-                playlists: choices,
                 can_add: self.can_add_song(),
                 add_disabled: add_reason,
-                can_create_playlist,
                 quick,
                 theme_source: self.theme_settings.source,
                 has_custom_theme: self.theme_settings.custom_dual_theme.is_some(),
@@ -1561,6 +1582,21 @@ impl Shell {
                     && self.playback.queue.items().iter().all(|track| track.online.is_none() && track.id > 0),
             };
             frame = frame.push(self.panel.view(panel_view, std::time::Instant::now()).map(Message::Panel));
+        }
+        let can_create = match self.playback.current() {
+            Some(track) if track.online.is_none() => track.id > 0,
+            Some(track) => track.online.as_ref().is_some_and(|online| self.can_create_playlist(&online.provider)),
+            None => false,
+        };
+        if let Some(dialog) = self.add_to_playlist.view(playlist_dialog::Look {
+            i18n: &self.i18n,
+            tokens: settings_kit::Tokens::new(&self.theme, daylight),
+            daylight,
+            window: self.window_size,
+            playlists: &self.panel_choices,
+            can_create,
+        }) {
+            frame = frame.push(dialog.map(Message::Playlists));
         }
         if let Some(window) = &self.workbench {
             let style = self.style();
@@ -1712,6 +1748,7 @@ impl Shell {
             || self.workbench.is_some()
             || self.login.is_open()
             || self.sheets.any_open()
+            || self.add_to_playlist.is_open()
             || self.timeline.is_open()
     }
 
@@ -2303,8 +2340,10 @@ impl Shell {
                 self.playback.update(playback::Message::Quality(level), &self.store).map(Message::Playback)
             }
             panel::Effect::Like => self.toggle_like(),
-            panel::Effect::PlaylistPick(index) => self.add_to_playlist(index),
-            panel::Effect::CreatePlaylist(name) => self.create_playlist(name),
+            panel::Effect::AddToPlaylist => {
+                self.add_to_playlist.open();
+                Task::none()
+            }
             panel::Effect::CopySongInfo => self.copy_song_info(),
             panel::Effect::Quick(key) => self.apply_quick(key),
             panel::Effect::Reroll => self.reroll_style(),
@@ -2433,9 +2472,7 @@ impl Shell {
                     local: None,
                     online: Some((collection.provider.clone(), collection.id.clone())),
                     name: collection.name.clone(),
-                    detail: self
-                        .i18n
-                        .format("playlist.tracks", &[("count", &collection.track_count.unwrap_or(0).to_string())]),
+                    detail: format!("{} {}", collection.track_count.unwrap_or(0), self.i18n.t("playlist.tracks")),
                 })
                 .collect();
         }
@@ -2445,7 +2482,7 @@ impl Shell {
                 local: Some(playlist.id),
                 online: None,
                 name: playlist.name.clone(),
-                detail: self.i18n.format("playlist.tracks", &[("count", &playlist.song_ids.len().to_string())]),
+                detail: format!("{} {}", playlist.song_ids.len(), self.i18n.t("playlist.tracks")),
             })
             .collect()
     }
