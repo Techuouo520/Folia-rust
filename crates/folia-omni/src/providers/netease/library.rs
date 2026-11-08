@@ -80,15 +80,16 @@ pub async fn set_subscribed(client: &Client, collection: &Collection, subscribed
 }
 
 /// `mutations`: the heart, the liked ids and the songs of the account's own playlists.
+/// The `like` module of the reference API: `/api/radio/like`.
 pub async fn like_song(client: &Client, song: &str, liked: bool) -> Result<(), OmniError> {
-    let params = object(json!({ "trackId": digits(song)?, "like": liked, "alg": "itembased", "time": 3 }));
-    let answer = client.post("/api/song/like", params).await?;
+    let params = object(json!({ "alg": "itembased", "trackId": digits(song)?, "like": liked, "time": "3" }));
+    let answer = client.post("/api/radio/like", params).await?;
     eapi::check(&answer.body)
 }
 
-/// `getLikedSongIds`: `/api/song/like/list` for the account's liked ids.
+/// `getLikedSongIds`, the `likelist` module of the reference API: `/api/song/like/get`.
 pub async fn liked_song_ids(client: &Client, user: &str) -> Result<Vec<String>, OmniError> {
-    let answer = client.post("/api/song/like/list", object(json!({ "uid": user }))).await?;
+    let answer = client.post("/api/song/like/get", object(json!({ "uid": user }))).await?;
     eapi::check(&answer.body)?;
     Ok(answer
         .body
@@ -109,15 +110,27 @@ pub async fn update_playlist_tracks(
     tracks: &[String],
     add: bool,
 ) -> Result<(), OmniError> {
-    let ids: Vec<u64> = tracks.iter().filter_map(|track| digits(track).ok()?.parse().ok()).collect();
+    let ids: Vec<&str> = tracks.iter().filter_map(|track| digits(track).ok()).collect();
+    let pid = digits(playlist)?;
+    let answer = manipulate_tracks(client, pid, add, &ids).await?;
+    // The reference API sends the ids twice when the platform answers 512.
+    if eapi::code_of(&answer.body) == 512 {
+        let twice: Vec<&str> = ids.iter().chain(ids.iter()).copied().collect();
+        let retry = manipulate_tracks(client, pid, add, &twice).await?;
+        return eapi::check(&retry.body);
+    }
+    eapi::check(&answer.body)
+}
+
+/// `playlist_tracks`: `trackIds` is a JSON array of id strings.
+async fn manipulate_tracks(client: &Client, pid: &str, add: bool, ids: &[&str]) -> Result<eapi::Answer, OmniError> {
     let params = object(json!({
         "op": if add { "add" } else { "del" },
-        "pid": digits(playlist)?,
-        "trackIds": Value::Array(ids.into_iter().map(|id| json!(id)).collect()).to_string(),
+        "pid": pid,
+        "trackIds": json!(ids).to_string(),
         "imme": "true",
     }));
-    let answer = client.post("/api/playlist/manipulate/tracks", params).await?;
-    eapi::check(&answer.body)
+    client.post("/api/playlist/manipulate/tracks", params).await
 }
 
 /// `playlist_track_all`: the playlist's ids, then their songs in batches, in the playlist's order.

@@ -2547,7 +2547,8 @@ impl Shell {
                 return self.status(false, reason);
             }
             let liked = !self.library.online.is_liked(&online.provider, &online.id);
-            let _ = self.library.online.ensure_liked();
+            let load =
+                self.library.online.ensure_liked().map(|message| Message::Library(library::Message::Online(message)));
             let fallback = self.library.online.provider();
             let provider = self
                 .library
@@ -2556,11 +2557,12 @@ impl Shell {
                 .into_iter()
                 .find(|platform| platform.id == online.provider)
                 .map_or(fallback, |platform| platform.id);
-            return self
+            let press = self
                 .library
                 .online
                 .press_like(provider, online.id, liked)
                 .map(|message| Message::Library(library::Message::Online(message)));
+            return Task::batch([load, press]);
         }
         let Some(id) = self.local_track() else { return Task::none() };
         let favorite = !self.favorite_ids().contains(&id);

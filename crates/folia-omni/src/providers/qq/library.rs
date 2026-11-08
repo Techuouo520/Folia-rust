@@ -516,17 +516,34 @@ pub async fn like_song(client: &Client, song: &str, liked: bool) -> Result<(), O
     client.android("music.musicasset.PlaylistDetailWrite", method, param).await.map(|_| ())
 }
 
-/// The account's liked song ids: `CgiGetDiss` of directory 201.
+/// The account's liked song ids: `CgiGetDiss` of directory 201, 100 a page up to 10000 like the original's
+/// `getLikedSongIds` (qq-music-api caps a page at 100).
 pub async fn liked_song_ids(client: &Client) -> Result<Vec<String>, OmniError> {
-    let param = json!({
-        "disstid": 0, "dirid": 201, "tag": true, "song_begin": 0, "song_num": 100000,
-        "userinfo": true, "orderlist": true, "enc_host_uin": "",
-    });
-    let data = client.android("music.srfDissInfo.DissInfo", "CgiGetDiss", param).await?;
-    Ok(super::tracks(data.get("songlist"))
-        .into_iter()
-        .filter_map(|track| track.online.map(|online| online.id))
-        .collect())
+    const PAGE: u64 = 100;
+    const LIMIT: u64 = 10_000;
+    let mut ids = Vec::new();
+    let mut begin = 0;
+    while begin < LIMIT {
+        let param = json!({
+            "disstid": 0, "dirid": 201, "tag": true, "song_begin": begin, "song_num": PAGE,
+            "userinfo": true, "orderlist": true, "enc_host_uin": "",
+        });
+        let data = client.android("music.srfDissInfo.DissInfo", "CgiGetDiss", param).await?;
+        let Some(rows) = data.get("songlist") else {
+            return Err(OmniError::Response("QQ liked songs are missing".to_owned()));
+        };
+        let page: Vec<String> =
+            super::tracks(Some(rows)).into_iter().filter_map(|track| track.online.map(|online| online.id)).collect();
+        let count = page.len() as u64;
+        ids.extend(page);
+        let total = data.get("total_song_num").and_then(Value::as_u64);
+        let more = data.get("hasmore").is_some_and(|more| more.as_bool() == Some(true) || more.as_i64() == Some(1));
+        begin += count;
+        if count == 0 || (!more && total.is_none_or(|total| begin >= total)) {
+            break;
+        }
+    }
+    Ok(ids)
 }
 
 /// `updatePlaylistTracks`: `PlaylistDetailWrite`, a song list of numeric ids.
@@ -536,8 +553,7 @@ pub async fn update_playlist_tracks(
     songs: &[String],
     add: bool,
 ) -> Result<(), OmniError> {
-    let id = playlist.strip_prefix("dir-").unwrap_or(playlist);
-    let dir: u64 = id.parse().map_err(|_| OmniError::Response(format!("not a QQ playlist id: {playlist}")))?;
+    let dir = owned_dir_id(client, playlist).await?;
     let infos: Vec<Value> = songs
         .iter()
         .filter_map(|song| song.split('-').nth(1).and_then(|id| id.parse::<u64>().ok()))
@@ -547,8 +563,33 @@ pub async fn update_playlist_tracks(
         return Ok(());
     }
     let method = if add { "AddSonglist" } else { "DelSonglist" };
-    let param = json!({ "dirId": dir, "tid": dir, "bFmtUtf8": true, "v_songInfo": infos });
+    let param = json!({ "dirId": dir, "v_songInfo": infos });
     client.android("music.musicasset.PlaylistDetailWrite", method, param).await.map(|_| ())
+}
+
+/// The write target of an own playlist, as qq-music-api `playlistTracks` finds it: the collection id is the `tid`,
+/// and the `dirId` comes from `GetPlaylistByUin`. Only ordinary directories (`dirId` 1–199, no type) take writes.
+async fn owned_dir_id(client: &Client, playlist: &str) -> Result<u64, OmniError> {
+    if let Some(dir) = playlist.strip_prefix(DIR_PREFIX) {
+        return dir.parse().map_err(|_| OmniError::Response(format!("not a QQ playlist id: {playlist}")));
+    }
+    let credential = client.credential().ok_or(OmniError::SignedOut)?;
+    let created = client
+        .android("music.musicasset.PlaylistBaseRead", "GetPlaylistByUin", json!({ "uin": credential.musicid }))
+        .await?;
+    let entry = created
+        .get("v_playlist")
+        .and_then(Value::as_array)
+        .and_then(|rows| {
+            rows.iter().find(|row| row.get("tid").and_then(super::musicu::identifier).as_deref() == Some(playlist))
+        })
+        .ok_or_else(|| OmniError::Response(format!("QQ playlist {playlist} is not one of the account's own")))?;
+    let dir = entry.get("dirId").and_then(Value::as_u64).unwrap_or(0);
+    let ordinary = entry.get("dirType").is_none_or(|kind| kind.as_i64() == Some(0));
+    if dir == 0 || dir >= 200 || !ordinary {
+        return Err(OmniError::Response(format!("QQ playlist {playlist} does not take track writes")));
+    }
+    Ok(dir)
 }
 
 /// `mutations.createPlaylist`: `PlaylistBaseWrite/AddPlaylist`.

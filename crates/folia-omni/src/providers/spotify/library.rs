@@ -241,7 +241,7 @@ pub async fn lyrics(client: &Client, id: &str) -> Result<Option<ProviderLyrics>,
 pub async fn like_song(client: &Client, song: &str, liked: bool) -> Result<(), OmniError> {
     let uri = format!("spotify:track:{song}");
     let name = if liked { "addToLibrary" } else { "removeFromLibrary" };
-    client.change(name, json!({ "uris": [uri] })).await
+    client.change(name, json!({ "libraryItemUris": [uri] })).await
 }
 
 /// `getLikedSongIds`: every page of the liked songs.
@@ -267,36 +267,54 @@ pub async fn liked_song_ids(client: &Client) -> Result<Vec<String>, OmniError> {
     Ok(ids)
 }
 
-/// `mutations.updatePlaylistTracks` with `add`: `addToPlaylist` takes the playlist's uri and the track uris.
+/// `playlist_edit` with `add` (`spotifyApiBridge.cjs`): songs the playlist already holds are skipped, 100 a change.
 pub async fn add_to_playlist(client: &Client, playlist: &str, songs: &[String]) -> Result<(), OmniError> {
-    let uris: Vec<String> = songs.iter().map(|song| format!("spotify:track:{song}")).collect();
-    client
-        .change(
-            "addToPlaylist",
-            json!({
-                "playlistUri": format!("spotify:playlist:{playlist}"),
-                "uris": uris,
-                "newPosition": { "move": false, "fromUid": null },
-            }),
-        )
-        .await
+    let uri = format!("spotify:playlist:{playlist}");
+    let held: std::collections::HashSet<String> = playlist_detail(client, playlist)
+        .await?
+        .tracks
+        .into_iter()
+        .filter_map(|track| track.online.map(|online| format!("spotify:track:{}", online.id)))
+        .collect();
+    let mut fresh: Vec<String> = Vec::new();
+    for song in songs {
+        let song = format!("spotify:track:{song}");
+        if !held.contains(&song) && !fresh.contains(&song) {
+            fresh.push(song);
+        }
+    }
+    for chunk in fresh.chunks(100) {
+        let variables = json!({
+            "playlistItemUris": chunk,
+            "playlistUri": uri,
+            "newPosition": { "moveType": "BOTTOM_OF_PLAYLIST", "fromUid": null },
+        });
+        client.change("addToPlaylist", variables).await?;
+    }
+    Ok(())
 }
 
-/// `mutations.createPlaylist`: `POST /v1/me/playlists` with the account's token.
+/// `playlist_create`: spclient makes the playlist, then `addItemsToRootlist` puts it in the account's library.
 pub async fn create_playlist(client: &Client, name: &str) -> Result<Collection, OmniError> {
-    let body = json!({ "name": name, "public": false });
-    let answer = client.call("https://api.spotify.com/v1/me/playlists", Some(body), None, &[]).await?;
-    let answer = answer.unwrap_or(Value::Null);
-    let id = answer
-        .get("id")
+    let name = name.trim();
+    let body = json!({
+        "ops": [{ "kind": "UPDATE_LIST_ATTRIBUTES", "updateListAttributes": { "newAttributes": { "values": { "name": name } } } }]
+    });
+    let made = client.call(&format!("{SPCLIENT_URL}/playlist/v2/playlist?format=json"), Some(body), None, &[]).await?;
+    let uri = made
+        .as_ref()
+        .and_then(|made| made.get("uri"))
         .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-        .ok_or_else(|| OmniError::Response("Spotify did not name the new playlist".to_owned()))?;
+        .filter(|uri| uri.starts_with("spotify:playlist:"))
+        .ok_or_else(|| OmniError::Response("Spotify did not name the new playlist".to_owned()))?
+        .to_owned();
+    client.change("addItemsToRootlist", json!({ "uris": [uri] })).await?;
+    let id = uri.trim_start_matches("spotify:playlist:").to_owned();
     Ok(Collection {
         provider: super::ID.to_owned(),
-        id: id.to_owned(),
+        id,
         kind: CollectionKind::Playlist,
-        name: answer.get("name").and_then(Value::as_str).unwrap_or(name).to_owned(),
+        name: name.to_owned(),
         cover_url: None,
         track_count: Some(0),
         creator: None,
