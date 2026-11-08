@@ -487,9 +487,10 @@ impl Timeline {
             .size(24)
             .font(crate::typeface::font(iced::font::Weight::Bold))
             .color(header_text);
-        let close = button(icon(Icon::X, 24.0, close_ink))
-            .width(Length::Fixed(32.0))
-            .height(Length::Fixed(32.0))
+        // `p-2` around a 24px X: a 40px circle.
+        let close = button(container(icon(Icon::X, 24.0, close_ink)).center(Length::Fill))
+            .width(Length::Fixed(40.0))
+            .height(Length::Fixed(40.0))
             .padding(0)
             .on_press(Message::Close)
             .style(move |_, status| button::Style {
@@ -500,7 +501,7 @@ impl Timeline {
                         Color { a: 0.1 * shown, ..Color::WHITE }
                     }),
                 ),
-                border: Border { radius: 16.0.into(), ..Border::default() },
+                border: Border { radius: 20.0.into(), ..Border::default() },
                 ..button::Style::default()
             });
         let head =

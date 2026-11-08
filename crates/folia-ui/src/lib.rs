@@ -15,6 +15,7 @@ mod icons;
 mod library;
 mod login;
 mod lots;
+mod measured;
 mod mode_picker;
 mod motion;
 mod now_playing;

@@ -71,6 +71,8 @@ pub enum Message {
     Close,
     Choose(Tab),
     Frame,
+    /// A tab body's measured height.
+    Measured(Tab, f32),
     /// A click on the panel's face away from its controls.
     FacePress,
     HandleHover(bool),
@@ -205,6 +207,36 @@ pub struct PlayerPanel {
     save_queue: Option<String>,
     /// A modal covers the window: handle hover does not retarget, and floats stay in the normal stack.
     modal: bool,
+    /// Measured body heights of the source, controls and quality tabs (`useMeasuredSize`); 0 until laid out.
+    bodies: Bodies,
+}
+
+/// The body heights `measured` reported, so a tab's panel fits its content instead of an estimate.
+#[derive(Debug, Clone, Copy, Default)]
+struct Bodies {
+    source: f32,
+    controls: f32,
+    quality: f32,
+}
+
+impl Bodies {
+    fn get(self, tab: Tab) -> f32 {
+        match tab {
+            Tab::Source => self.source,
+            Tab::Controls => self.controls,
+            Tab::Quality => self.quality,
+            Tab::Cover | Tab::Queue => 0.0,
+        }
+    }
+
+    fn set(&mut self, tab: Tab, height: f32) {
+        match tab {
+            Tab::Source => self.source = height,
+            Tab::Controls => self.controls = height,
+            Tab::Quality => self.quality = height,
+            Tab::Cover | Tab::Queue => {}
+        }
+    }
 }
 
 /// `AddToPlaylistHost`'s picker and its new-playlist prompt.
@@ -400,6 +432,7 @@ impl PlayerPanel {
             quality: quality_select::Select::new(now),
             playlists: PlaylistPicker::default(),
             pool_open: false,
+            bodies: Bodies::default(),
             save_queue: None,
             modal: false,
         }
@@ -631,6 +664,10 @@ impl PlayerPanel {
                 Effect::None
             }
             Message::Shuffle => Effect::Shuffle,
+            Message::Measured(tab, height) => {
+                self.bodies.set(*tab, *height);
+                Effect::None
+            }
             Message::Frame => {
                 if self.open && self.tab == Tab::Queue {
                     let task = self.queue.frame(room.queue, room.index, list_h, now);
@@ -816,8 +853,8 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     let inner = (panel_w - 24.0).max(96.0);
     let max_h = (view.height - under - view.bottom - TOP_MARGIN).max(220.0);
     // The header and body heights move with the fold, between the cover tab and the last other tab.
-    let (big_h, _, cover_px) = measure(Tab::Cover, view.queue.len(), view.account.is_some(), inner, max_h);
-    let body_of = |tab| measure(tab, view.queue.len(), view.account.is_some(), inner, max_h).1;
+    let (big_h, _, cover_px) = measure(Tab::Cover, view.queue.len(), view.account.is_some(), inner, max_h, 0.0);
+    let body_of = |tab| measure(tab, view.queue.len(), view.account.is_some(), inner, max_h, panel.bodies.get(tab)).1;
     let (from_body, to_body) = (body_of(panel.body_from), body_of(panel.body_tab));
     let full_body = from_body + (to_body - from_body) * panel.grow.value(now);
     let fold =
@@ -956,6 +993,11 @@ fn face_column<'a>(view: View<'a>, tokens: Faded, column: Column, rows: Rows<'a>
     } else {
         let page_ink = Color { a: ink.a * switch.page, ..ink };
         let page = tab_body(view, tokens.faded(switch.page), tab, page_ink, rows);
+        let page = if matches!(tab, Tab::Source | Tab::Controls | Tab::Quality) {
+            crate::measured::measured(page, rows.0.bodies.get(tab), move |height| Message::Measured(tab, height))
+        } else {
+            page
+        };
         container(page).padding(pad(6.0 * (1.0 - switch.page), 0.0, 0.0, 0.0)).into()
     };
     let body: Element<'a, Message> = if body_h < 0.5 {
@@ -2196,7 +2238,8 @@ fn shown_tab(tab: Tab, local: bool, online: bool) -> Tab {
     if tab == Tab::Source && !local && !online { Tab::Cover } else { tab }
 }
 
-fn measure(tab: Tab, queue_len: usize, signed: bool, inner: f32, max_h: f32) -> (f32, f32, f32) {
+/// `measured` is the tab body's laid-out height; 0 falls back to the estimate below.
+fn measure(tab: Tab, queue_len: usize, signed: bool, inner: f32, max_h: f32, measured: f32) -> (f32, f32, f32) {
     let under = 14.0 + 26.0 + 20.0 + 18.0 + 14.0 + 32.0;
     let room = (max_h - 24.0 - 12.0 - 36.0).max(under + 96.0);
     let cover_px = (room - under).clamp(96.0, inner);
@@ -2204,6 +2247,7 @@ fn measure(tab: Tab, queue_len: usize, signed: bool, inner: f32, max_h: f32) -> 
         return (cover_px + under, 0.0, cover_px);
     }
     let body = match tab {
+        _ if measured > 0.0 => measured,
         Tab::Controls => 460.0,
         Tab::Queue => 36.0 + queue_island::list_height(queue_len),
         Tab::Source => 210.0,
@@ -2229,7 +2273,7 @@ fn queue_list_h(width: f32, height: f32, bottom: f32, chrome: bool, len: usize) 
     let panel_w = (width - 32.0).clamp(200.0, 360.0);
     let inner = (panel_w - 24.0).max(96.0);
     let max_h = (height - under - bottom - TOP_MARGIN).max(220.0);
-    let (_, body, _) = measure(Tab::Queue, len, false, inner, max_h);
+    let (_, body, _) = measure(Tab::Queue, len, false, inner, max_h, 0.0);
     queue_island::list_height(len).min((body - 21.0 - 36.0).max(0.0))
 }
 

@@ -22,7 +22,7 @@ use iced::{
 use lucide_static_svg::Icon;
 
 use crate::fonts;
-use crate::icons::{Variant, icon, variant};
+use crate::icons::{Variant, variant};
 use crate::settings_kit::{self as kit, Choice, Group, Row, Tokens};
 use crate::smooth_scroll::{self, Scroll};
 
@@ -599,16 +599,10 @@ impl Workbench {
     }
 
     fn header<'a>(&'a self, i18n: &'a I18n, tokens: Tokens) -> Element<'a, crate::Message> {
-        let back = button(icon(Icon::ChevronLeft, 18.0, tokens.t2))
-            .width(32)
-            .height(32)
-            .padding(0)
-            .on_press(crate::Message::Workbench(Message::Close))
-            .style(move |_, status| button::Style {
-                background: (status == button::Status::Hovered).then_some(IcedBackground::Color(tokens.fill)),
-                border: Border { radius: 8.0.into(), ..Border::default() },
-                ..button::Style::default()
-            });
+        // `StudioWindow` back: 32px, rounded 8, `--st-fill` and t1 on hover, with the back label.
+        let back = kit::icon_button(tokens, Icon::ChevronLeft, 18.0, crate::Message::Workbench(Message::Close));
+        let back =
+            tooltip(back, text(i18n.t("ui.back")).size(12), tooltip::Position::Bottom).style(container::rounded_box);
         let title = text(i18n.t("options.lyricsStyleSettings")).size(20).font(kit::SEMIBOLD).color(tokens.t1);
         container(row![back, title].spacing(8).align_y(Alignment::Center))
             .height(HEADER)

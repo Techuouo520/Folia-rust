@@ -249,6 +249,18 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for SmoothScroll<'_, Messag
     ) {
         self.content.as_widget_mut().operate(tree, layout, renderer, operation);
     }
+
+    // Tooltips and menus inside the list are overlays; without this they never open.
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        translation: iced::Vector,
+    ) -> Option<iced::advanced::overlay::Element<'b, Message, Theme, iced::Renderer>> {
+        self.content.as_widget_mut().overlay(tree, layout, renderer, viewport, translation)
+    }
 }
 
 impl<'a, Message: 'a> From<SmoothScroll<'a, Message>> for Element<'a, Message> {
