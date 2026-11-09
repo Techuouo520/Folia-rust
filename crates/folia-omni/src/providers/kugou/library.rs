@@ -402,7 +402,9 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
     for page in 1..=MAX_PAGES {
         let answer = playlist_page(client, id, page, MAX_PAGE).await?;
         let rows = list_of(&answer);
+        let before = songs.len();
         songs.extend(rows.iter().filter_map(track));
+        warn_unread(id, page, &answer, &rows, songs.len() - before);
         let total = number_of(data_of(&answer), &["total", "total_count", "count"]).filter(|t| *t > MAX_PAGE as f64);
         if rows.len() < MAX_PAGE as usize || total.is_some_and(|total| songs.len() as f64 >= total) {
             break;
@@ -412,6 +414,14 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
     let row = rows.iter().find(|row| {
         !is_album_row(row) && text_of(row, &["global_collection_id", "globalCollectionId"]).as_deref() == Some(id)
     });
+    // `get_other_list_file_nofilt` answers an empty `songs` for some of the account's own lists; the account's cloud
+    // list (`playlist_track_all_new`) still has them.
+    if songs.is_empty()
+        && let Some(listid) = row.and_then(|row| text_of(row, &["listid", "list_id"]))
+    {
+        songs = cloud_list_songs(client, &listid).await?;
+        tracing::info!(playlist = id, listid, songs = songs.len(), "kugou playlist read from the cloud list");
+    }
     let owner = match row {
         Some(row) => text_of(row, &["list_create_userid", "create_userid", "userid"]),
         None => playlist_info(client, id)
@@ -419,7 +429,52 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
             .ok()
             .and_then(|info| text_of(&info, &["list_create_userid", "create_userid"])),
     };
+    tracing::info!(playlist = id, songs = songs.len(), subscribed = row.is_some(), "kugou playlist read");
     Ok(CollectionDetail { tracks: songs, subscribed: Some(row.is_some()), owner, published: None })
+}
+
+/// `playlist_track_all_new`: every page of one of the account's lists by its list id.
+async fn cloud_list_songs(client: &Client, listid: &str) -> Result<Vec<Track>, OmniError> {
+    let mut songs = Vec::new();
+    for page in 1..=MAX_PAGES {
+        let answer = client
+            .call(|| {
+                let session = client.session();
+                let body = json!({
+                    "listid": listid,
+                    "userid": session.userid.clone().unwrap_or_else(|| "0".to_owned()),
+                    "area_code": 1,
+                    "show_relate_goods": 0,
+                    "pagesize": MAX_PAGE,
+                    "allplatform": 1,
+                    "show_cover": 1,
+                    "type": 0,
+                    "token": session.token.clone().unwrap_or_else(|| "0".to_owned()),
+                    "page": page,
+                });
+                Request::post("/v4/get_list_all_file", body).router("cloudlist.service.kugou.com")
+            })
+            .await?;
+        let rows = list_of(&answer);
+        let before = songs.len();
+        songs.extend(rows.iter().filter_map(track));
+        warn_unread(listid, page, &answer, &rows, songs.len() - before);
+        if rows.len() < MAX_PAGE as usize {
+            break;
+        }
+    }
+    Ok(songs)
+}
+
+// Records the shape of a page whose rows did not all become songs, so a user's log shows why a playlist is short.
+fn warn_unread(id: &str, page: u32, answer: &Value, rows: &[Value], read: usize) {
+    let keys = |value: &Value| value.as_object().map(|map| map.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+    if rows.is_empty() && page == 1 {
+        tracing::warn!(playlist = id, answer = ?keys(answer), data = ?keys(data_of(answer)), "kugou playlist page has no rows");
+    } else if let Some(row) = rows.iter().find(|row| track(row).is_none()) {
+        let dropped = rows.len() - read;
+        tracing::warn!(playlist = id, page, rows = rows.len(), dropped, row = ?keys(row), "kugou playlist rows without a hash");
+    }
 }
 
 /// `playlist_detail`: the list's own record.
