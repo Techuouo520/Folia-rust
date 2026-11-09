@@ -983,7 +983,7 @@ fn style_page<'a>(
         }
         page = page.push(kit::group(
             tokens,
-            Group { title: i18n.t(group.title_key).to_owned(), bare: false, rows },
+            Group { title: i18n.t(group.title_key).to_owned(), bare: false, rows, foot: None },
             index == 0,
         ));
         if let Some(foot) = group.foot_key {
@@ -1124,7 +1124,12 @@ fn background_page<'a>(
     column![
         kit::group(
             tokens,
-            Group { title: i18n.t("options.visualizerBackgroundMode").to_owned(), bare: false, rows: vec![mode] },
+            Group {
+                title: i18n.t("options.visualizerBackgroundMode").to_owned(),
+                bare: false,
+                rows: vec![mode],
+                foot: None
+            },
             true,
         ),
         kit::group(
@@ -1133,6 +1138,7 @@ fn background_page<'a>(
                 title: i18n.t("options.visualizerBackgroundModeCommon").to_owned(),
                 bare: false,
                 rows: vec![vignette],
+                foot: None,
             },
             false,
         ),
@@ -1238,7 +1244,7 @@ fn font_page<'a>(
     });
     let mut page = column![kit::group(
         tokens,
-        Group { title: i18n.t("options.previewCommonSettings").to_owned(), bare: true, rows },
+        Group { title: i18n.t("options.previewCommonSettings").to_owned(), bare: true, rows, foot: None },
         true,
     )];
     if let Some(key) = auto {
@@ -1514,12 +1520,17 @@ fn subtitle_page<'a>(
     column![
         kit::group(
             tokens,
-            Group { title: i18n.t("options.previewSubtitleSettings").to_owned(), bare: true, rows: subtitle_rows },
+            Group {
+                title: i18n.t("options.previewSubtitleSettings").to_owned(),
+                bare: true,
+                rows: subtitle_rows,
+                foot: None
+            },
             true,
         ),
         kit::group(
             tokens,
-            Group { title: i18n.t("options.subtitleFontFamily").to_owned(), bare: false, rows: font_rows },
+            Group { title: i18n.t("options.subtitleFontFamily").to_owned(), bare: false, rows: font_rows, foot: None },
             false,
         ),
     ]
@@ -1589,7 +1600,7 @@ fn global_page<'a>(i18n: &'a I18n, tokens: Tokens) -> Element<'a, crate::Message
     column![
         kit::group(
             tokens,
-            Group { title: i18n.t("options.smartBeat").to_owned(), bare: false, rows: vec![mode] },
+            Group { title: i18n.t("options.smartBeat").to_owned(), bare: false, rows: vec![mode], foot: None },
             true
         ),
         locked,

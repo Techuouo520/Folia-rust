@@ -1577,7 +1577,9 @@ version = "0.1.0"
 dependencies = [
  "directories",
  "folia-core",
+ "parking_lot",
  "serde",
+ "sysinfo",
  "thiserror 2.0.21",
  "toml",
  "tracing",

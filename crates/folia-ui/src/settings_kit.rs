@@ -264,11 +264,14 @@ pub struct Group<'a, M> {
     pub title: String,
     pub bare: bool,
     pub rows: Vec<Row<'a, M>>,
+    /// A smaller line under the card, as the original group's `foot`.
+    pub foot: Option<String>,
 }
 
 pub fn group<'a, M: 'a>(tokens: Tokens, group: Group<'a, M>, first: bool) -> Element<'a, M> {
+    let Group { title, bare, rows, foot } = group;
     let mut card = column![];
-    for (index, entry) in group.rows.into_iter().enumerate() {
+    for (index, entry) in rows.into_iter().enumerate() {
         if index > 0 {
             let inset = if entry.sub { 40.0 } else { 16.0 };
             card = card.push(container(fill_box(tokens.line).height(1)).padding(Padding::ZERO.left(inset)));
@@ -281,12 +284,17 @@ pub fn group<'a, M: 'a>(tokens: Tokens, group: Group<'a, M>, first: bool) -> Ele
         ..container::Style::default()
     });
     let mut body = column![space().height(if first { FIRST_GROUP_GAP } else { GROUP_GAP })];
-    if !group.bare {
-        let heading = text(group.title).size(13).line_height(px(20.0)).font(SEMIBOLD).color(tokens.t2);
+    if !bare {
+        let heading = text(title).size(13).line_height(px(20.0)).font(SEMIBOLD).color(tokens.t2);
         body = body.push(container(heading).height(24).align_y(Alignment::Center).padding([0, 4]));
         body = body.push(space().height(8));
     }
-    body.push(card).into()
+    body = body.push(card);
+    if let Some(foot) = foot {
+        let line = text(foot).size(12).line_height(px(18.0)).color(tokens.t3);
+        body = body.push(container(line).padding(Padding { top: 8.0, right: 4.0, bottom: 0.0, left: 4.0 }));
+    }
+    body.into()
 }
 
 fn row_view<'a, M: 'a>(tokens: Tokens, entry: Row<'a, M>) -> Element<'a, M> {
@@ -376,6 +384,29 @@ pub fn segmented<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     mark: Option<f32>,
     on_change: impl Fn(T) -> M,
 ) -> Element<'a, M> {
+    segmented_choices(tokens, options, value, mark, true, on_change)
+}
+
+/// The same strip, dimmed and not clickable when `enabled` is false (a mode with its file switched off).
+pub fn segmented_enabled<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
+    tokens: Tokens,
+    options: Vec<(T, String)>,
+    value: T,
+    mark: Option<f32>,
+    enabled: bool,
+    on_change: impl Fn(T) -> M,
+) -> Element<'a, M> {
+    segmented_choices(tokens, options, value, mark, enabled, on_change)
+}
+
+fn segmented_choices<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
+    tokens: Tokens,
+    options: Vec<(T, String)>,
+    value: T,
+    mark: Option<f32>,
+    enabled: bool,
+    on_change: impl Fn(T) -> M,
+) -> Element<'a, M> {
     let widths: Vec<f32> = options.iter().map(|(_, label)| label_width(label, 13.0) + 24.0).collect();
     let total: f32 = widths.iter().sum();
     let ground = fill_box(tokens.fill).width(total + 4.0).height(32).style(move |_| rounded(tokens.fill, 8.0));
@@ -397,12 +428,14 @@ pub fn segmented<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     let mut choices = row![].padding(2);
     for ((option, label), width) in options.into_iter().zip(widths) {
         let selected = option == value;
-        let label = container(text(label).size(13)).center_x(width).center_y(28);
+        let ink = if selected { tokens.t1 } else { tokens.t2 };
+        let ink = if enabled { ink } else { Color { a: ink.a * 0.4, ..ink } };
+        let label = container(text(label).size(13).color(ink)).center_x(width).center_y(28);
         let choice = button(label).padding(0).style(move |_, status| button::Style {
-            text_color: if selected || status == button::Status::Hovered { tokens.t1 } else { tokens.t2 },
+            text_color: if enabled && (selected || status == button::Status::Hovered) { tokens.t1 } else { ink },
             ..button::Style::default()
         });
-        choices = choices.push(if selected { choice } else { choice.on_press(on_change(option)) });
+        choices = choices.push(if selected || !enabled { choice } else { choice.on_press(on_change(option)) });
     }
     layers.push(choices).into()
 }
@@ -480,6 +513,29 @@ pub fn tabs<'a, M: Clone + 'a>(
 /// A plain value in a row's control slot.
 pub fn value<'a, M: 'a>(tokens: Tokens, content: String) -> Element<'a, M> {
     text(content).size(13).color(tokens.t2).into()
+}
+
+/// A shortcut as key caps (`kit/KeyCapture` `Keys`): 22px quiet caps joined by plus signs.
+pub fn keys<'a, M: 'a>(tokens: Tokens, keys: &[&'a str]) -> Element<'a, M> {
+    let mut line = row![].spacing(4).align_y(Alignment::Center);
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            line = line.push(text("+").size(11).color(tokens.t3));
+        }
+        let width = label_width(key, 11.0).max(24.0) + 12.0;
+        let cap = container(text(*key).size(11).font(Font::MONOSPACE).color(tokens.t2))
+            .width(width)
+            .height(22)
+            .center_x(width)
+            .center_y(22)
+            .style(move |_| container::Style {
+                background: Some(tokens.fill.into()),
+                border: Border { color: tokens.line2, width: 1.0, radius: 6.0.into() },
+                ..container::Style::default()
+            });
+        line = line.push(cap);
+    }
+    line.into()
 }
 
 /// A full-width one-pixel line in the window's line colour.

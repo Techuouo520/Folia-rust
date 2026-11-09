@@ -37,6 +37,7 @@ pub enum Section {
     Player,
     General,
     Graphics,
+    Developer,
 }
 
 impl Section {
@@ -46,6 +47,7 @@ impl Section {
             Section::Player => "options.settingsPagePlayer",
             Section::General => "options.settingsPageGeneral",
             Section::Graphics => "options.settingsPageGraphics",
+            Section::Developer => "options.settingsPageDeveloper",
         }
     }
 
@@ -55,14 +57,16 @@ impl Section {
             Section::Player => Icon::MonitorPlay,
             Section::General => Icon::SlidersHorizontal,
             Section::Graphics => Icon::Gauge,
+            Section::Developer => Icon::Terminal,
         }
     }
 }
 
 /// The side list's groups, `SETTINGS_NAV_GROUP_SPECS` without the categories Folia-rust has nothing on yet.
-const NAV: [(&str, &[Section]); 2] = [
+const NAV: [(&str, &[Section]); 3] = [
     ("options.settingsGroupInterface", &[Section::Appearance, Section::Player]),
     ("options.settingsGroupApp", &[Section::General, Section::Graphics]),
+    ("options.settingsGroupAdvanced", &[Section::Developer]),
 ];
 
 /// A group of one page: its anchor id, heading and whether it is drawn without the heading.
@@ -79,9 +83,10 @@ const LANGUAGE: GroupDef = GroupDef { id: "languageSettings", title: "options.la
 const BAR: GroupDef = GroupDef { id: "bottomUiSettings", title: "options.settingsHeadingControlBar", bare: false };
 const PERFORMANCE: GroupDef =
     GroupDef { id: "graphicsPerformance", title: "options.labPerformanceSection", bare: false };
+const DEVELOPER: GroupDef = GroupDef { id: "developerTools", title: "options.developerTools", bare: true };
 
 /// Every option the pages draw, in page order: what the search finds.
-const OPTIONS: [(Section, GroupDef, &str); 7] = [
+const OPTIONS: [(Section, GroupDef, &str); 11] = [
     (Section::Appearance, LYRICS, "options.lyricsAnimationAdjust"),
     (Section::Appearance, THEME, "options.daylightMode"),
     (Section::Player, BAR, "options.playerBottomBarOffset"),
@@ -89,6 +94,10 @@ const OPTIONS: [(Section, GroupDef, &str); 7] = [
     (Section::General, LANGUAGE, "options.appLanguage"),
     (Section::Graphics, PERFORMANCE, "options.visualizerFrameRate"),
     (Section::Graphics, PERFORMANCE, "options.visualizerFrameRateValue"),
+    (Section::Developer, DEVELOPER, "options.consoleLogCapture"),
+    (Section::Developer, DEVELOPER, "options.debugLogsToFile"),
+    (Section::Developer, DEVELOPER, "options.memoryMonitor"),
+    (Section::Developer, DEVELOPER, "options.memoryMonitorInterval"),
 ];
 
 #[derive(Debug, Clone)]
@@ -133,6 +142,11 @@ pub struct Values<'a> {
     pub bar_max: f32,
     /// A song is loaded, so the bar is on screen to be dragged.
     pub has_track: bool,
+    /// The developer page's switches and the state of its two panels.
+    pub developer: &'a crate::developer::Developer,
+    pub developer_settings: &'a folia_store::DeveloperSettings,
+    pub runtime_log: &'a folia_store::RuntimeLog,
+    pub memory_log_path: &'a std::path::Path,
 }
 
 pub struct Settings {
@@ -240,6 +254,11 @@ impl Settings {
             || seconds(self.page_at, now) < MOVE
             || self.motions.iter().any(|motion| seconds(motion.at, now) < MOVE)
             || self.body.animating(now)
+    }
+
+    /// The developer page is on screen, so its log panel needs refreshing while it sits still.
+    pub fn shows_developer(&self) -> bool {
+        self.query.is_empty() && self.section == Section::Developer
     }
 
     /// Scrolls the page so `group`'s gap sits at the top, or to the top of the page.
@@ -538,7 +557,8 @@ impl Settings {
         values: &Values<'a>,
         now: Instant,
     ) -> Vec<Group<'a, crate::Message>> {
-        let group = |def: GroupDef, rows| Group { title: i18n.t(def.title).to_owned(), bare: def.bare, rows };
+        let group =
+            |def: GroupDef, rows| Group { title: i18n.t(def.title).to_owned(), bare: def.bare, rows, foot: None };
         let row = |label: &str, hint: Option<String>, sub: bool, control| Row {
             label: i18n.t(label).to_owned(),
             hint,
@@ -662,6 +682,14 @@ impl Settings {
                 }
                 vec![group(PERFORMANCE, rows)]
             }
+            Section::Developer => crate::developer::settings_groups(
+                i18n,
+                tokens,
+                values.developer,
+                values.developer_settings,
+                values.runtime_log,
+                values.memory_log_path,
+            ),
         }
     }
 }

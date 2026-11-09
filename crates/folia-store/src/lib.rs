@@ -2,9 +2,14 @@
 
 mod appearance;
 mod audio;
+mod developer;
+mod file_log;
 mod general;
+mod log_file;
+mod memory;
 mod playback;
 mod player;
+mod runtime_log;
 mod theme;
 mod visualizer;
 
@@ -13,9 +18,14 @@ pub use appearance::{
     SubtitleSettings, ThemeMode,
 };
 pub use audio::{AudioSettings, ReplayGainMode};
+pub use developer::{DeveloperSettings, LogMode, clamp_interval_ms};
+pub use file_log::FileLog;
 pub use general::{GeneralSettings, HomeTab};
+pub use log_file::{LOG_ENTRIES, LOG_LINES, LogFile};
+pub use memory::{MEMORY_HISTORY, MemoryHistory, MemoryMonitor, MemorySample};
 pub use playback::PlaybackSettings;
 pub use player::{BOTTOM_BAR_BASE, PlayerSettings, bottom_bar_max_offset, clamp_bottom_bar_offset};
+pub use runtime_log::{LogLine, RuntimeLog, clock, iso};
 pub use theme::{DualTheme, StoredTheme, ThemeSettings, ThemeSource};
 pub use visualizer::VisualizerSettings;
 

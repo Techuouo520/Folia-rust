@@ -6,6 +6,7 @@ mod block_reflows;
 mod chrome;
 mod cover_flight;
 mod design_size;
+pub mod developer;
 mod drag_capture;
 mod equalizer_dialog;
 mod float_layer;
@@ -53,6 +54,7 @@ mod wall_shift;
 mod workbench;
 
 pub use background::{error_chain, format_time};
+pub use developer::Developer;
 pub use equalizer_dialog::{Look as EqualizerLook, view as equalizer_view};
 pub use focus_card::{Direction as CardDirection, Key as CardKey};
 pub use home::title::seam_title_activates;
@@ -93,7 +95,7 @@ use folia_store::{
 };
 use folia_visualizer::{Scene, Style, Values};
 use iced::widget::{container, mouse_area, space, stack};
-use iced::{Alignment, Color, Element, Length, Size, Subscription, Task, mouse};
+use iced::{Alignment, Color, Element, Length, Padding, Size, Subscription, Task, mouse};
 use lucide_static_svg::Icon;
 
 use crate::background::{blocking, save};
@@ -119,6 +121,8 @@ pub struct Init {
     pub playback: PlaybackSettings,
     pub player: folia_store::PlayerSettings,
     pub visualizer: VisualizerSettings,
+    pub developer: folia_store::DeveloperSettings,
+    pub runtime_log: folia_store::RuntimeLog,
     pub i18n: I18n,
     pub system_locale: Option<String>,
     pub library_db: PathBuf,
@@ -149,6 +153,8 @@ pub enum Message {
     Navigate(Page),
     OpenSettings,
     Settings(settings::Message),
+    /// The developer page, its log panel and the two overlays.
+    Developer(developer::Message),
     Workbench(workbench::Message),
     LanguagePicked(LanguagePreference),
     Theme(ThemeMode),
@@ -257,6 +263,10 @@ pub struct Shell {
     settings: Option<settings::Settings>,
     workbench: Option<workbench::Workbench>,
     visualizer: VisualizerSettings,
+    developer: developer::Developer,
+    developer_settings: folia_store::DeveloperSettings,
+    runtime_log: folia_store::RuntimeLog,
+    memory_monitor: folia_store::MemoryMonitor,
     library: LibraryPage,
     search: SearchPage,
     omni: Option<Omni>,
@@ -339,6 +349,18 @@ impl Shell {
         home.restore_queue_island(init.general.wall_tools_queue_island_open);
         let equalizer = folia_player::Parameters::of(&init.audio.equalizer);
         let replay_gain = init.audio.replay_gain_mode;
+        let mut developer = developer::Developer::default();
+        developer.refresh_log(&init.runtime_log);
+        let memory_monitor =
+            folia_store::MemoryMonitor::new(init.data_dir.join("logs").join("memory").join("folia.log"));
+        memory_monitor.set_log(
+            init.developer.memory_monitor_enabled && init.developer.memory_log_enabled,
+            init.developer.memory_log_mode,
+        );
+        if init.developer.memory_monitor_enabled {
+            memory_monitor.start(init.developer.interval_ms());
+            developer.refresh_memory(memory_monitor.history());
+        }
         let mut shell = Self {
             store: init.store,
             general: init.general,
@@ -355,6 +377,10 @@ impl Shell {
             settings: None,
             workbench: None,
             visualizer: init.visualizer,
+            developer,
+            developer_settings: init.developer,
+            runtime_log: init.runtime_log,
+            memory_monitor,
             library,
             search: SearchPage::default(),
             playback: Playback::new(init.playback, omni.clone()),
@@ -676,6 +702,7 @@ impl Shell {
                 }
                 task
             }
+            Message::Developer(message) => self.developer(message),
             Message::LanguagePicked(preference) => self.set_language(preference),
             Message::Theme(mode) => {
                 let before = self.appearance.clone();
@@ -1619,6 +1646,32 @@ impl Shell {
                 fonts: &self.system_fonts,
             }));
         }
+        let dev_tokens = settings_kit::Tokens::new(&self.theme, daylight);
+        if let Some(layer) =
+            developer::log_overlay(&self.i18n, dev_tokens, &self.developer, &self.developer_settings, self.window_size)
+        {
+            frame = frame.push(pin(
+                layer,
+                Alignment::End,
+                Alignment::Start,
+                Padding { top: 16.0, right: 16.0, bottom: 0.0, left: 0.0 },
+            ));
+        }
+        if let Some(layer) = developer::memory_overlay(
+            &self.i18n,
+            dev_tokens,
+            &self.developer,
+            &self.developer_settings,
+            self.memory_monitor.log_path(),
+            self.window_size,
+        ) {
+            frame = frame.push(pin(
+                layer,
+                Alignment::End,
+                Alignment::Start,
+                Padding { top: 72.0, right: 48.0, bottom: 0.0, left: 0.0 },
+            ));
+        }
         if let Some(window) = &self.settings {
             let values = settings::Values {
                 language: self.general.language,
@@ -1628,6 +1681,10 @@ impl Shell {
                 bar_offset: self.player.bottom_bar_offset,
                 bar_max: folia_store::bottom_bar_max_offset(self.window_size.height),
                 has_track: self.playback.current().is_some(),
+                developer: &self.developer,
+                developer_settings: &self.developer_settings,
+                runtime_log: &self.runtime_log,
+                memory_log_path: self.memory_monitor.log_path(),
             };
             frame = frame.push(window.view(&self.i18n, &self.theme, daylight, self.window_size, values));
         }
@@ -1799,7 +1856,20 @@ impl Shell {
             iced::event::listen_with(window_pointer),
             // The release must reach every page, or a press that ends off the drag strip leaves the drag armed.
             iced::event::listen_with(chrome_pointer),
+            iced::event::listen_with(developer_key),
         ];
+        if self.developer.log_open || self.settings.as_ref().is_some_and(settings::Settings::shows_developer) {
+            parts.push(
+                iced::time::every(std::time::Duration::from_millis(400))
+                    .map(|_| Message::Developer(developer::Message::Tick)),
+            );
+        }
+        if self.developer.memory_open {
+            parts.push(
+                iced::time::every(std::time::Duration::from_millis(250))
+                    .map(|_| Message::Developer(developer::Message::Tick)),
+            );
+        }
         if self.playback.current().is_some() && !self.blocks_space() {
             parts.push(iced::event::listen_with(space_key));
         }
@@ -1927,6 +1997,153 @@ impl Shell {
             parts.push(playback);
         }
         Subscription::batch(parts)
+    }
+
+    fn developer(&mut self, message: developer::Message) -> Task<Message> {
+        use developer::Message;
+        match message {
+            Message::ChordLog => {
+                if self.developer_settings.console_capture_enabled {
+                    self.developer.log_open = !self.developer.log_open;
+                    if self.developer.log_open {
+                        self.developer.refresh_log(&self.runtime_log);
+                    }
+                }
+                Task::none()
+            }
+            Message::ChordMemory => {
+                if self.developer_settings.memory_monitor_enabled {
+                    self.developer.memory_open = !self.developer.memory_open;
+                    if self.developer.memory_open {
+                        self.developer.refresh_memory(self.memory_monitor.history());
+                    }
+                }
+                Task::none()
+            }
+            Message::CloseLog => {
+                self.developer.log_open = false;
+                Task::none()
+            }
+            Message::CloseMemory => {
+                self.developer.memory_open = false;
+                Task::none()
+            }
+            Message::Capture(on) => {
+                self.developer_settings.console_capture_enabled = on;
+                if !on {
+                    self.developer.log_open = false;
+                }
+                self.apply_log_file();
+                self.developer.refresh_log(&self.runtime_log);
+                save(&self.store, &self.developer_settings)
+            }
+            Message::File(on) => {
+                self.developer_settings.runtime_log_enabled = on;
+                self.apply_log_file();
+                tracing::info!(on, path = %self.runtime_log.path().display(), "runtime log file");
+                save(&self.store, &self.developer_settings)
+            }
+            Message::FileMode(mode) => {
+                self.developer_settings.runtime_log_mode = mode;
+                self.apply_log_file();
+                save(&self.store, &self.developer_settings)
+            }
+            Message::Memory(on) => {
+                self.developer_settings.memory_monitor_enabled = on;
+                if on {
+                    self.memory_monitor
+                        .set_log(self.developer_settings.memory_log_enabled, self.developer_settings.memory_log_mode);
+                    self.memory_monitor.start(self.developer_settings.interval_ms());
+                    self.developer.refresh_memory(self.memory_monitor.history());
+                } else {
+                    self.memory_monitor.stop();
+                    self.memory_monitor.set_log(false, self.developer_settings.memory_log_mode);
+                    self.developer.memory_open = false;
+                }
+                save(&self.store, &self.developer_settings)
+            }
+            Message::MemoryFile(on) => {
+                self.developer_settings.memory_log_enabled = on;
+                self.memory_monitor.set_log(
+                    on && self.developer_settings.memory_monitor_enabled,
+                    self.developer_settings.memory_log_mode,
+                );
+                save(&self.store, &self.developer_settings)
+            }
+            Message::MemoryFileMode(mode) => {
+                self.developer_settings.memory_log_mode = mode;
+                self.memory_monitor.set_log(
+                    self.developer_settings.memory_log_enabled && self.developer_settings.memory_monitor_enabled,
+                    mode,
+                );
+                save(&self.store, &self.developer_settings)
+            }
+            Message::MemoryInterval(interval) => {
+                self.developer_settings.memory_interval_ms = folia_store::clamp_interval_ms(interval);
+                if self.developer_settings.memory_monitor_enabled {
+                    self.memory_monitor.start(self.developer_settings.interval_ms());
+                    self.developer.refresh_memory(self.memory_monitor.history());
+                }
+                save(&self.store, &self.developer_settings)
+            }
+            Message::ToggleTarget(target) => {
+                if target.is_empty() {
+                    self.developer.hidden_targets.clear();
+                } else if target == "*" {
+                    self.developer.hidden_targets =
+                        self.developer.lines.iter().map(|line| line.target.clone()).collect();
+                } else if !self.developer.hidden_targets.remove(&target) {
+                    self.developer.hidden_targets.insert(target);
+                }
+                Task::none()
+            }
+            Message::ToggleSeries(series) => {
+                if !self.developer.hidden_series.remove(&series) {
+                    self.developer.hidden_series.insert(series);
+                }
+                Task::none()
+            }
+            Message::ClearLog => {
+                self.runtime_log.clear();
+                self.developer.refresh_log(&self.runtime_log);
+                Task::none()
+            }
+            Message::Copy => {
+                let text = self.developer.visible_text();
+                self.developer.copied = Some(std::time::Instant::now());
+                iced::clipboard::write(text).map(|()| crate::Message::Developer(Message::Copied))
+            }
+            Message::Copied => {
+                self.developer.copied = Some(std::time::Instant::now());
+                Task::none()
+            }
+            Message::OpenRuntimeFolder => {
+                let folder = self.runtime_log.path().parent().map(std::path::Path::to_owned);
+                folder.map_or_else(Task::none, open_folder)
+            }
+            Message::OpenMemoryFolder => {
+                let folder = self.memory_monitor.log_path().parent().map(std::path::Path::to_owned);
+                folder.map_or_else(Task::none, open_folder)
+            }
+            Message::Tick => {
+                if self.developer.log_open || self.settings.as_ref().is_some_and(settings::Settings::shows_developer) {
+                    self.developer.refresh_log(&self.runtime_log);
+                }
+                if self.developer.memory_open {
+                    self.developer.refresh_memory(self.memory_monitor.history());
+                }
+                Task::none()
+            }
+        }
+    }
+
+    /// Hands the three log switches to the runtime log; the file work itself stays on its own thread.
+    fn apply_log_file(&self) {
+        self.runtime_log.configure(
+            self.developer_settings.console_capture_enabled,
+            self.developer_settings.runtime_log_enabled,
+            self.developer_settings.runtime_log_mode,
+        );
     }
 
     fn timeline(&mut self, message: timeline::Message) -> Task<Message> {
@@ -3114,6 +3331,17 @@ fn pin<'a>(button: Element<'a, Message>, x: Alignment, y: Alignment, pad: iced::
     container(button).width(Length::Fill).height(Length::Fill).align_x(x).align_y(y).padding(pad).into()
 }
 
+/// Opens a log folder from a background task; the file manager is not the interface thread's work.
+fn open_folder(folder: std::path::PathBuf) -> Task<Message> {
+    Task::perform(
+        blocking(move || {
+            let _ = std::fs::create_dir_all(&folder);
+            let _ = open::that(folder);
+        }),
+        |_| Message::Developer(developer::Message::Tick),
+    )
+}
+
 /// Space toggles play. Subscribed only when a track is loaded and no sheet is open.
 fn space_key(event: iced::Event, status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
     space_toggle(event, status)
@@ -3131,6 +3359,22 @@ pub fn space_toggle(event: iced::Event, status: iced::event::Status) -> Option<M
             repeat: false,
             ..
         }) => Some(Message::Playback(playback::Message::Toggle)),
+        _ => None,
+    }
+}
+
+/// Alt+Shift+D and Alt+Shift+M, the two shortcuts printed on the developer page.
+fn developer_key(event: iced::Event, _status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, repeat: false, .. }) = event else {
+        return None;
+    };
+    if !modifiers.alt() || !modifiers.shift() {
+        return None;
+    }
+    let iced::keyboard::Key::Character(text) = key else { return None };
+    match text.to_lowercase().as_str() {
+        "d" => Some(Message::Developer(developer::Message::ChordLog)),
+        "m" => Some(Message::Developer(developer::Message::ChordMemory)),
         _ => None,
     }
 }
