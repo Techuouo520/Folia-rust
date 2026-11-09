@@ -371,7 +371,7 @@ fn level_color(level: Level, tokens: Tokens) -> Color {
     }
 }
 
-/// The session log as the Alt+Shift+D overlay; nothing when it is closed or recording is off.
+/// The session log as the Alt+Shift+D overlay; nothing when it is closed.
 pub fn log_overlay<'a>(
     i18n: &'a I18n,
     tokens: Tokens,
@@ -379,10 +379,19 @@ pub fn log_overlay<'a>(
     settings: &DeveloperSettings,
     window: iced::Size,
 ) -> Option<Element<'a, crate::Message>> {
-    if !developer.log_open || !settings.console_capture_enabled {
+    if !developer.log_open {
         return None;
     }
-    let body = log_panel(i18n, tokens, developer, OVERLAY_LOG_HEIGHT);
+    let body = if settings.console_capture_enabled {
+        log_panel(i18n, tokens, developer, OVERLAY_LOG_HEIGHT)
+    } else {
+        // `ConsoleLogPanel` with capture off.
+        container(
+            text("Not recording. Nothing from this session can be read back or copied.").size(11).color(tokens.t3),
+        )
+        .padding(12)
+        .into()
+    };
     Some(debug_window(
         i18n,
         tokens,

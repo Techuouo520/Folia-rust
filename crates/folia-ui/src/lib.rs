@@ -2002,12 +2002,11 @@ impl Shell {
     fn developer(&mut self, message: developer::Message) -> Task<Message> {
         use developer::Message;
         match message {
+            // Not gated on the switch, as the original: with recording off the panel says so.
             Message::ChordLog => {
-                if self.developer_settings.console_capture_enabled {
-                    self.developer.log_open = !self.developer.log_open;
-                    if self.developer.log_open {
-                        self.developer.refresh_log(&self.runtime_log);
-                    }
+                self.developer.log_open = !self.developer.log_open;
+                if self.developer.log_open {
+                    self.developer.refresh_log(&self.runtime_log);
                 }
                 Task::none()
             }
@@ -2030,9 +2029,6 @@ impl Shell {
             }
             Message::Capture(on) => {
                 self.developer_settings.console_capture_enabled = on;
-                if !on {
-                    self.developer.log_open = false;
-                }
                 self.apply_log_file();
                 self.developer.refresh_log(&self.runtime_log);
                 save(&self.store, &self.developer_settings)
