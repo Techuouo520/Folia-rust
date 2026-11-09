@@ -18,7 +18,7 @@ pub struct Output {
 }
 
 /// Seconds of audio the ring buffer between decoder and device holds.
-const BUFFER_SECONDS: f64 = 0.5;
+const BUFFER_SECONDS: f64 = 2.0;
 
 /// Opens the default output device and returns the stream with the producer end of its ring buffer.
 pub fn open(
@@ -73,6 +73,10 @@ where
         let volume = shared.volume();
         let available = consumer.slots().min(out.len());
         let available = available - available % channels;
+        let decoder_done = shared.decoder_done.load(std::sync::atomic::Ordering::Acquire);
+        if available < out.len() && !decoder_done && shared.started() {
+            shared.add_underrun(((out.len() - available) / channels) as u64);
+        }
         if let Ok(chunk) = consumer.read_chunk(available) {
             let (first, second) = chunk.as_slices();
             let mut source = first.iter().chain(second);
@@ -107,7 +111,7 @@ where
         out[available..].fill(T::EQUILIBRIUM);
         shared.add_played((available / channels) as u64);
 
-        if available == 0 && shared.decoder_done.load(std::sync::atomic::Ordering::Acquire) {
+        if available == 0 && decoder_done {
             shared.set_state(PlayerState::Ended);
         }
     };

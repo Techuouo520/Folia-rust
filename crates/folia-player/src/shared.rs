@@ -52,6 +52,9 @@ pub struct Shared {
     /// Set by the decoder once every sample of the track is in the ring buffer.
     pub decoder_done: AtomicBool,
     pub duration: AtomicF64,
+    /// Callbacks that ran dry mid-track since the last report, and the frames they filled with silence.
+    underruns: AtomicU64,
+    silent_frames: AtomicU64,
 }
 
 impl Shared {
@@ -66,6 +69,8 @@ impl Shared {
             flush_done: AtomicU64::new(0),
             decoder_done: AtomicBool::new(false),
             duration: AtomicF64::default(),
+            underruns: AtomicU64::new(0),
+            silent_frames: AtomicU64::new(0),
         }
     }
 
@@ -113,5 +118,20 @@ impl Shared {
 
     pub fn add_played(&self, frames: u64) {
         self.played_frames.fetch_add(frames, Ordering::AcqRel);
+    }
+
+    /// True once the callback has played anything since the last flush, so a seek's refill is not an underrun.
+    pub fn started(&self) -> bool {
+        self.played_frames.load(Ordering::Acquire) > 0
+    }
+
+    pub fn add_underrun(&self, frames: u64) {
+        self.underruns.fetch_add(1, Ordering::Relaxed);
+        self.silent_frames.fetch_add(frames, Ordering::Relaxed);
+    }
+
+    /// Returns and resets the underrun count and the silent frames since the last call.
+    pub fn take_underruns(&self) -> (u64, u64) {
+        (self.underruns.swap(0, Ordering::Relaxed), self.silent_frames.swap(0, Ordering::Relaxed))
     }
 }

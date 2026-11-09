@@ -16,6 +16,8 @@ use crate::source::Source;
 const FULL_WAIT: Duration = Duration::from_millis(10);
 // A stopped stream never acknowledges; its next start drains the buffer instead.
 const FLUSH_TIMEOUT: Duration = Duration::from_millis(300);
+// Underruns are summed over this long so a struggling machine logs one line per window, not one per callback.
+const UNDERRUN_REPORT: Duration = Duration::from_secs(1);
 
 pub enum Command {
     Load(PathBuf),
@@ -31,6 +33,8 @@ pub struct Decoder {
     source: Option<Source>,
     pending: Vec<f32>,
     pending_from: usize,
+    rate: u32,
+    last_report: Instant,
 }
 
 impl Decoder {
@@ -42,13 +46,28 @@ impl Decoder {
         commands: Receiver<Command>,
     ) -> Self {
         let converter = Converter::new(channels, rate);
-        Self { shared, producer, converter, commands, source: None, pending: Vec::new(), pending_from: 0 }
+        Self {
+            shared,
+            producer,
+            converter,
+            commands,
+            source: None,
+            pending: Vec::new(),
+            pending_from: 0,
+            rate,
+            last_report: Instant::now(),
+        }
     }
 
     /// Runs until the control side drops its sender.
     pub fn run(mut self) {
         loop {
-            let command = if self.source.is_none() && self.pending_from >= self.pending.len() {
+            let idle = self.pending_from >= self.pending.len()
+                && (self.source.is_none() || self.shared.decoder_done.load(Ordering::Acquire));
+            if idle || self.last_report.elapsed() >= UNDERRUN_REPORT {
+                self.report_underruns();
+            }
+            let command = if idle {
                 match self.commands.recv() {
                     Ok(command) => Some(command),
                     Err(_) => return,
@@ -126,13 +145,16 @@ impl Decoder {
     }
 
     /// Decodes one packet into `pending`; false once the track has ended or failed.
+    /// An ended source stays open so a seek can still rewind it.
     fn decode_next(&mut self) -> bool {
+        if self.shared.decoder_done.load(Ordering::Acquire) {
+            return false;
+        }
         let Some(source) = &mut self.source else { return false };
         let result = match source.next() {
             Ok(Some(block)) => self.converter.push(&block, &mut self.pending),
             Ok(None) => {
                 self.shared.decoder_done.store(true, Ordering::Release);
-                self.source = None;
                 return false;
             }
             Err(err) => Err(err),
@@ -160,6 +182,15 @@ impl Decoder {
         self.converter.reset();
         self.shared.decoder_done.store(false, Ordering::Release);
         self.shared.request_flush(position)
+    }
+
+    fn report_underruns(&mut self) {
+        self.last_report = Instant::now();
+        let (count, frames) = self.shared.take_underruns();
+        if count > 0 {
+            let silent_ms = frames * 1000 / u64::from(self.rate.max(1));
+            tracing::warn!(count, silent_ms, "audio underrun");
+        }
     }
 
     fn fail(&mut self, err: &PlayerError) {
