@@ -95,7 +95,7 @@ use folia_store::{
 };
 use folia_visualizer::{Scene, Style, Values};
 use iced::widget::{container, mouse_area, space, stack};
-use iced::{Alignment, Color, Element, Length, Padding, Size, Subscription, Task, mouse};
+use iced::{Alignment, Color, Element, Length, Size, Subscription, Task, mouse};
 use lucide_static_svg::Icon;
 
 use crate::background::{blocking, save};
@@ -858,6 +858,7 @@ impl Shell {
             Message::PointerHeld(held) => {
                 self.pointer_held = held;
                 if !held {
+                    self.developer.release();
                     self.drag_armed = false;
                     if let Some(positioning) = self.positioning.as_mut() {
                         positioning.release();
@@ -1056,7 +1057,10 @@ impl Shell {
             Message::PortraitStored(path, cover) => self.remember_portrait(path, cover),
             Message::Chrome(message) => self.chrome(message),
             Message::Pointer(window, at) if self.window == Some(window) => match at {
-                Some(at) => self.chrome(chrome::Message::Activity { x: at.x, y: at.y }),
+                Some(at) => {
+                    self.developer.pointer(at, self.window_size);
+                    self.chrome(chrome::Message::Activity { x: at.x, y: at.y })
+                }
                 None => self.chrome(chrome::Message::Left),
             },
             Message::Pointer(..) => Task::none(),
@@ -1646,32 +1650,6 @@ impl Shell {
                 fonts: &self.system_fonts,
             }));
         }
-        let dev_tokens = settings_kit::Tokens::new(&self.theme, daylight);
-        if let Some(layer) =
-            developer::log_overlay(&self.i18n, dev_tokens, &self.developer, &self.developer_settings, self.window_size)
-        {
-            frame = frame.push(pin(
-                layer,
-                Alignment::End,
-                Alignment::Start,
-                Padding { top: 16.0, right: 16.0, bottom: 0.0, left: 0.0 },
-            ));
-        }
-        if let Some(layer) = developer::memory_overlay(
-            &self.i18n,
-            dev_tokens,
-            &self.developer,
-            &self.developer_settings,
-            self.memory_monitor.log_path(),
-            self.window_size,
-        ) {
-            frame = frame.push(pin(
-                layer,
-                Alignment::End,
-                Alignment::Start,
-                Padding { top: 72.0, right: 48.0, bottom: 0.0, left: 0.0 },
-            ));
-        }
         if let Some(window) = &self.settings {
             let values = settings::Values {
                 language: self.general.language,
@@ -1756,6 +1734,23 @@ impl Shell {
                 opacity,
                 shift,
             ));
+        }
+        // `DraggableDebugWindow` is z-300: above the dialogs, below the title bar.
+        let dev_tokens = settings_kit::Tokens::new(&self.theme, daylight);
+        if let Some(layer) =
+            developer::log_overlay(&self.i18n, dev_tokens, &self.developer, &self.developer_settings, self.window_size)
+        {
+            frame = frame.push(layer);
+        }
+        if let Some(layer) = developer::memory_overlay(
+            &self.i18n,
+            dev_tokens,
+            &self.developer,
+            &self.developer_settings,
+            self.memory_monitor.log_path(),
+            self.window_size,
+        ) {
+            frame = frame.push(layer);
         }
         // `z-[9999]`: the title bar sits above every page and dialog.
         let look = chrome::TitlebarLook {
@@ -2017,6 +2012,10 @@ impl Shell {
                         self.developer.refresh_memory(self.memory_monitor.history());
                     }
                 }
+                Task::none()
+            }
+            Message::DragStart(panel) => {
+                self.developer.grab(panel);
                 Task::none()
             }
             Message::CloseLog => {

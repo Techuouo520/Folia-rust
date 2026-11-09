@@ -8,8 +8,8 @@ use folia_i18n::I18n;
 use folia_store::{DeveloperSettings, LogLine, LogMode, MemorySample, RuntimeLog, clock};
 use iced::mouse::Cursor;
 use iced::widget::canvas::{self, Canvas, Frame, Path as CanvasPath, Stroke};
-use iced::widget::{button, column, container, row, scrollable, space, text};
-use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Point, Rectangle, Shadow, Vector};
+use iced::widget::{button, column, container, mouse_area, pin, row, scrollable, space, text};
+use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Point, Rectangle, Shadow, Size, Vector};
 use lucide_static_svg::Icon;
 use tracing::Level;
 
@@ -18,6 +18,34 @@ use crate::settings_kit::{self as kit, Group, Row, Tokens};
 const LOG_HEIGHT: f32 = 352.0;
 const OVERLAY_LOG_HEIGHT: f32 = 416.0;
 const CHART_HEIGHT: f32 = 120.0;
+/// `DraggableDebugWindow`: `top-4 right-4`, and at least this much stays on screen.
+const ANCHOR: f32 = 16.0;
+const EDGE_MARGIN: f32 = 48.0;
+/// `MemoryMonitorWindow`'s `defaultOffset`, so it does not open on top of the log.
+const MEMORY_OFFSET: Vector = Vector::new(-32.0, 56.0);
+
+/// One of the two debug windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    Log,
+    Memory,
+}
+
+impl Panel {
+    /// The window's width for a window `width` wide: the log is 544 at most, the monitor 512.
+    fn width(self, width: f32) -> f32 {
+        let most = if self == Panel::Log { 544.0 } else { 512.0 };
+        width.min(most) - 24.0
+    }
+}
+
+/// A title-bar drag: where the pointer and the window's offset were when it started.
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    panel: Panel,
+    from: Point,
+    offset: Vector,
+}
 
 /// What the two developer panels show and which parts the reader has narrowed down.
 #[derive(Debug, Default)]
@@ -30,6 +58,11 @@ pub struct Developer {
     pub latest: Option<MemorySample>,
     pub hidden_series: BTreeSet<Series>,
     pub copied: Option<Instant>,
+    /// Offsets from the top-right anchor once dragged; `None` is the window's default place.
+    log_offset: Option<Vector>,
+    memory_offset: Option<Vector>,
+    cursor: Option<Point>,
+    drag: Option<Drag>,
 }
 
 impl Developer {
@@ -51,6 +84,40 @@ impl Developer {
         self.visible().map(LogLine::text).collect::<Vec<_>>().join("\n")
     }
 
+    fn offset(&self, panel: Panel) -> Vector {
+        match panel {
+            Panel::Log => self.log_offset.unwrap_or(Vector::ZERO),
+            Panel::Memory => self.memory_offset.unwrap_or(MEMORY_OFFSET),
+        }
+    }
+
+    /// The pointer pressed on a title bar.
+    pub fn grab(&mut self, panel: Panel) {
+        if let Some(from) = self.cursor {
+            self.drag = Some(Drag { panel, from, offset: self.offset(panel) });
+        }
+    }
+
+    /// The pointer moved; a dragged window follows, kept `EDGE_MARGIN` on screen (`settle`).
+    pub fn pointer(&mut self, at: Point, window: Size) {
+        self.cursor = Some(at);
+        let Some(drag) = self.drag else { return };
+        let width = drag.panel.width(window.width);
+        let moved = drag.offset + (at - drag.from);
+        let right = window.width - ANCHOR;
+        let x = moved.x.clamp(EDGE_MARGIN - right, window.width - EDGE_MARGIN - (right - width));
+        let y = moved.y.clamp(-ANCHOR, (window.height - EDGE_MARGIN - ANCHOR).max(-ANCHOR));
+        let offset = Some(Vector::new(x, y));
+        match drag.panel {
+            Panel::Log => self.log_offset = offset,
+            Panel::Memory => self.memory_offset = offset,
+        }
+    }
+
+    pub fn release(&mut self) {
+        self.drag = None;
+    }
+
     fn copied(&self) -> bool {
         self.copied.is_some_and(|at| at.elapsed().as_millis() < 1500)
     }
@@ -64,6 +131,8 @@ pub enum Message {
     ChordMemory,
     CloseLog,
     CloseMemory,
+    /// The pointer went down on a debug window's title bar.
+    DragStart(Panel),
     Capture(bool),
     File(bool),
     FileMode(LogMode),
@@ -392,15 +461,7 @@ pub fn log_overlay<'a>(
         .padding(12)
         .into()
     };
-    Some(debug_window(
-        i18n,
-        tokens,
-        "options.consoleLogCapture",
-        "Alt+Shift+D",
-        dmsg(Message::CloseLog),
-        body,
-        window.width.min(544.0),
-    ))
+    Some(debug_window(i18n, tokens, developer, Panel::Log, body, window))
 }
 
 /// The memory curve as the Alt+Shift+M overlay; nothing while sampling is off.
@@ -501,9 +562,9 @@ pub fn memory_overlay<'a>(
     .align_y(Alignment::Center);
     let columns = row![
         text("process").size(10).color(tokens.t3).width(Length::Fill),
-        cell("ws".to_owned(), false),
-        cell("priv".to_owned(), false),
-        cell("cpu".to_owned(), false),
+        header_cell("ws", tokens),
+        header_cell("priv", tokens),
+        header_cell("cpu", tokens),
     ]
     .spacing(6);
 
@@ -524,21 +585,18 @@ pub fn memory_overlay<'a>(
     if settings.memory_log_enabled {
         body = body.push(text(memory_path.display().to_string()).size(10).color(tokens.t3));
     }
-    Some(debug_window(
-        i18n,
-        tokens,
-        "options.memoryMonitor",
-        "Alt+Shift+M",
-        dmsg(Message::CloseMemory),
-        body.into(),
-        window.width.min(512.0),
-    ))
+    Some(debug_window(i18n, tokens, developer, Panel::Memory, body.into(), window))
 }
 
 fn stat<'a>(i18n: &'a I18n, tokens: Tokens, key: &'a str, value: String) -> Element<'a, crate::Message> {
     column![text(i18n.t(key)).size(9).color(tokens.t3), text(value).size(13).color(tokens.t1),]
         .width(Length::Fill)
         .into()
+}
+
+// A column title over `cell`: the same width and right edge as the numbers under it.
+fn header_cell<'a>(title: &'a str, tokens: Tokens) -> Element<'a, crate::Message> {
+    container(text(title).size(10).color(tokens.t3)).width(Length::Fixed(52.0)).align_x(Alignment::End).into()
 }
 
 fn cell<'a>(content: String, right: bool) -> Element<'a, crate::Message> {
@@ -550,23 +608,29 @@ fn mb(value: Option<u64>) -> String {
     value.map_or_else(|| "\u{2014}".to_owned(), |mb| format!("{mb} MB"))
 }
 
+/// `DraggableDebugWindow`: anchored top-right, moved by its title bar only, so the body keeps its clicks.
 fn debug_window<'a>(
     i18n: &'a I18n,
     tokens: Tokens,
-    title: &'a str,
-    shortcut: &'a str,
-    close: crate::Message,
+    developer: &Developer,
+    panel: Panel,
     body: Element<'a, crate::Message>,
-    width: f32,
+    window: Size,
 ) -> Element<'a, crate::Message> {
+    let (title, shortcut, close) = match panel {
+        Panel::Log => ("options.consoleLogCapture", "Alt+Shift+D", Message::CloseLog),
+        Panel::Memory => ("options.memoryMonitor", "Alt+Shift+M", Message::CloseMemory),
+    };
     let heading = text(i18n.t(title)).size(13).color(tokens.t1);
     let keys = kit::keys(tokens, &shortcut.split('+').collect::<Vec<_>>());
-    let close = kit::icon_button(tokens, Icon::X, 15.0, close);
+    let close = kit::icon_button(tokens, Icon::X, 15.0, dmsg(close));
     let header = row![heading, space().width(Length::Fill), keys, close].spacing(8).align_y(Alignment::Center);
-    container(column![header, body].spacing(8))
-        .width(Length::Fixed(width - 24.0))
-        .padding(12)
-        .style(move |_| container::Style {
+    let header =
+        mouse_area(header).on_press(dmsg(Message::DragStart(panel))).interaction(iced::mouse::Interaction::Grab);
+    let width = panel.width(window.width);
+    let offset = developer.offset(panel);
+    let card = container(column![header, body].spacing(8)).width(Length::Fixed(width)).padding(12).style(move |_| {
+        container::Style {
             background: Some(tokens.menu.into()),
             border: Border { color: tokens.line2, width: 1.0, radius: 12.0.into() },
             shadow: Shadow {
@@ -576,8 +640,9 @@ fn debug_window<'a>(
             },
             text_color: Some(tokens.t1),
             ..container::Style::default()
-        })
-        .into()
+        }
+    });
+    pin(card).x(window.width - ANCHOR - width + offset.x).y(ANCHOR + offset.y).into()
 }
 
 /// The curve: one polyline per shown series, scaled to the tallest value on screen.
