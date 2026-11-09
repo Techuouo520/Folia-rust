@@ -269,8 +269,12 @@ fn sheet<'a>(
             background: Some(Background::Color(Color { a: 0.5, ..Color::BLACK })),
             ..container::Style::default()
         });
-    let centered =
-        container(card).width(Length::Fill).height(Length::Fill).align_x(Alignment::Center).align_y(Alignment::Center);
+    // `opaque`: a press on the card's empty space stops here instead of reaching the scrim and closing.
+    let centered = container(iced::widget::opaque(card))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center);
     iced::widget::stack![dim, centered].into()
 }
 

@@ -125,7 +125,8 @@ impl Dialog {
             return None;
         }
         let card = if self.creating { creating(self, &look) } else { picker(&look) };
-        let card = container(card)
+        // `opaque`: a press on the card's empty space stops here instead of reaching the scrim and closing.
+        let card = container(opaque(card))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Alignment::Center)

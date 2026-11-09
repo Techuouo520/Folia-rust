@@ -51,8 +51,12 @@ pub fn view<'a>(draft: &'a EqualizerSettings, look: &Look<'a>) -> Element<'a, Me
         .width(Length::Fixed(width))
         .height(Length::Fixed(height))
         .style(card_style(tokens));
-    let centred =
-        container(card).width(Length::Fill).height(Length::Fill).align_x(Alignment::Center).align_y(Alignment::Center);
+    // `opaque`: a press on the card's empty space stops here instead of reaching the scrim and closing.
+    let centred = container(opaque(card))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center);
     layer(look, centred.into())
 }
 
