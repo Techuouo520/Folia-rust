@@ -77,6 +77,8 @@ pub struct Pyramid {
     outputs: Vec<Image>,
     /// Bumps when `outputs` is rebuilt, so a plate can keep its sample bind group.
     output_epoch: u64,
+    /// Sample group for the view `copy_into_source` last read, keyed by its address.
+    copy: Option<(usize, wgpu::BindGroup)>,
 }
 
 impl Pyramid {
@@ -109,6 +111,7 @@ impl Pyramid {
             ups: Vec::new(),
             outputs: Vec::new(),
             output_epoch: 0,
+            copy: None,
         }
     }
 
@@ -150,6 +153,7 @@ impl Pyramid {
         self.downs.clear();
         self.ups.clear();
         self.outputs.clear();
+        self.copy = None;
         self.output_epoch = self.output_epoch.wrapping_add(1);
     }
 
@@ -189,6 +193,7 @@ impl Pyramid {
         self.downs = downs;
         self.ups = ups;
         self.outputs.clear();
+        self.copy = None;
         self.output_epoch = self.output_epoch.wrapping_add(1);
         true
     }
@@ -216,14 +221,22 @@ impl Pyramid {
 
     /// One downsample from `from` would be a copy into the source. Copies `from` over the whole source.
     pub fn copy_into_source(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         from: &wgpu::TextureView,
     ) {
-        let Some(source) = &self.source else { return };
-        let bind = copy_bind(device, &self.copy_layout, &self.sampler, from);
-        draw(encoder, &self.copy_pipe, &source.view, &bind);
+        let Some(source) = self.source.as_ref().map(|image| image.view.clone()) else { return };
+        let key = from as *const wgpu::TextureView as usize;
+        let bind = match &self.copy {
+            Some((held, bind)) if *held == key => bind.clone(),
+            _ => {
+                let bind = copy_bind(device, &self.copy_layout, &self.sampler, from);
+                self.copy = Some((key, bind.clone()));
+                bind
+            }
+        };
+        draw(encoder, &self.copy_pipe, &source, &bind);
     }
 
     fn upsample(&self, encoder: &mut wgpu::CommandEncoder, level: u32, into: &wgpu::TextureView) {

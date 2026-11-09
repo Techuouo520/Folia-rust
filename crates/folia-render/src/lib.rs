@@ -6,15 +6,18 @@ mod frame;
 pub mod glyphs;
 mod pipeline;
 mod plate;
+mod scene;
 mod wash;
 
 pub use backdrop::{
     GlassBench, Image as CoverImage, Program as Backdrop, Quad as CoverQuad, Scene as BackdropScene, Shot, bench_glass,
-    blur_source, draw_source, image_key, paint_external, preview_wall, release as release_backdrop, resident_bytes,
+    blur_source, draw_source, image_key, paint_external, preview_wall, read_picture, release as release_backdrop,
+    resident_bytes, was_wanted as blur_wanted,
 };
 pub use blur::{Pyramid, levels_for_radius, pyramid_bytes};
 pub use frame::grain_frame;
 pub use plate::{Plate, compile_plate, css_saturate, glass_over, source_over, to_linear_channel, to_srgb_channel};
+pub use scene::{Program as StyleScene, capture as capture_canvas};
 pub use wash::{Glow, Veil, Wash};
 
 use pipeline::{Fullscreen, Slot};

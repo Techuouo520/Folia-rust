@@ -124,6 +124,26 @@ impl shader::Pipeline for Gpu {
     fn trim(&mut self) {}
 }
 
+/// Whether a glass plate asked for the picture this frame.
+pub fn wanted() -> bool {
+    !lock_stage().levels.is_empty()
+}
+
+/// Whether a glass plate asked for the picture in the frame before the current one. The canvas is drawn before the
+/// plates are prepared, so this is what tells it there is a blur to fill.
+pub fn was_wanted() -> bool {
+    lock_stage().last_live
+}
+
+/// Reads the quarter-resolution picture the glass samples, for visual tests.
+pub fn read_picture(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Shot> {
+    let stage = lock_stage();
+    let gpu = stage.gpu.as_ref()?;
+    let rgba = gpu.pyramid.read_source(device, queue)?;
+    let (width, height) = blur::source_size(stage.window[0] as u32, stage.window[1] as u32);
+    Some(Shot { rgba, width, height, bytes: gpu.bytes() })
+}
+
 /// A plate asks for the pyramid step of its CSS blur radius. Several plates share the deepest chain.
 pub fn claim(level: u32) {
     if level == 0 {
@@ -166,17 +186,17 @@ pub fn resident_bytes() -> u64 {
 /// Drops the offscreen and the pyramid. The next open plate builds them again.
 pub fn release() {
     let mut stage = lock_stage();
-    if let Some(gpu) = stage.gpu.as_mut() {
-        gpu.release();
-    }
+    stage.gpu = None;
     stage.levels.clear();
     stage.live = false;
+    stage.last_live = false;
     stage.idle = 0;
 }
 
 /// Called from the plate pipeline once a frame. Two quiet frames after the last glass plate, the textures go.
 pub fn trim() {
     let mut stage = lock_stage();
+    stage.last_live = stage.live;
     if stage.live {
         stage.live = false;
         stage.levels.clear();
@@ -204,19 +224,23 @@ pub fn paint_external(
 ) {
     set_window(window);
     let mut stage = lock_stage();
-    if stage.levels.is_empty() {
+    let count = stage.levels.len().min(blur::MAX_LEVELS as usize);
+    if count == 0 {
         return;
     }
-    let levels = stage.levels.clone();
+    let mut buffer = [0u32; blur::MAX_LEVELS as usize];
+    buffer[..count].copy_from_slice(&stage.levels[..count]);
+    let levels = &buffer[..count];
     let gpu = stage.gpu.get_or_insert_with(|| Picture::new(device, queue, format));
-    let rebuilt = gpu.pyramid.ensure(device, queue, window[0] as u32, window[1] as u32, deepest(&levels));
-    if !rebuilt && gpu.stamp == stamp && gpu.levels == levels {
+    let rebuilt = gpu.pyramid.ensure(device, queue, window[0] as u32, window[1] as u32, deepest(levels));
+    if !rebuilt && gpu.stamp == stamp && gpu.levels.as_slice() == levels {
         return;
     }
     gpu.pyramid.copy_into_source(device, encoder, from);
-    gpu.pyramid.blur(device, encoder, &levels);
+    gpu.pyramid.blur(device, encoder, levels);
     gpu.stamp = stamp;
-    gpu.levels = levels;
+    gpu.levels.clear();
+    gpu.levels.extend_from_slice(levels);
 }
 
 /// Lets a shader style draw straight into the quarter-resolution source. The encoder stays with the caller.
@@ -275,6 +299,7 @@ struct Stage {
     levels: Vec<u32>,
     window: [f32; 2],
     live: bool,
+    last_live: bool,
     idle: u32,
 }
 
@@ -610,7 +635,7 @@ const VERT_ATTRS: [wgpu::VertexAttribute; 6] = [
 ];
 
 static STAGE: Mutex<Stage> =
-    Mutex::new(Stage { gpu: None, levels: Vec::new(), window: [0.0, 0.0], live: false, idle: 0 });
+    Mutex::new(Stage { gpu: None, levels: Vec::new(), window: [0.0, 0.0], live: false, last_live: false, idle: 0 });
 
 /// Frame time of the blur while the picture changes, and the bytes kept while the glass is open.
 pub struct GlassBench {

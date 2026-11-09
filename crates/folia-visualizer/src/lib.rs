@@ -19,6 +19,7 @@ pub use registry::Style;
 pub use tuning::{Group, Item, Manifest, Values};
 
 use std::cell::{Cell, RefCell};
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use folia_core::{AudioFrame, Line, Lyrics, Rgb, Theme};
@@ -77,8 +78,21 @@ pub struct SceneState {
     still: styles::still::StillCache,
 }
 
+/// The canvas of a canvas style. It hands the geometry iced draws to the glass blur source when `capture` is set.
+pub struct Stage<'a, Message> {
+    scene: Scene<'a>,
+    capture: bool,
+    _message: PhantomData<Message>,
+}
+
+impl<'a, Message> Stage<'a, Message> {
+    pub fn new(scene: Scene<'a>) -> Self {
+        Self { scene, capture: false, _message: PhantomData }
+    }
+}
+
 /// Monet publishes the dragged portrait offset and lyric-line seeks, so the message type must take its event.
-impl<Message: From<styles::monet::Event>> canvas::Program<Message> for Scene<'_> {
+impl<Message: From<styles::monet::Event>> canvas::Program<Message> for Stage<'_, Message> {
     type State = SceneState;
 
     fn draw(
@@ -89,7 +103,16 @@ impl<Message: From<styles::monet::Event>> canvas::Program<Message> for Scene<'_>
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        self.render(state, renderer, bounds.size())
+        let geometry = self.scene.render(state, renderer, bounds.size());
+        if self.capture {
+            // Cached geometry keeps its text out of reach, so the cached styles hand over a fresh frame for the blur.
+            if matches!(self.scene.style, Style::Monet | Style::Still) && folia_render::blur_wanted() {
+                folia_render::capture_canvas(&[self.scene.live_geometry(state, renderer, bounds.size())]);
+            } else {
+                folia_render::capture_canvas(&geometry);
+            }
+        }
+        geometry
     }
 
     fn update(
@@ -99,21 +122,21 @@ impl<Message: From<styles::monet::Event>> canvas::Program<Message> for Scene<'_>
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        if self.style != Style::Monet || self.stage.is_some() {
+        if self.scene.style != Style::Monet || self.scene.stage.is_some() {
             return None;
         }
-        let (size, place) = self.placement(bounds.size());
+        let (size, place) = self.scene.placement(bounds.size());
         let at = cursor.position_in(bounds).map(|point| place.to_stage(point));
-        styles::monet::update(self, &mut state.monet.borrow_mut(), event, size, at)
+        styles::monet::update(&self.scene, &mut state.monet.borrow_mut(), event, size, at)
     }
 
     fn mouse_interaction(&self, state: &SceneState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
-        if self.style != Style::Monet || self.stage.is_some() {
+        if self.scene.style != Style::Monet || self.scene.stage.is_some() {
             return mouse::Interaction::None;
         }
-        let (size, place) = self.placement(bounds.size());
+        let (size, place) = self.scene.placement(bounds.size());
         let at = cursor.position_in(bounds).map(|point| place.to_stage(point));
-        styles::monet::interaction(self, &state.monet.borrow(), size, at)
+        styles::monet::interaction(&self.scene, &state.monet.borrow(), size, at)
     }
 }
 
@@ -135,7 +158,7 @@ impl Scene<'_> {
         (size, Place { offset, scale })
     }
 
-    /// Monet's own text atlas, away from the UI's, renewed every `MONET_ATLAS_FRAMES` draws before it fragments.
+    /// Monet keeps its own text atlas, renewed every `MONET_ATLAS_FRAMES` draws before it fragments.
     fn monet_geometry(&self, state: &SceneState, renderer: &Renderer, target: Size) -> Geometry {
         let draws = state.monet_draws.get().wrapping_add(1);
         state.monet_draws.set(draws);
@@ -155,9 +178,14 @@ impl Scene<'_> {
         if self.style == Style::Monet {
             return vec![self.monet_geometry(state, renderer, target)];
         }
+        vec![self.live_geometry(state, renderer, target)]
+    }
+
+    /// One frame of fresh canvas geometry, away from any `canvas::Cache`.
+    pub(crate) fn live_geometry(&self, state: &SceneState, renderer: &Renderer, target: Size) -> Geometry {
         let mut frame = Frame::new(renderer, target);
         self.paint(state, &mut frame, target);
-        vec![frame.into_geometry()]
+        frame.into_geometry()
     }
 
     /// Fills `target` with the theme background, then draws the stage scaled down to cover it.
@@ -266,14 +294,28 @@ impl<T> LayoutCache<T> {
     }
 }
 
-/// The playing picture. Canvas styles draw alone. Nebbia puts its shader under a clear lyric canvas; lumiere draws its
-/// lyrics in its own pass, then the front bokeh, then a clear canvas with the corner frame.
+/// The playing picture. Canvas styles draw alone; their geometry is also rasterized into the glass blur source.
+/// Nebbia puts its shader under a clear lyric canvas; lumiere draws its lyrics in its own pass, then the front bokeh,
+/// then a clear canvas with the corner frame.
 pub fn lyric_view<'a, Message: From<styles::monet::Event> + 'a>(scene: Scene<'a>) -> Element<'a, Message> {
     if !matches!(scene.style, Style::Nebbia | Style::Lumiere) {
-        return iced::widget::canvas(scene).width(Length::Fill).height(Length::Fill).into();
+        let capture = !scene.preview;
+        let canvas = iced::widget::canvas(Stage { scene: scene.clone(), capture, _message: PhantomData })
+            .width(Length::Fill)
+            .height(Length::Fill);
+        if !capture {
+            return canvas.into();
+        }
+        let picture = shader(folia_render::StyleScene::<Message>::new()).width(Length::Fill).height(Length::Fill);
+        return stack![picture, canvas].into();
     }
-    let clear =
-        iced::widget::canvas(Scene { backdrop: false, ..scene.clone() }).width(Length::Fill).height(Length::Fill);
+    let clear = iced::widget::canvas(Stage {
+        scene: Scene { backdrop: false, ..scene.clone() },
+        capture: false,
+        _message: PhantomData,
+    })
+    .width(Length::Fill)
+    .height(Length::Fill);
     if scene.style == Style::Nebbia {
         return stack![shader(styles::nebbia::view(scene)).width(Length::Fill).height(Length::Fill), clear].into();
     }
