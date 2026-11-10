@@ -1268,6 +1268,10 @@ impl Shell {
         }
         self.drag_armed = false;
         self.drag_from = None;
+        if !chrome::button_down() {
+            tracing::debug!("window drag dropped: the button was already up");
+            return Task::none();
+        }
         iced::window::drag(id)
     }
 
@@ -1305,7 +1309,8 @@ impl Shell {
             let _ = self.panel(panel::Message::QualitySelect(quality_select::Message::Close));
         }
         match message {
-            chrome::Message::Drag => iced::window::drag(id),
+            chrome::Message::Drag if chrome::button_down() => iced::window::drag(id),
+            chrome::Message::Drag => Task::none(),
             chrome::Message::DragArm => {
                 // The press is on the strip; the subscription's `PointerHeld(true)` may come after the first move.
                 self.pointer_held = true;
@@ -1319,7 +1324,8 @@ impl Shell {
                 self.drag_from = None;
                 Task::none()
             }
-            chrome::Message::Resize(direction) => iced::window::drag_resize(id, direction),
+            chrome::Message::Resize(direction) if chrome::button_down() => iced::window::drag_resize(id, direction),
+            chrome::Message::Resize(_) => Task::none(),
             chrome::Message::Minimize => iced::window::minimize(id, true),
             chrome::Message::ToggleMaximize => {
                 self.maximized = !self.maximized;
