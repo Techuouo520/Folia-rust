@@ -106,11 +106,13 @@ fn nebbia_label(
     key: &str,
 ) -> &'static str {
     let manifest = Style::Nebbia.manifest();
-    let on: Vec<&str> = presets
-        .iter()
-        .flat_map(|(entries, _)| entries.iter().copied())
-        .filter(|entry| values.member(manifest, key, entry))
-        .collect();
+    // Each option once, in first-seen order: the presets repeat options, so a flat list would never match one.
+    let mut on: Vec<&str> = Vec::new();
+    for entry in presets.iter().flat_map(|(entries, _)| entries.iter().copied()) {
+        if !on.contains(&entry) && values.member(manifest, key, entry) {
+            on.push(entry);
+        }
+    }
     presets
         .iter()
         .find(|(entries, _)| entries.iter().copied().eq(on.iter().copied()))
@@ -160,11 +162,13 @@ pub fn apply_quick(style: Style, values: &mut Values, key: &str) -> bool {
 
 fn cycle_members(values: &mut Values, presets: &'static [(&'static [&'static str], &'static str)], key: &str) {
     let manifest = Style::Nebbia.manifest();
-    let on: Vec<&str> = presets
-        .iter()
-        .flat_map(|(entries, _)| entries.iter().copied())
-        .filter(|entry| values.member(manifest, key, entry))
-        .collect();
+    // Each option once, in first-seen order: the presets repeat options, so a flat list would never match one.
+    let mut on: Vec<&str> = Vec::new();
+    for entry in presets.iter().flat_map(|(entries, _)| entries.iter().copied()) {
+        if !on.contains(&entry) && values.member(manifest, key, entry) {
+            on.push(entry);
+        }
+    }
     let next = presets
         .iter()
         .position(|(entries, _)| entries.iter().copied().eq(on.iter().copied()))
