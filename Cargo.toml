@@ -90,3 +90,7 @@ strip = true
 # Coverage gamma for dark text in web color mode; see crates/cryoglyph/PATCH.md.
 [patch.crates-io]
 cryoglyph = { path = "crates/cryoglyph" }
+
+# File and line numbers in backtraces without full debug info; keeps target/ a fraction of the size.
+[profile.dev]
+debug = "line-tables-only"

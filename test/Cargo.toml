@@ -31,3 +31,7 @@ criterion = "0.8.2"
 
 [patch.crates-io]
 cryoglyph = { path = "../crates/cryoglyph" }
+
+# File and line numbers in backtraces without full debug info; keeps target/ a fraction of the size.
+[profile.dev]
+debug = "line-tables-only"
