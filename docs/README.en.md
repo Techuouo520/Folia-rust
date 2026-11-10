@@ -28,6 +28,8 @@ The original Folia is built on Electron: it ships a full Chromium and Node.js, a
 - **Drawn on the GPU**: the interface and lyric animations are rendered with iced + wgpu, with WGSL shaders.
 - **Idle means idle**: the frame loop stops when nothing animates, so an idle window uses no CPU.
 
+The Android client is [Folia-rust-android](https://github.com/Techuouo520/Folia-rust-android), built on the same Rust core and still in development.
+
 ## Features
 
 - **Cover wall home**: an endless wall of covers with inertial dragging, and a spine-style side seam that opens and closes.

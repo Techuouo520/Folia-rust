@@ -28,6 +28,8 @@
 - **GPU 直绘**：界面与歌词动画由 iced + wgpu 绘制，着色器为 WGSL。
 - **不动不画**：没有动画时停止帧循环，空闲时不占 CPU。
 
+安卓端见 [Folia-rust-android](https://github.com/Techuouo520/Folia-rust-android)，与本项目共用 Rust 核心，开发中。
+
 ## 特性
 
 - **封面墙首页**：无限延展的封面墙，拖动带惯性；书脊式侧缝可展开、收起。
