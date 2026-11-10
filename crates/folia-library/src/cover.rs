@@ -18,9 +18,19 @@ pub struct Cover {
 
 const SIDECAR_NAMES: [&str; 6] = ["cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg", "front.png"];
 
+/// Whether the track has an embedded picture or a cover file beside it, without decoding pixels.
+pub fn has_cover(track_path: &Path) -> bool {
+    tag_has_picture(track_path) || sidecar_file(track_path).is_some()
+}
+
+/// The embedded picture, or the cover file beside the track, as stored. No crop and no RGBA conversion.
+pub fn cover_bytes(track_path: &Path) -> Option<Vec<u8>> {
+    embedded(track_path).or_else(|| sidecar(track_path))
+}
+
 /// The track's cover filling `width`×`height` like CSS `object-fit: cover`, or `None` when it has none.
 pub fn cover_for(track_path: &Path, width: u32, height: u32) -> Option<Cover> {
-    let bytes = embedded(track_path).or_else(|| sidecar(track_path))?;
+    let bytes = cover_bytes(track_path)?;
     cover_rgba(&bytes, width, height)
         .inspect_err(|err| tracing::debug!(path = %track_path.display(), error = %err, "cannot decode cover"))
         .ok()
@@ -44,17 +54,28 @@ fn fill(image: DynamicImage, width: u32, height: u32) -> DynamicImage {
     if scale < 1.0 { cropped.resize_exact(width, height, FilterType::Triangle) } else { cropped }
 }
 
+fn tag_has_picture(track_path: &Path) -> bool {
+    let Ok(file) = lofty::read_from_path(track_path) else { return false };
+    let Some(tag) = file.primary_tag().or_else(|| file.first_tag()) else { return false };
+    tag.pictures().iter().any(|picture| !picture.data().is_empty())
+}
+
 fn embedded(track_path: &Path) -> Option<Vec<u8>> {
     let file = lofty::read_from_path(track_path).ok()?;
     let tag = file.primary_tag().or_else(|| file.first_tag())?;
     let pictures = tag.pictures();
     let picture = pictures.iter().find(|p| p.pic_type() == PictureType::CoverFront).or_else(|| pictures.first())?;
-    Some(picture.data().to_vec())
+    let data = picture.data();
+    (!data.is_empty()).then(|| data.to_vec())
+}
+
+fn sidecar_file(track_path: &Path) -> Option<std::path::PathBuf> {
+    let dir = track_path.parent()?;
+    SIDECAR_NAMES.iter().map(|name| dir.join(name)).find(|path| path.is_file())
 }
 
 fn sidecar(track_path: &Path) -> Option<Vec<u8>> {
-    let dir = track_path.parent()?;
-    SIDECAR_NAMES.iter().find_map(|name| std::fs::read(dir.join(name)).ok())
+    std::fs::read(sidecar_file(track_path)?).ok()
 }
 
 /// Decoded covers kept for reuse under a byte budget; the least recently used go first once it is passed.

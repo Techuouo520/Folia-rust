@@ -3,9 +3,17 @@
 use std::fs;
 use std::path::Path;
 
-use folia_library::{Library, cover_for, decode_text, is_audio, lyrics_for};
+use folia_library::{Library, ScanStep, cover_bytes, cover_for, decode_text, has_cover, is_audio, lyrics_for};
 
 mod playlists;
+
+/// A 1×1 PNG. The library must hand these bytes back without turning them into RGBA.
+fn png_bytes() -> Vec<u8> {
+    let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]));
+    let mut bytes = Vec::new();
+    image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+    bytes
+}
 
 /// Writes a short silent 16-bit stereo WAV so lofty can read a real duration.
 fn write_wav(path: &Path, seconds: u32) {
@@ -59,6 +67,50 @@ fn scans_rescans_and_removes() {
     assert_eq!(library.remove_folder(&music).unwrap(), 1);
     assert!(library.tracks().unwrap().is_empty());
     assert!(library.folders().unwrap().is_empty());
+}
+
+#[test]
+fn reports_each_file_and_reads_one_track_by_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let music = dir.path().join("music");
+    let with_cover = music.join("with");
+    let bare_dir = music.join("bare");
+    fs::create_dir_all(&with_cover).unwrap();
+    fs::create_dir_all(&bare_dir).unwrap();
+    write_wav(&with_cover.join("01. Singer - Song.wav"), 1);
+    write_wav(&bare_dir.join("02. Other - Tune.wav"), 1);
+    fs::write(with_cover.join("cover.png"), png_bytes()).unwrap();
+
+    let mut library = Library::open(&dir.path().join("library.db")).unwrap();
+    library.add_folder(&music).unwrap();
+    let seen = std::sync::Mutex::new(Vec::new());
+    library
+        .scan_with(|progress| {
+            seen.lock().unwrap().push((progress.step, progress.index, progress.total, progress.path));
+        })
+        .unwrap();
+    let seen = seen.into_inner().unwrap();
+    let found: Vec<_> = seen.iter().filter(|item| item.0 == ScanStep::Found).collect();
+    let reading: Vec<_> = seen.iter().filter(|item| item.0 == ScanStep::Reading).collect();
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().all(|item| item.2.is_none()));
+    let mut indexes: Vec<_> = found.iter().map(|item| item.1).collect();
+    indexes.sort_unstable();
+    assert_eq!(indexes, [1, 2]);
+    assert_eq!(reading.len(), 2);
+    assert!(reading.iter().all(|item| item.2 == Some(2)));
+
+    let tracks = library.tracks().unwrap();
+    let song = tracks.iter().find(|track| track.title == "Song").unwrap();
+    assert_eq!(library.track(song.id).unwrap().as_ref().map(|track| track.title.as_str()), Some("Song"));
+    assert!(library.track(song.id + 1000).unwrap().is_none());
+    assert!(has_cover(&song.path));
+    let bytes = cover_bytes(&song.path).unwrap();
+    assert_eq!(&bytes[..8], &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']);
+    assert_ne!(bytes.len(), 32 * 32 * 4, "raw bytes are not a cropped RGBA tile");
+    let bare = tracks.iter().find(|track| track.title == "Tune").unwrap();
+    assert!(!has_cover(&bare.path));
+    assert!(cover_bytes(&bare.path).is_none());
 }
 
 #[test]

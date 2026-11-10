@@ -5,7 +5,7 @@ mod lyrics;
 mod playlists;
 mod tags;
 
-pub use cover::{Cover, CoverCache, cover_for, cover_rgba};
+pub use cover::{Cover, CoverCache, cover_bytes, cover_for, cover_rgba, has_cover};
 pub use lyrics::{decode_text, lyrics_for};
 pub use playlists::Playlist;
 pub use tags::gain_from_tag;
@@ -13,6 +13,7 @@ pub use tags::read as read_track;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 
 use folia_core::Track;
@@ -77,6 +78,24 @@ pub struct ScanReport {
     pub updated: usize,
     pub removed: usize,
     pub total: usize,
+}
+
+/// Which pass a progress report belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanStep {
+    /// An audio file was found. `total` is still unknown.
+    Found,
+    /// Tags are being read because the file is new or changed. `total` is how many files are read.
+    Reading,
+}
+
+/// One audio file during a scan. `index` is 1-based within the step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanProgress {
+    pub path: PathBuf,
+    pub index: usize,
+    pub total: Option<usize>,
+    pub step: ScanStep,
 }
 
 pub struct Library {
@@ -156,16 +175,37 @@ impl Library {
 
     /// Walks every folder, re-reads files whose size or modification time changed, and drops vanished files.
     pub fn scan(&mut self) -> Result<ScanReport, LibraryError> {
-        let found = self.find_files()?;
+        self.scan_with(|_| {})
+    }
+
+    /// [`scan`](Self::scan), calling `on_progress` once per audio file as it is found and once per file whose tags
+    /// are read. The callback runs on the scan thread and on the thread pool, so it must be safe to share.
+    pub fn scan_with<F>(&mut self, on_progress: F) -> Result<ScanReport, LibraryError>
+    where
+        F: Fn(ScanProgress) + Sync,
+    {
+        let found = self.find_files(&on_progress)?;
         let known: HashMap<String, (i64, i64)> = {
             let mut stmt = self.conn.prepare("SELECT path, size, mtime FROM tracks")?;
             stmt.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))?.collect::<Result<_, _>>()?
         };
 
-        let changed: Vec<(&FoundFile, Track)> = found
+        let pending: Vec<&FoundFile> =
+            found.iter().filter(|file| known.get(&file.key) != Some(&(file.size, file.mtime))).collect();
+        let reading = pending.len();
+        let next = AtomicUsize::new(0);
+        let changed: Vec<(&FoundFile, Track)> = pending
             .par_iter()
-            .filter(|file| known.get(&file.key) != Some(&(file.size, file.mtime)))
-            .map(|file| (file, tags::read(&file.path)))
+            .map(|file| {
+                let index = next.fetch_add(1, Ordering::Relaxed) + 1;
+                on_progress(ScanProgress {
+                    path: file.path.clone(),
+                    index,
+                    total: Some(reading),
+                    step: ScanStep::Reading,
+                });
+                (*file, tags::read(&file.path))
+            })
             .collect();
         let found_keys: HashSet<&str> = found.iter().map(|file| file.key.as_str()).collect();
         let vanished: Vec<String> = known.into_keys().filter(|key| !found_keys.contains(key.as_str())).collect();
@@ -207,31 +247,15 @@ impl Library {
 
     /// All tracks, ordered by artist, album, disc, track number and title.
     pub fn tracks(&self) -> Result<Vec<Track>, LibraryError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, path, title, artist, album, album_artist, track_no, disc_no, duration,
-             replay_gain_track, replay_gain_album FROM tracks
-             ORDER BY COALESCE(album_artist, artist) COLLATE NOCASE, album COLLATE NOCASE,
-             disc_no, track_no, title COLLATE NOCASE",
-        )?;
-        let tracks = stmt.query_map([], |row| {
-            let track_gain: Option<f32> = row.get(9)?;
-            let album_gain: Option<f32> = row.get(10)?;
-            Ok(Track {
-                id: row.get(0)?,
-                path: PathBuf::from(row.get::<_, String>(1)?),
-                title: row.get(2)?,
-                artist: row.get(3)?,
-                album: row.get(4)?,
-                album_artist: row.get(5)?,
-                track_no: row.get(6)?,
-                disc_no: row.get(7)?,
-                duration: row.get(8)?,
-                replay_gain: (track_gain.is_some() || album_gain.is_some())
-                    .then_some(folia_core::ReplayGain { track_db: track_gain, album_db: album_gain }),
-                ..Track::default()
-            })
-        })?;
+        let mut stmt = self.conn.prepare(&format!("{TRACK_COLUMNS} ORDER BY {TRACK_ORDER}"))?;
+        let tracks = stmt.query_map([], map_track)?;
         Ok(tracks.collect::<Result<_, _>>()?)
+    }
+
+    /// One track by its row id, or `None` when the library has no such row.
+    pub fn track(&self, id: i64) -> Result<Option<Track>, LibraryError> {
+        let mut stmt = self.conn.prepare(&format!("{TRACK_COLUMNS} WHERE id = ?1"))?;
+        Ok(stmt.query_row([id], map_track).optional()?)
     }
 
     /// Every local playlist, the liked-songs list first.
@@ -271,7 +295,7 @@ impl Library {
         playlists::delete(&self.conn, playlist)
     }
 
-    fn find_files(&self) -> Result<Vec<FoundFile>, LibraryError> {
+    fn find_files(&self, report: &impl Fn(ScanProgress)) -> Result<Vec<FoundFile>, LibraryError> {
         let mut seen = HashSet::new();
         let mut files = Vec::new();
         for folder in self.folders()? {
@@ -290,12 +314,38 @@ impl Library {
                     .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                     .map_or(0, |since| since.as_secs() as i64);
                 if seen.insert(key.clone()) {
-                    files.push(FoundFile { path: entry.into_path(), key, size: meta.len() as i64, mtime });
+                    let path = entry.into_path();
+                    files.push(FoundFile { path: path.clone(), key, size: meta.len() as i64, mtime });
+                    report(ScanProgress { path, index: files.len(), total: None, step: ScanStep::Found });
                 }
             }
         }
         Ok(files)
     }
+}
+
+const TRACK_COLUMNS: &str = "SELECT id, path, title, artist, album, album_artist, track_no, disc_no, duration,
+     replay_gain_track, replay_gain_album FROM tracks";
+const TRACK_ORDER: &str = "COALESCE(album_artist, artist) COLLATE NOCASE, album COLLATE NOCASE,
+     disc_no, track_no, title COLLATE NOCASE";
+
+fn map_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<Track> {
+    let track_gain: Option<f32> = row.get(9)?;
+    let album_gain: Option<f32> = row.get(10)?;
+    Ok(Track {
+        id: row.get(0)?,
+        path: PathBuf::from(row.get::<_, String>(1)?),
+        title: row.get(2)?,
+        artist: row.get(3)?,
+        album: row.get(4)?,
+        album_artist: row.get(5)?,
+        track_no: row.get(6)?,
+        disc_no: row.get(7)?,
+        duration: row.get(8)?,
+        replay_gain: (track_gain.is_some() || album_gain.is_some())
+            .then_some(folia_core::ReplayGain { track_db: track_gain, album_db: album_gain }),
+        ..Track::default()
+    })
 }
 
 pub fn is_audio(path: &Path) -> bool {
