@@ -1,0 +1,122 @@
+[classic]
+storage classic_tuning
+hiddenWhen wordSpacing useLegacyLayout
+reset notifications.classicReset
+switch enableWordRotation true
+select useLegacyLayout false false,true
+slider breathingFloatMultiplier 0 2 0.05 1
+slider wordSpacing 0 2 0.05 0.7
+
+[partita]
+storage partita_tuning
+reset notifications.partitaReset
+switch showGuideLines true
+switch useSemanticLayout true
+slider staggerMin 0 180 5 20
+slider staggerMax 0 180 5 100
+
+[still]
+storage still_tuning
+
+[tilt]
+storage tilt_tuning
+reset notifications.tiltReset
+picture colorScheme default default,swap,accentAll,primaryAll
+slider splitProbability 0 1 0.05 0.75
+slider tiltStyleProbability 0 1 0.05 0.35
+
+[claddagh]
+storage claddagh_tuning
+reset notifications.claddaghReset
+slider focusScaleRatio 0 1.5 0.05 0.65
+slider radiusScale 0.5 1.5 0.05 1
+slider ellipseTiltDeg 0 60 1 45
+switch showAxisLine true
+slider letterSpacingOffset -5 20 0.5 0
+
+[cadenza]
+storage cadenza_tuning
+older cadenze_tuning
+reset notifications.cadenzaReset
+
+[nebbia]
+storage nebbia_tuning
+reset notifications.nebbiaReset
+slider strokeWidth 0.04 0.16 0.005 0.09
+slider writeSpeed 0.4 2.5 0.05 1
+slider jitter 0 1.5 0.05 0.6
+slider warp 0 1.5 0.05 0.6
+slider doodle 0 1 0.05 0.3
+slider mist 0.2 1 0.01 0.75
+slider hold 0 6 0.1 1.2
+slider refog 0.5 12 0.5 4
+switch credits true
+member appear write true
+member appear fade true
+member appear breath false
+member fade fog true
+member fade fingers false
+member layouts ribbon true
+member layouts lines2 true
+member layouts lines3 true
+member layouts cross true
+member layouts pillar true
+member layouts header true
+member layouts badge true
+member layouts columns true
+member layouts orbit true
+slider busSpeed 0 3 0.05 1
+slider neon 0 2 0.05 1
+slider bump 0 2.5 0.05 1
+slider spot 0 2 0.05 0.5
+slider spotX 0 1 0.01 0.8
+slider rainHit 0 3 0.05 1
+slider rainBig 0 2 0.05 1
+slider resolution 0.5 2 0.25 1
+
+[lumiere]
+storage lumiere_tuning
+reset notifications.lumiereReset
+locked keywordColors themeIcons
+slider lightIntensity 0.3 2 0.05 1
+slider audioResponse 0 2 0.05 1
+slider bloom 0 2 0.05 1
+slider textBloom 0 2 0.05 1
+slider darkField 0 1 0.01 0.75
+slider fogDensity 0 2 0.05 1
+slider fogOctaves 2 6 1 5
+slider moteAmount 0 2 0.05 1
+switch frontBokeh true
+switch lineArt true
+switch overlayFrame true
+switch textOnly false
+slider unlitOpacity 0.05 0.6 0.01 0.22
+select windowNeighbors 2 1,2
+slider decay 0 2 0.05 1
+slider echo 0 2 0.05 1
+switch trails true
+switch hideTrails false
+switch seamlessTransitions true
+slider themeColorMix 0 1 0.01 0.3
+switch keywordColors true
+switch themeIcons true
+select renderQuality full full,balanced,low
+
+[monet]
+storage monet_tuning
+hiddenUnless audioStyle showAudioVisualization
+reset notifications.monetReset
+path portraitPath
+concealed portraitOffsetX
+locked keywordColoringEnabled
+slider fontScale 0.7 1.5 0.05 1.2
+switch keywordColoringEnabled true
+switch showDescription true
+select portraitSource cover cover,custom
+button uploadPortrait
+button clearPortrait
+picture portraitStyle square rectangular,square
+switch showPortraitDragHanger true
+slider portraitOffsetX -150 0 1 0
+switch showAudioVisualization true
+picture audioStyle bar bar,line

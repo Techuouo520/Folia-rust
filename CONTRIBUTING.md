@@ -179,6 +179,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
 ```
 
+```bash
+cargo test --manifest-path test/Cargo.toml
+```
+
+- 测试在仓库根目录的 `test/`，是独立的 cargo workspace，`crates/` 里不放测试。需要联网的测试标了 `#[ignore]`，只在本地用 `--ignored` 跑。
+- 每次推送与 PR 都会由 CI 跑格式、Lint 与测试；全架构构建在 GitHub Actions 里手动触发。
 - 界面改动**应当**附截图；移植的界面最好与原版同一位置对比。
 - 性能相关的改动**应当**附 release 构建下的测量数据。
 

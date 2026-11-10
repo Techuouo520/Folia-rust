@@ -1,0 +1,33 @@
+﻿[workspace]
+resolver = "3"
+members = ["core", "store", "i18n", "lyrics", "library", "player", "visualizer", "omni", "ui", "render", "visual/lumiere", "visual/monet", "bench/player"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+folia-core = { path = "../crates/folia-core" }
+folia-store = { path = "../crates/folia-store" }
+folia-i18n = { path = "../crates/folia-i18n" }
+folia-lyrics = { path = "../crates/folia-lyrics" }
+folia-library = { path = "../crates/folia-library" }
+folia-player = { path = "../crates/folia-player" }
+folia-visualizer = { path = "../crates/folia-visualizer" }
+folia-omni = { path = "../crates/folia-omni" }
+folia-ui = { path = "../crates/folia-ui" }
+folia-render = { path = "../crates/folia-render" }
+bytemuck = { version = "1.25.2", features = ["derive"] }
+iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "image-without-codecs", "linux-theme-detection", "svg", "thread-pool", "tokio", "wayland", "web-colors", "wgpu", "x11"] }
+iced_wgpu = "=0.14.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+pollster = "0.4.0"
+wgpu = "27.0.1"
+rqrr = "0.11.0"
+tempfile = "3.27.0"
+toml = "1.1.8"
+serde_json = "1.0"
+criterion = "0.8.2"
+
+[patch.crates-io]
+cryoglyph = { path = "../crates/cryoglyph" }

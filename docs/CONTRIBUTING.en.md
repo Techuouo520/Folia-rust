@@ -179,6 +179,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace
 ```
 
+```bash
+cargo test --manifest-path test/Cargo.toml
+```
+
+- Tests live in `test/` at the repo root, a separate cargo workspace; `crates/` holds no tests. Tests that need the network are marked `#[ignore]` and run locally with `--ignored`.
+- CI runs formatting, lints and tests on every push and PR; the all-architecture build is triggered manually in GitHub Actions.
 - UI changes **SHOULD** include screenshots; for ported interfaces, ideally side by side with the original at the same spot.
 - Performance-related changes **SHOULD** include measurements from a release build.
 

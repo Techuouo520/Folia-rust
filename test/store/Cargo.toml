@@ -1,0 +1,15 @@
+[package]
+name = "test-store"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+folia-core.workspace = true
+folia-store.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+tracing = "0.1.44"

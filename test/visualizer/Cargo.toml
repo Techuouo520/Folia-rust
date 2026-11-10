@@ -1,0 +1,25 @@
+[package]
+name = "test-visualizer"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+bytemuck.workspace = true
+folia-core.workspace = true
+folia-lyrics.workspace = true
+folia-store.workspace = true
+folia-visualizer.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+iced.workspace = true
+image.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+
+[features]
+# Set by CI: skips tests that need a hardware GPU.
+ci = []

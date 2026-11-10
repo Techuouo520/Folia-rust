@@ -1,0 +1,35 @@
+# Formatting, lints and the offline test suite on every push and pull request.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            test -> test/target
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Format tests
+        run: cargo fmt --all --check --manifest-path test/Cargo.toml
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --manifest-path test/Cargo.toml --workspace --all-features

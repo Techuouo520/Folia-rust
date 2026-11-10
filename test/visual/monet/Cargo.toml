@@ -1,0 +1,22 @@
+[package]
+name = "test-visual-monet"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+folia-core.workspace = true
+folia-ui.workspace = true
+folia-visualizer.workspace = true
+iced.workspace = true
+iced_wgpu = { version = "0.14.0", features = ["geometry"] }
+image = { workspace = true, features = ["webp"] }
+pollster = "0.4.0"
+wgpu = "27.0.1"
+
+[features]
+# Set by CI: skips tests that need a hardware GPU.
+ci = []

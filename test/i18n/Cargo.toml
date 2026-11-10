@@ -1,0 +1,12 @@
+[package]
+name = "test-i18n"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+folia-core.workspace = true
+folia-i18n.workspace = true

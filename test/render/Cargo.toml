@@ -1,0 +1,25 @@
+[package]
+name = "test-render"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+folia-core.workspace = true
+folia-i18n.workspace = true
+folia-render.workspace = true
+folia-ui.workspace = true
+folia-visualizer.workspace = true
+iced.workspace = true
+iced_runtime = "0.14.0"
+iced_wgpu = "=0.14.0"
+image.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+
+[features]
+# Set by CI: skips tests that need a hardware GPU.
+ci = []

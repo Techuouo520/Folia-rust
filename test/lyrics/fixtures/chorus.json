@@ -1,0 +1,2223 @@
+{
+ "cases": [
+  {
+   "file": "harbor.lrc",
+   "translation": "",
+   "lines": [
+    {
+     "start": 0.5,
+     "end": 5.7,
+     "text": "......",
+     "translation": null
+    },
+    {
+     "start": 6.2,
+     "end": 9.6,
+     "text": "Grey gulls circle over the pier",
+     "translation": null
+    },
+    {
+     "start": 9.6,
+     "end": 13,
+     "text": "Ropes are creaking in the tide",
+     "translation": null
+    },
+    {
+     "start": 13,
+     "end": 16.4,
+     "text": "Every sailor knows the song",
+     "translation": null
+    },
+    {
+     "start": 16.4,
+     "end": 21.4,
+     "text": "Nobody sings it right",
+     "translation": null
+    },
+    {
+     "start": 21.4,
+     "end": 24.5,
+     "text": "Bring me home, bring me home",
+     "translation": null
+    },
+    {
+     "start": 24.5,
+     "end": 27.6,
+     "text": "Where the harbor lights are low",
+     "translation": null
+    },
+    {
+     "start": 27.6,
+     "end": 30.7,
+     "text": "Bring me home, bring me home",
+     "translation": null
+    },
+    {
+     "start": 30.7,
+     "end": 35.4,
+     "text": "Let the morning carry me",
+     "translation": null
+    },
+    {
+     "start": 35.4,
+     "end": 38.5,
+     "text": "Salt is drying on my hands",
+     "translation": null
+    },
+    {
+     "start": 38.5,
+     "end": 41.6,
+     "text": "The compass spins and will not rest",
+     "translation": null
+    },
+    {
+     "start": 41.6,
+     "end": 44.7,
+     "text": "I wrote your name on every map",
+     "translation": null
+    },
+    {
+     "start": 44.7,
+     "end": 49.4,
+     "text": "And sailed into the west",
+     "translation": null
+    },
+    {
+     "start": 49.4,
+     "end": 52.5,
+     "text": "Bring me home, bring me home",
+     "translation": null
+    },
+    {
+     "start": 52.5,
+     "end": 55.6,
+     "text": "Where the harbor lights are low",
+     "translation": null
+    },
+    {
+     "start": 55.6,
+     "end": 58.7,
+     "text": "Bring me home, bring me home",
+     "translation": null
+    },
+    {
+     "start": 58.7,
+     "end": 63.4,
+     "text": "Let the morning carry me",
+     "translation": null
+    },
+    {
+     "start": 63.4,
+     "end": 66.5,
+     "text": "啊",
+     "translation": null
+    },
+    {
+     "start": 66.5,
+     "end": 69.6,
+     "text": "啊",
+     "translation": null
+    },
+    {
+     "start": 69.6,
+     "end": 72.7,
+     "text": "啊",
+     "translation": null
+    },
+    {
+     "start": 72.7,
+     "end": 75.8,
+     "text": "啊",
+     "translation": null
+    },
+    {
+     "start": 75.8,
+     "end": 78.9,
+     "text": "啊",
+     "translation": null
+    },
+    {
+     "start": 78.9,
+     "end": 82,
+     "text": "啊",
+     "translation": null
+    },
+    {
+     "start": 82,
+     "end": 85.1,
+     "text": "啊",
+     "translation": null
+    },
+    {
+     "start": 85.1,
+     "end": 89.8,
+     "text": "Oh, the water",
+     "translation": null
+    },
+    {
+     "start": 89.8,
+     "end": 92.9,
+     "text": "Bring me home, bring me home",
+     "translation": null
+    },
+    {
+     "start": 92.9,
+     "end": 96,
+     "text": "Where the harbor lights are low",
+     "translation": null
+    },
+    {
+     "start": 96,
+     "end": 99.1,
+     "text": "Bring me home, bring me home",
+     "translation": null
+    },
+    {
+     "start": 99.1,
+     "end": 104.1,
+     "text": "Let the morning carry me",
+     "translation": null
+    }
+   ],
+   "detected": [
+    "Bring me home, bring me home"
+   ],
+   "online": {
+    "mode": "text",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     true,
+     false
+    ]
+   },
+   "local": {
+    "mode": "text",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     true,
+     false
+    ]
+   },
+   "ranges": [
+    {
+     "start": 16.4,
+     "end": 21.4
+    },
+    {
+     "start": 28,
+     "end": 38.7
+    },
+    {
+     "start": 44.800000000000004,
+     "end": 45
+    },
+    {
+     "start": 9999,
+     "end": 1
+    }
+   ],
+   "byRanges": [
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "perRange": [
+    [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   ],
+   "native": {
+    "mode": "native",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   "plan": {
+    "drafts": [
+     {
+      "lines": [
+       0,
+       1
+      ],
+      "boundary": "song-start",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       2,
+       3
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       4,
+       5
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       6,
+       7
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       8,
+       9
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       10,
+       11
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       12,
+       13
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       14,
+       15
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       16,
+       17
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       18,
+       19
+      ],
+      "boundary": "duration-cap",
+      "kind": "breath"
+     },
+     {
+      "lines": [
+       20,
+       21
+      ],
+      "boundary": "duration-cap",
+      "kind": "breath"
+     },
+     {
+      "lines": [
+       22,
+       23
+      ],
+      "boundary": "duration-cap",
+      "kind": "breath"
+     },
+     {
+      "lines": [
+       24,
+       25
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       26,
+       27,
+       28
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     }
+    ],
+    "paragraphs": [
+     {
+      "start": 0,
+      "end": 9.6,
+      "boundary": "song-start",
+      "kind": "verse"
+     },
+     {
+      "start": 9.6,
+      "end": 16.4,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 16.4,
+      "end": 24.5,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 24.5,
+      "end": 30.7,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 30.7,
+      "end": 38.5,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 38.5,
+      "end": 44.7,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 44.7,
+      "end": 52.5,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 52.5,
+      "end": 58.7,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 58.7,
+      "end": 66.5,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 66.5,
+      "end": 72.7,
+      "boundary": "duration-cap",
+      "kind": "breath"
+     },
+     {
+      "start": 72.7,
+      "end": 78.9,
+      "boundary": "duration-cap",
+      "kind": "breath"
+     },
+     {
+      "start": 78.9,
+      "end": 85.1,
+      "boundary": "duration-cap",
+      "kind": "breath"
+     },
+     {
+      "start": 85.1,
+      "end": 92.9,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 92.9,
+      "end": 104.1,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     }
+    ],
+    "shots": [
+     {
+      "kind": "astral-constellation",
+      "start": 0,
+      "end": 6.2
+     },
+     {
+      "kind": "caustic-crystal",
+      "start": 6.2,
+      "end": 9.6
+     },
+     {
+      "kind": "motes-mist",
+      "start": 9.6,
+      "end": 16.4
+     },
+     {
+      "kind": "prism-wheel",
+      "start": 16.4,
+      "end": 21.4
+     },
+     {
+      "kind": "lattice-nave",
+      "start": 21.4,
+      "end": 24.5
+     },
+     {
+      "kind": "botany-fern",
+      "start": 24.5,
+      "end": 30.7
+     },
+     {
+      "kind": "astral-sextant",
+      "start": 30.7,
+      "end": 35.4
+     },
+     {
+      "kind": "caustic-ripple",
+      "start": 35.4,
+      "end": 38.5
+     },
+     {
+      "kind": "stage-footlight",
+      "start": 38.5,
+      "end": 44.7
+     },
+     {
+      "kind": "motes-embers",
+      "start": 44.7,
+      "end": 49.4
+     },
+     {
+      "kind": "lattice-rose",
+      "start": 49.4,
+      "end": 52.5
+     },
+     {
+      "kind": "botany-fern",
+      "start": 52.5,
+      "end": 58.7
+     },
+     {
+      "kind": "lattice-blinds",
+      "start": 58.7,
+      "end": 63.4
+     },
+     {
+      "kind": "zenith-ember",
+      "start": 63.4,
+      "end": 66.5
+     },
+     {
+      "kind": "stage-footlight",
+      "start": 66.5,
+      "end": 72.7
+     },
+     {
+      "kind": "caustic-cup",
+      "start": 72.7,
+      "end": 78.9
+     },
+     {
+      "kind": "optics-periscope",
+      "start": 78.9,
+      "end": 85.1
+     },
+     {
+      "kind": "botany-vine",
+      "start": 85.1,
+      "end": 89.8
+     },
+     {
+      "kind": "wave-slits",
+      "start": 89.8,
+      "end": 92.9
+     },
+     {
+      "kind": "botany-pollen",
+      "start": 92.9,
+      "end": 99.1
+     },
+     {
+      "kind": "stage-laser",
+      "start": 99.1,
+      "end": 104.1
+     }
+    ]
+   }
+  },
+  {
+   "file": "letters.lrc",
+   "translation": "letters.t.lrc",
+   "lines": [
+    {
+     "start": 2,
+     "end": 4.8,
+     "text": "我在窗边写信",
+     "translation": "I write letters by the window"
+    },
+    {
+     "start": 4.8,
+     "end": 7.6,
+     "text": "写给很远的你",
+     "translation": "To you so far away"
+    },
+    {
+     "start": 7.6,
+     "end": 10.4,
+     "text": "风把纸吹皱了",
+     "translation": "The wind crumples the paper"
+    },
+    {
+     "start": 10.4,
+     "end": 13.2,
+     "text": "就当是你回信",
+     "translation": "Let that be your reply"
+    },
+    {
+     "start": 13.2,
+     "end": 18.2,
+     "text": "信里没有地址",
+     "translation": "There is no address in the letter"
+    },
+    {
+     "start": 20.7,
+     "end": 23.5,
+     "text": "我在窗边写信",
+     "translation": "I write letters by the window"
+    },
+    {
+     "start": 23.5,
+     "end": 26.3,
+     "text": "写给很远的你",
+     "translation": "To you so far away"
+    },
+    {
+     "start": 26.3,
+     "end": 29.1,
+     "text": "邮差不会来了",
+     "translation": "The postman won't come"
+    },
+    {
+     "start": 29.1,
+     "end": 31.9,
+     "text": "我把信折成鸟",
+     "translation": "I fold the letter into a bird"
+    },
+    {
+     "start": 31.9,
+     "end": 34.7,
+     "text": "让它飞过海去",
+     "translation": "And let it fly across the sea"
+    },
+    {
+     "start": 34.7,
+     "end": 37.5,
+     "text": "信里没有地址",
+     "translation": "There is no address in the letter"
+    },
+    {
+     "start": 37.5,
+     "end": 42.5,
+     "text": "信里没有地址",
+     "translation": "There is no address in the letter"
+    }
+   ],
+   "detected": [
+    "信里没有地址"
+   ],
+   "online": {
+    "mode": "text",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     true
+    ]
+   },
+   "local": {
+    "mode": "text",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     true
+    ]
+   },
+   "ranges": [
+    {
+     "start": 13.2,
+     "end": 20.7
+    },
+    {
+     "start": 26.7,
+     "end": 34.900000000000006
+    },
+    {
+     "start": 37.6,
+     "end": 37.8
+    },
+    {
+     "start": 9999,
+     "end": 1
+    }
+   ],
+   "byRanges": [
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    true
+   ],
+   "perRange": [
+    [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   ],
+   "native": {
+    "mode": "native",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     false
+    ]
+   },
+   "plan": {
+    "drafts": [
+     {
+      "lines": [
+       0,
+       1,
+       2,
+       3,
+       4
+      ],
+      "boundary": "song-start",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       5,
+       6
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       7,
+       8,
+       9,
+       10,
+       11
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     }
+    ],
+    "paragraphs": [
+     {
+      "start": 0,
+      "end": 20.7,
+      "boundary": "song-start",
+      "kind": "chorus"
+     },
+     {
+      "start": 20.7,
+      "end": 26.3,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 26.3,
+      "end": 42.5,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     }
+    ],
+    "shots": [
+     {
+      "kind": "astral-corona",
+      "start": 0,
+      "end": 7.6
+     },
+     {
+      "kind": "caustic-storm",
+      "start": 7.6,
+      "end": 13.2
+     },
+     {
+      "kind": "motes-aurora",
+      "start": 13.2,
+      "end": 20.7
+     },
+     {
+      "kind": "stage-pinspot",
+      "start": 20.7,
+      "end": 26.3
+     },
+     {
+      "kind": "prism-cube",
+      "start": 26.3,
+      "end": 31.9
+     },
+     {
+      "kind": "lattice-nave",
+      "start": 31.9,
+      "end": 37.5
+     },
+     {
+      "kind": "stage-strobe",
+      "start": 37.5,
+      "end": 42.5
+     }
+    ]
+   }
+  },
+  {
+   "file": "platform.lrc",
+   "translation": "",
+   "lines": [
+    {
+     "start": 0.5,
+     "end": 2.6,
+     "text": "......",
+     "translation": null
+    },
+    {
+     "start": 3.1,
+     "end": 5.5,
+     "text": "风从北方吹来",
+     "translation": null
+    },
+    {
+     "start": 5.5,
+     "end": 7.9,
+     "text": "吹过空空的站台",
+     "translation": null
+    },
+    {
+     "start": 7.9,
+     "end": 10.6,
+     "text": "我数着路灯",
+     "translation": null
+    },
+    {
+     "start": 10.6,
+     "end": 13,
+     "text": "一盏一盏地亮起来",
+     "translation": null
+    },
+    {
+     "start": 13,
+     "end": 16,
+     "text": "你说别等了",
+     "translation": null
+    },
+    {
+     "start": 16,
+     "end": 18.4,
+     "text": "可我还在这里",
+     "translation": null
+    },
+    {
+     "start": 18.4,
+     "end": 20.8,
+     "text": "啊",
+     "translation": null
+    },
+    {
+     "start": 20.8,
+     "end": 23.5,
+     "text": "列车没有回来",
+     "translation": null
+    },
+    {
+     "start": 23.5,
+     "end": 25.9,
+     "text": "雨落在铁轨上",
+     "translation": null
+    },
+    {
+     "start": 25.9,
+     "end": 28.3,
+     "text": "像一封没寄出的信",
+     "translation": null
+    },
+    {
+     "start": 28.3,
+     "end": 30.7,
+     "text": "为什么不说再见？",
+     "translation": null
+    },
+    {
+     "start": 30.7,
+     "end": 33.7,
+     "text": "为什么不回头！",
+     "translation": null
+    },
+    {
+     "start": 33.7,
+     "end": 36.4,
+     "text": "我把名字写在窗上",
+     "translation": null
+    },
+    {
+     "start": 36.4,
+     "end": 41.4,
+     "text": "等它慢慢化开",
+     "translation": null
+    },
+    {
+     "start": 44.3,
+     "end": 46.7,
+     "text": "夜很长",
+     "translation": null
+    },
+    {
+     "start": 46.7,
+     "end": 49.1,
+     "text": "梦很短",
+     "translation": null
+    },
+    {
+     "start": 49.1,
+     "end": 51.5,
+     "text": "灯还亮着",
+     "translation": null
+    },
+    {
+     "start": 51.5,
+     "end": 54.2,
+     "text": "我也还在",
+     "translation": null
+    },
+    {
+     "start": 54.2,
+     "end": 57.2,
+     "text": "天快亮了吗？",
+     "translation": null
+    },
+    {
+     "start": 57.2,
+     "end": 59.6,
+     "text": "天快亮了吧！",
+     "translation": null
+    },
+    {
+     "start": 59.6,
+     "end": 62,
+     "text": "风停了",
+     "translation": null
+    },
+    {
+     "start": 62,
+     "end": 67,
+     "text": "我也该走了",
+     "translation": null
+    }
+   ],
+   "detected": [],
+   "online": {
+    "mode": "text",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   "local": {
+    "mode": "text",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   "ranges": [
+    {
+     "start": 10.6,
+     "end": 13
+    },
+    {
+     "start": 18.799999999999997,
+     "end": 26.099999999999998
+    },
+    {
+     "start": 30.8,
+     "end": 31
+    },
+    {
+     "start": 9999,
+     "end": 1
+    }
+   ],
+   "byRanges": [
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "perRange": [
+    [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   ],
+   "native": {
+    "mode": "native",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   "plan": {
+    "drafts": [
+     {
+      "lines": [
+       0,
+       1
+      ],
+      "boundary": "song-start",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       2,
+       3
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       4,
+       5
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       6,
+       7
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       8,
+       9
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       10,
+       11,
+       12,
+       13,
+       14
+      ],
+      "boundary": "duration-cap",
+      "kind": "lift"
+     },
+     {
+      "lines": [
+       15,
+       16
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       17,
+       18,
+       19,
+       20,
+       21,
+       22
+      ],
+      "boundary": "duration-cap",
+      "kind": "outro"
+     }
+    ],
+    "paragraphs": [
+     {
+      "start": 0,
+      "end": 5.5,
+      "boundary": "song-start",
+      "kind": "verse"
+     },
+     {
+      "start": 5.5,
+      "end": 10.6,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 10.6,
+      "end": 16,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 16,
+      "end": 20.8,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 20.8,
+      "end": 25.9,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 25.9,
+      "end": 44.3,
+      "boundary": "duration-cap",
+      "kind": "lift"
+     },
+     {
+      "start": 44.3,
+      "end": 49.1,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 49.1,
+      "end": 67,
+      "boundary": "duration-cap",
+      "kind": "outro"
+     }
+    ],
+    "shots": [
+     {
+      "kind": "astral-constellation",
+      "start": 0,
+      "end": 5.5
+     },
+     {
+      "kind": "motes-bokeh",
+      "start": 5.5,
+      "end": 10.6
+     },
+     {
+      "kind": "prism-cube",
+      "start": 10.6,
+      "end": 16
+     },
+     {
+      "kind": "botany-sprout",
+      "start": 16,
+      "end": 20.8
+     },
+     {
+      "kind": "astral-sextant",
+      "start": 20.8,
+      "end": 25.9
+     },
+     {
+      "kind": "stage-cross",
+      "start": 25.9,
+      "end": 30.7
+     },
+     {
+      "kind": "zenith-crown",
+      "start": 30.7,
+      "end": 36.4
+     },
+     {
+      "kind": "prism-split",
+      "start": 36.4,
+      "end": 44.3
+     },
+     {
+      "kind": "motes-smoke",
+      "start": 44.3,
+      "end": 49.1
+     },
+     {
+      "kind": "wave-airy",
+      "start": 49.1,
+      "end": 54.2
+     },
+     {
+      "kind": "motes-mist",
+      "start": 54.2,
+      "end": 59.6
+     },
+     {
+      "kind": "prism-fringe",
+      "start": 59.6,
+      "end": 62
+     },
+     {
+      "kind": "wave-newton",
+      "start": 62,
+      "end": 67
+     }
+    ]
+   }
+  },
+  {
+   "file": "sunrise.lrc",
+   "translation": "",
+   "lines": [
+    {
+     "start": 0.5,
+     "end": 23.5,
+     "text": "......",
+     "translation": null
+    },
+    {
+     "start": 24,
+     "end": 27.6,
+     "text": "Morning comes so slowly",
+     "translation": null
+    },
+    {
+     "start": 27.6,
+     "end": 31,
+     "text": "清晨来得好慢",
+     "translation": null
+    },
+    {
+     "start": 31,
+     "end": 34.8,
+     "text": "I keep the window open",
+     "translation": null
+    },
+    {
+     "start": 34.8,
+     "end": 38.5,
+     "text": "让光进来",
+     "translation": null
+    },
+    {
+     "start": 38.5,
+     "end": 41.9,
+     "text": "Just a little longer",
+     "translation": null
+    },
+    {
+     "start": 41.9,
+     "end": 46.4,
+     "text": "再等一会儿",
+     "translation": null
+    },
+    {
+     "start": 46.449999999999996,
+     "end": 65.95,
+     "text": "......",
+     "translation": null
+    },
+    {
+     "start": 66,
+     "end": 68.2,
+     "text": "Here it comes!",
+     "translation": null
+    },
+    {
+     "start": 68.2,
+     "end": 70.1,
+     "text": "它来了！",
+     "translation": null
+    },
+    {
+     "start": 70.1,
+     "end": 72.3,
+     "text": "Here it comes!",
+     "translation": null
+    },
+    {
+     "start": 72.3,
+     "end": 74.6,
+     "text": "它来了！",
+     "translation": null
+    },
+    {
+     "start": 74.6,
+     "end": 78,
+     "text": "Open up the sky",
+     "translation": null
+    },
+    {
+     "start": 78,
+     "end": 81.5,
+     "text": "把天空打开",
+     "translation": null
+    },
+    {
+     "start": 81.5,
+     "end": 85,
+     "text": "Open up the sky",
+     "translation": null
+    },
+    {
+     "start": 85,
+     "end": 88.6,
+     "text": "把天空打开",
+     "translation": null
+    },
+    {
+     "start": 88.6,
+     "end": 90.4,
+     "text": "La la la",
+     "translation": null
+    },
+    {
+     "start": 90.4,
+     "end": 92.2,
+     "text": "啦啦啦",
+     "translation": null
+    },
+    {
+     "start": 92.2,
+     "end": 96,
+     "text": "La la la la la",
+     "translation": null
+    },
+    {
+     "start": 96,
+     "end": 101,
+     "text": "Goodbye, night",
+     "translation": null
+    }
+   ],
+   "detected": [
+    "Here it comes!",
+    "Open up the sky",
+    "它来了！",
+    "把天空打开"
+   ],
+   "online": {
+    "mode": "text",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     true,
+     true,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   "local": {
+    "mode": "text",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     true,
+     true,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   "ranges": [
+    {
+     "start": 34.8,
+     "end": 38.5
+    },
+    {
+     "start": 46.849999999999994,
+     "end": 70.3
+    },
+    {
+     "start": 74.69999999999999,
+     "end": 74.89999999999999
+    },
+    {
+     "start": 9999,
+     "end": 1
+    }
+   ],
+   "byRanges": [
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "perRange": [
+    [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   ],
+   "native": {
+    "mode": "native",
+    "chorus": [
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     true,
+     true,
+     true,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   },
+   "plan": {
+    "drafts": [
+     {
+      "lines": [
+       0
+      ],
+      "boundary": "song-start",
+      "kind": "breath"
+     },
+     {
+      "lines": [
+       1
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       2,
+       3
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       4,
+       5,
+       6
+      ],
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "lines": [
+       7
+      ],
+      "boundary": "duration-cap",
+      "kind": "breath"
+     },
+     {
+      "lines": [
+       8
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       9,
+       10
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       11,
+       12
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       13,
+       14
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "lines": [
+       15,
+       16,
+       17,
+       18,
+       19
+      ],
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     }
+    ],
+    "paragraphs": [
+     {
+      "start": 0,
+      "end": 24,
+      "boundary": "song-start",
+      "kind": "breath"
+     },
+     {
+      "start": 24,
+      "end": 27.6,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 27.6,
+      "end": 34.8,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 34.8,
+      "end": 46.449999999999996,
+      "boundary": "duration-cap",
+      "kind": "verse"
+     },
+     {
+      "start": 46.449999999999996,
+      "end": 66,
+      "boundary": "duration-cap",
+      "kind": "breath"
+     },
+     {
+      "start": 66,
+      "end": 68.2,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 68.2,
+      "end": 72.3,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 72.3,
+      "end": 78,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 78,
+      "end": 85,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     },
+     {
+      "start": 85,
+      "end": 101,
+      "boundary": "duration-cap",
+      "kind": "chorus"
+     }
+    ],
+    "shots": [
+     {
+      "kind": "astral-constellation",
+      "start": 0,
+      "end": 24
+     },
+     {
+      "kind": "motes-bokeh",
+      "start": 24,
+      "end": 27.6
+     },
+     {
+      "kind": "prism-cube",
+      "start": 27.6,
+      "end": 31
+     },
+     {
+      "kind": "lattice-sweep",
+      "start": 31,
+      "end": 34.8
+     },
+     {
+      "kind": "botany-veins",
+      "start": 34.8,
+      "end": 38.5
+     },
+     {
+      "kind": "wave-grating",
+      "start": 38.5,
+      "end": 41.9
+     },
+     {
+      "kind": "prism-fringe",
+      "start": 41.9,
+      "end": 46.449999999999996
+     },
+     {
+      "kind": "astral-constellation",
+      "start": 46.449999999999996,
+      "end": 66
+     },
+     {
+      "kind": "stage-cross",
+      "start": 66,
+      "end": 68.2
+     },
+     {
+      "kind": "motes-embers",
+      "start": 68.2,
+      "end": 72.3
+     },
+     {
+      "kind": "wave-sources",
+      "start": 72.3,
+      "end": 78
+     },
+     {
+      "kind": "zenith-descent",
+      "start": 78,
+      "end": 85
+     },
+     {
+      "kind": "stage-spot",
+      "start": 85,
+      "end": 90.4
+     },
+     {
+      "kind": "zenith-halo",
+      "start": 90.4,
+      "end": 92.2
+     },
+     {
+      "kind": "caustic-crystal",
+      "start": 92.2,
+      "end": 96
+     },
+     {
+      "kind": "wave-standing",
+      "start": 96,
+      "end": 101
+     }
+    ]
+   }
+  }
+ ],
+ "existing": {
+  "file": "lanterns.ttml",
+  "mode": "existing",
+  "none": "none"
+ }
+}

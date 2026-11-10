@@ -1,0 +1,66 @@
+# Manual release build for every desktop target; with a tag it attaches the archives to that release.
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and upload to (empty builds the selected branch and keeps the archives as artifacts)
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { name: windows-arm64, os: windows-11-arm, target: aarch64-pc-windows-msvc }
+          - { name: linux-x64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { name: linux-arm64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin }
+          - { name: macos-x64, os: macos-14, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install toolchain and target
+        shell: bash
+        run: rustup toolchain install && rustup target add ${{ matrix.target }}
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev libdbus-1-dev libxkbcommon-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p folia-app --target ${{ matrix.target }}
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag }}"; version="${version:-${GITHUB_SHA::7}}"; stage="folia-${version}-${{ matrix.name }}"
+          mkdir -p "$stage"
+          if [ "${{ runner.os }}" = "Windows" ]; then cp "target/${{ matrix.target }}/release/folia.exe" "$stage/"; else cp "target/${{ matrix.target }}/release/folia" "$stage/"; fi
+          cp -r assets LICENSE README.md "$stage/"
+          if [ "${{ runner.os }}" = "Windows" ]; then 7z a -tzip "$stage.zip" "$stage" > /dev/null; echo "file=$stage.zip" >> "$GITHUB_OUTPUT"; else tar -czf "$stage.tar.gz" "$stage"; echo "file=$stage.tar.gz" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ steps.package.outputs.file }}
+      - name: Upload to release
+        if: inputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" "${{ steps.package.outputs.file }}" --clobber

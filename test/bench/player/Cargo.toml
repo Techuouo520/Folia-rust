@@ -1,0 +1,13 @@
+[package]
+name = "test-bench-player"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+folia-player.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "frame"
+harness = false

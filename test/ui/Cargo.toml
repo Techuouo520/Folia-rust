@@ -1,0 +1,33 @@
+[package]
+name = "test-ui"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+folia-omni = { path = "../../crates/folia-omni" }
+folia-core.workspace = true
+folia-store.workspace = true
+folia-i18n.workspace = true
+folia-lyrics.workspace = true
+folia-ui.workspace = true
+folia-render.workspace = true
+folia-visualizer.workspace = true
+iced.workspace = true
+image.workspace = true
+cryoglyph = "0.1.0"
+pollster.workspace = true
+wgpu.workspace = true
+resvg = "0.45.1"
+iced_runtime = "0.14.0"
+lucide-static-svg = "1.65.0"
+serde_json.workspace = true
+toml.workspace = true
+tracing = "0.1.44"
+
+[features]
+# Set by CI: skips tests that need a hardware GPU.
+ci = []
