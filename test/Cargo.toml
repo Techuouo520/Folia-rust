@@ -7,6 +7,8 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 folia-core = { path = "../crates/folia-core" }
 folia-store = { path = "../crates/folia-store" }
 folia-i18n = { path = "../crates/folia-i18n" }

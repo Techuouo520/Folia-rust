@@ -13,6 +13,7 @@ fn grain_frames_wrap_before_they_grow() {
     assert_eq!(grain_frame(f32::NAN), 0);
 }
 
+mod backend;
 mod blur;
 mod glyphs;
 mod scene;

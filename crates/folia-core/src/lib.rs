@@ -2,6 +2,7 @@
 
 mod audio;
 mod audio_eq;
+mod audio_input;
 mod audio_quality;
 mod language;
 mod lyrics;
@@ -14,6 +15,7 @@ pub use audio_eq::{
     AudioEffects, BandShape, EQUALIZER_FREQUENCIES, EQUALIZER_MAX_GAIN_DB, EQUALIZER_MIN_GAIN_DB, EQUALIZER_Q,
     EqualizerSettings, EqualizerSlot, SOUND_PRESETS, SoundPreset, preset,
 };
+pub use audio_input::{AudioInput, Download, DownloadReader, ReadRequest};
 pub use audio_quality::{AUDIO_QUALITY_LEVELS, AudioQuality, UNLISTED_AUDIO_QUALITY_LEVELS};
 pub use language::{Language, LanguagePreference};
 pub use lyrics::{ChorusRange, INTERLUDE_TEXT, Line, Lyrics, Word};

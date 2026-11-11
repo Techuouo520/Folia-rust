@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use tracing::Level;
+use tracing::field::{Field, Visit};
 
 use crate::developer::LogMode;
 use crate::file_log::FileLog;
@@ -49,6 +50,13 @@ pub struct RuntimeLog {
 }
 
 impl RuntimeLog {
+    /// Records tracing fields, including every cause of structured error fields.
+    pub fn record_event(&self, event: &tracing::Event<'_>) {
+        let mut text = EventText::default();
+        event.record(&mut text);
+        self.push(*event.metadata().level(), event.metadata().target(), &text.0);
+    }
+
     pub fn new(path: PathBuf) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -154,4 +162,45 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
         year += 1;
     }
     (year, month as u32, day as u32)
+}
+
+/// Renders one tracing event into the text the session log panel shows and the file keeps.
+#[derive(Default)]
+struct EventText(String);
+
+impl Visit for EventText {
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.record(field, &error_chain(value));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.record(field, &value);
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.record(field, &format_args!("{value:?}"));
+    }
+}
+
+impl EventText {
+    fn record(&mut self, field: &Field, value: &dyn std::fmt::Display) {
+        use std::fmt::Write as _;
+        if field.name() == "message" {
+            let _ = write!(self.0, "{value}");
+        } else {
+            let _ = write!(self.0, " {}={value}", field.name());
+        }
+    }
+}
+
+/// `error: cause: cause` on one line, for showing an error chain in the interface.
+pub fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut text = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }

@@ -8,6 +8,25 @@ use iced::{Alignment, Color, Element, Length, Padding};
 
 use crate::platform_icon::mark_faded;
 
+pub fn loading_view<'a, M: 'a>(
+    i18n: &I18n,
+    daylight: bool,
+    width: f32,
+    opacity: f32,
+    shift: f32,
+    angle: f32,
+) -> Element<'a, M> {
+    let color = Color { a: opacity, ..Color::from_rgb8(0x3b, 0x82, 0xf6) };
+    plate(
+        crate::icons::spinner(20.0, color, angle),
+        i18n.t("status.loadingSong").to_owned(),
+        daylight,
+        width,
+        opacity,
+        shift,
+    )
+}
+
 pub fn view<'a, M: 'a>(
     i18n: &I18n,
     platform: Platform,

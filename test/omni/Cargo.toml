@@ -11,8 +11,11 @@ path = "lib.rs"
 folia-core.workspace = true
 folia-omni.workspace = true
 folia-store.workspace = true
+folia-player.workspace = true
+tracing-subscriber.workspace = true
 serde_json.workspace = true
 image.workspace = true
 rqrr.workspace = true
 tempfile.workspace = true
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }

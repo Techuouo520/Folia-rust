@@ -559,6 +559,8 @@ midnightDefault = "Midnight Default"
 daylightDefault = "Daylight Default"
 
 [status]
+graphicsInitializationFailed = "Graphics initialization failed. Try setting WGPU_BACKEND=dx12 or WGPU_BACKEND=vulkan."
+loadingSong = "Loading song URL..."
 queueShuffled = "Queue shuffled"
 liked = "Added to Liked Songs"
 unliked = "Removed from Liked"

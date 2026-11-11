@@ -559,6 +559,8 @@ midnightDefault = "Bawaan Tengah Malam"
 daylightDefault = "Bawaan Siang Hari"
 
 [status]
+graphicsInitializationFailed = "Inisialisasi grafis gagal. Coba atur WGPU_BACKEND=dx12 atau WGPU_BACKEND=vulkan."
+loadingSong = "Memuat URL lagu..."
 queueShuffled = "Antrean diacak"
 liked = "Ditambahkan ke Lagu Disukai"
 unliked = "Dihapus dari Disukai"

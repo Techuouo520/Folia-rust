@@ -1,9 +1,8 @@
 // Playback controller: owns the player and the queue, follows track ends and loads lyrics.
 
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use folia_core::{AudioFrame, AudioQuality, ChorusRange, Lyrics, Queue, Repeat, ReplayGain, Track};
+use folia_core::{AudioFrame, AudioInput, AudioQuality, ChorusRange, Lyrics, Queue, Repeat, ReplayGain, Track};
 use folia_lyrics::{ChorusSource, chorus_ranges_of, resolve_chorus};
 use folia_omni::{Collection, Omni};
 use folia_player::{Player, PlayerState, Status};
@@ -33,6 +32,16 @@ pub struct Playback {
     notice: Option<(String, Instant)>,
     notice_serial: u64,
     request: u64,
+    pub loading: Loading,
+    loading_at: Option<Instant>,
+    loading_toast: bool,
+    audio_task: Option<iced::task::Handle>,
+    prefetch_task: Option<iced::task::Handle>,
+    prefetch_key: u64,
+    prefetch_dirty: bool,
+    source_revision: u64,
+    active_input: Option<AudioInput>,
+    failed_inputs: Vec<std::path::PathBuf>,
     /// `cachedNeteaseChorusRanges`: the chorus ranges kept for one song, from lyrics that came marked.
     kept_chorus: Option<(i64, Vec<ChorusRange>)>,
     /// `replayGainMode` and the gains of the playing song.
@@ -75,7 +84,8 @@ pub enum Message {
     Reorder(usize, usize),
     Tick,
     LyricsLoaded(u64, i64, Option<Lyrics>, Option<Vec<ChorusRange>>),
-    AudioReady(u64, i64, Result<PathBuf, AudioFailure>),
+    AudioReady(u64, i64, Result<AudioInput, AudioFailure>),
+    Prefetched,
     Started(u64),
     NoticeLeaving(u64),
     NoticeGone(u64),
@@ -119,6 +129,16 @@ impl Playback {
             notice: None,
             notice_serial: 0,
             request: 0,
+            loading: Loading::default(),
+            loading_at: None,
+            loading_toast: false,
+            audio_task: None,
+            prefetch_task: None,
+            prefetch_key: 0,
+            prefetch_dirty: true,
+            source_revision: 0,
+            active_input: None,
+            failed_inputs: Vec::new(),
             kept_chorus: None,
             replay_gain: ReplayGainMode::Off,
             gain: None,
@@ -136,6 +156,10 @@ impl Playback {
 
     pub fn is_playing(&self) -> bool {
         self.status.state == PlayerState::Playing
+    }
+
+    pub fn is_buffering(&self) -> bool {
+        self.loading.active() || self.player.as_ref().is_some_and(Player::is_buffering)
     }
 
     /// Hands the equalizer settings to the audio callback.
@@ -240,11 +264,13 @@ impl Playback {
 
     /// Adds `tracks` to the end of the queue (`enqueueAll`), keeping what plays; returns how many were added.
     pub fn enqueue(&mut self, tracks: Vec<Track>) -> usize {
+        self.prefetch_dirty = true;
         self.queue.append(tracks, |a, b| a.id == b.id)
     }
 
     /// Shuffles the queue (`shuffleQueue`): the playing song to the head, the rest drawn from `seed`.
     pub fn shuffle(&mut self, seed: u64) -> bool {
+        self.prefetch_dirty = true;
         if self.fm.is_some() {
             return false;
         }
@@ -253,6 +279,7 @@ impl Playback {
 
     /// `clearQueue`: every queued item except the playing one leaves; the player keeps running.
     pub fn clear_queue(&mut self) -> bool {
+        self.prefetch_dirty = true;
         let cleared = self.queue.clear_except_current();
         if cleared {
             self.failures = 0;
@@ -262,6 +289,12 @@ impl Playback {
 
     /// Empties the queue and stops, as signing out of the active platform does (`resetForProviderSwitch`).
     pub fn clear(&mut self) {
+        self.active_input = None;
+        self.failed_inputs.clear();
+        self.audio_task = None;
+        self.end_loading();
+        self.loading_toast = false;
+        self.prefetch_dirty = true;
         self.request = self.request.wrapping_add(1);
         self.notice = None;
         self.notice_serial = self.notice_serial.wrapping_add(1);
@@ -277,8 +310,22 @@ impl Playback {
     }
 
     pub fn update(&mut self, message: Message, store: &Store) -> Task<Message> {
+        if matches!(
+            &message,
+            Message::CycleRepeat
+                | Message::Quality(_)
+                | Message::Remove(_)
+                | Message::MoveNext(_)
+                | Message::MoveEnd(_)
+                | Message::Reorder(_, _)
+        ) {
+            self.prefetch_dirty = true;
+        }
         match message {
             Message::Toggle => {
+                if self.loading.active() {
+                    return Task::none();
+                }
                 match self.status.state {
                     PlayerState::Playing => self.with_player(Player::pause),
                     PlayerState::Paused => self.with_player(Player::resume),
@@ -291,6 +338,9 @@ impl Playback {
             Message::Next => self.skip(true),
             Message::Previous => self.skip(false),
             Message::Seeking(position) => {
+                if self.loading.active() {
+                    return Task::none();
+                }
                 self.seeking = Some(position);
                 Task::none()
             }
@@ -298,6 +348,7 @@ impl Playback {
                 if let (Some(position), Some(player)) = (self.seeking.take(), &self.player) {
                     player.seek(position);
                 }
+                self.refresh();
                 Task::none()
             }
             Message::Volume(volume) => {
@@ -374,20 +425,25 @@ impl Playback {
                 self.notice = None;
                 Task::none()
             }
-            Message::NoticeLeaving(_) | Message::NoticeGone(_) | Message::NoticeFrame | Message::Started(_) => {
-                Task::none()
-            }
+            Message::NoticeLeaving(_)
+            | Message::NoticeGone(_)
+            | Message::NoticeFrame
+            | Message::Started(_)
+            | Message::Prefetched => Task::none(),
             Message::AudioReady(request, id, result) => {
                 if request != self.request {
                     return Task::none();
                 }
                 let Some(track) = self.queue.current_mut().filter(|track| track.id == id) else { return Task::none() };
                 match result {
-                    Ok(path) => {
-                        self.failures = 0;
-                        track.path = path;
-                        let path = track.path.clone();
-                        self.with_player(|player| player.load(&path));
+                    Ok(input) => {
+                        self.active_input = Some(input.clone());
+                        if input.download.is_none() {
+                            self.loading_toast = false;
+                        }
+                        track.path = input.path.clone();
+                        self.loading.decoding(request);
+                        self.with_player(|player| player.load_input(input.clone()));
                         self.refresh();
                         Task::done(Message::Started(request))
                     }
@@ -395,6 +451,8 @@ impl Playback {
                         let provider = track.online.as_ref().map(|online| online.provider.clone());
                         self.with_player(Player::stop);
                         self.refresh();
+                        self.end_loading();
+                        self.loading_toast = false;
                         self.notice_serial = self.notice_serial.wrapping_add(1);
                         let serial = self.notice_serial;
                         self.notice = provider.map(|provider| (provider, Instant::now()));
@@ -405,6 +463,8 @@ impl Playback {
                     }
                     Err(AudioFailure::Other(err)) => {
                         tracing::warn!(track = %track.display_name(), error = %err, "online track unavailable");
+                        self.end_loading();
+                        self.loading_toast = false;
                         self.fail()
                     }
                 }
@@ -429,6 +489,33 @@ impl Playback {
 
     fn tick(&mut self) -> Task<Message> {
         self.refresh();
+        if self.status.position > 0.0 {
+            self.failures = 0;
+        }
+        if self.status.state == PlayerState::Failed
+            && let Some(input) = self.active_input.take()
+            && input.download.as_ref().is_some_and(|download| download.progress().2.is_some())
+        {
+            self.failed_inputs.push(input.path);
+            tracing::warn!(request = self.request, "audio stream failed; continuing source fallback");
+            return self.load_current();
+        }
+        if self.loading.phase == LoadPhase::Decoding
+            && ((self.status.position > 0.0 && !self.player.as_ref().is_some_and(Player::is_buffering))
+                || self.status.state == PlayerState::Failed
+                || self.player.is_none())
+        {
+            if self.status.position > 0.0
+                && let Some(at) = self.loading_at
+            {
+                tracing::debug!(
+                    request = self.request,
+                    elapsed_ms = at.elapsed().as_secs_f64() * 1000.0,
+                    "playback output started"
+                );
+            }
+            self.end_loading();
+        }
         match self.status.state {
             PlayerState::Ended => self.advance(true),
             PlayerState::Failed => self.fail(),
@@ -476,14 +563,34 @@ impl Playback {
         if self.queue.advance(finished).is_some() {
             return self.start_current();
         }
+        self.audio_task = None;
+        self.end_loading();
+        self.loading_toast = false;
+        self.request = self.request.wrapping_add(1);
         self.with_player(Player::stop);
         self.refresh();
         Task::none()
     }
 
-    /// Starts the current track: local files play at once, online tracks are downloaded first.
+    /// Starts a fresh request, discarding only the previous play's source failures.
     fn start_current(&mut self) -> Task<Message> {
-        let Some(track) = self.queue.current().cloned() else { return Task::none() };
+        self.failed_inputs.clear();
+        self.load_current()
+    }
+
+    fn load_current(&mut self) -> Task<Message> {
+        self.active_input = None;
+        self.prefetch_dirty = true;
+        self.audio_task = None;
+        self.end_loading();
+        self.loading_toast = false;
+        let Some(track) = self.queue.current().cloned() else {
+            self.request = self.request.wrapping_add(1);
+            self.with_player(Player::stop);
+            self.lyrics = None;
+            self.refresh();
+            return Task::none();
+        };
         self.request = self.request.wrapping_add(1);
         let request = self.request;
         // A track started any other way overtakes a personal FM batch on its way.
@@ -513,6 +620,9 @@ impl Playback {
 
         self.with_player(Player::stop);
         self.refresh();
+        self.loading.begin(request);
+        self.loading_at = Some(Instant::now());
+        self.loading_toast = !omni.audio_is_prefetched(&track, self.settings.audio_quality);
         let (lyrics_omni, lyrics_id) = (omni.clone(), online.clone());
         let lyrics = Task::perform(
             async move {
@@ -525,16 +635,22 @@ impl Playback {
             move |(lyrics, kept)| Message::LyricsLoaded(request, id, lyrics, kept),
         );
         let quality = self.settings.audio_quality;
-        let audio = Task::perform(async move { omni.fetch_track_audio(&track, quality).await }, move |result| {
-            Message::AudioReady(
-                request,
-                id,
-                result.map_err(|err| match err {
-                    folia_omni::OmniError::SubscriptionRequired => AudioFailure::SubscriptionRequired,
-                    err => AudioFailure::Other(error_chain(&err)),
-                }),
-            )
-        });
+        let failed = self.failed_inputs.clone();
+        let audio = Task::perform(
+            async move { omni.prepare_track_audio_after(&track, quality, &failed).await },
+            move |result| {
+                Message::AudioReady(
+                    request,
+                    id,
+                    result.map_err(|err| match err {
+                        folia_omni::OmniError::SubscriptionRequired => AudioFailure::SubscriptionRequired,
+                        err => AudioFailure::Other(error_chain(&err)),
+                    }),
+                )
+            },
+        );
+        let (audio, handle) = audio.abortable();
+        self.audio_task = Some(handle.abort_on_drop());
         Task::batch([audio, lyrics])
     }
 
@@ -563,6 +679,105 @@ impl Playback {
         if let Some(player) = &self.player {
             action(player);
         }
+    }
+
+    fn end_loading(&mut self) {
+        self.loading.finish(self.request);
+    }
+
+    pub fn loading_notice(&self, now: Instant) -> Option<(f32, f32)> {
+        if !self.loading_toast {
+            return None;
+        }
+        let at = self.loading_at?;
+        let entered =
+            folia_visualizer::Ease::new(0.2, 0.8, 0.2, 1.0)
+                .at((now.saturating_duration_since(at).as_secs_f64() / 0.32).clamp(0.0, 1.0)) as f32;
+        let left = folia_visualizer::Ease::new(0.4, 0.0, 1.0, 1.0).at((now
+            .saturating_duration_since(at + Duration::from_secs(3))
+            .as_secs_f64()
+            / 0.22)
+            .clamp(0.0, 1.0)) as f32;
+        (left < 1.0).then_some((entered * (1.0 - left), -18.0 * (1.0 - entered) - 10.0 * left))
+    }
+
+    pub fn loading_angle(&self, now: Instant) -> f32 {
+        self.loading_at
+            .map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f32().fract() * std::f32::consts::TAU)
+    }
+
+    /// Queue edits, shuffle, FM refill, quality and current-track changes all reach this single hook.
+    pub fn refresh_prefetch(&mut self) -> Task<Message> {
+        let revision = self.omni.as_ref().map_or(0, Omni::audio_cache_revision);
+        self.prefetch_dirty |= revision != self.source_revision;
+        self.source_revision = revision;
+        if !self.prefetch_dirty {
+            return Task::none();
+        }
+        if self.loading.active() {
+            self.prefetch_task = None;
+            return Task::none();
+        }
+        self.prefetch_dirty = false;
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        revision.hash(&mut hash);
+        self.queue.current_index().hash(&mut hash);
+        self.settings.audio_quality.id().hash(&mut hash);
+        (self.queue.repeat as u8).hash(&mut hash);
+        for track in self.queue.items() {
+            track.id.hash(&mut hash);
+            track.online.hash(&mut hash);
+        }
+        let key = hash.finish();
+        if key == self.prefetch_key {
+            return Task::none();
+        }
+        self.prefetch_key = key;
+        self.prefetch_task = None;
+        let Some(omni) = self.omni.clone() else { return Task::none() };
+        let plan = folia_omni::PrefetchPlan::new(&self.queue, self.settings.audio_quality);
+        let (task, handle) =
+            Task::perform(async move { omni.prefetch(plan).await }, |_| Message::Prefetched).abortable();
+        self.prefetch_task = Some(handle.abort_on_drop());
+        task
+    }
+}
+
+/// Request-scoped loading state prevents an old completion from clearing a newer song's indicator.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Loading {
+    request: Option<u64>,
+    pub phase: LoadPhase,
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadPhase {
+    #[default]
+    Idle,
+    Resolving,
+    Decoding,
+}
+impl Loading {
+    pub fn begin(&mut self, request: u64) {
+        self.request = Some(request);
+        self.phase = LoadPhase::Resolving;
+    }
+    pub fn decoding(&mut self, request: u64) {
+        if self.request == Some(request) {
+            self.phase = LoadPhase::Decoding;
+        }
+    }
+    pub fn finish(&mut self, request: u64) -> bool {
+        if self.request != Some(request) {
+            return false;
+        }
+        self.request = None;
+        self.phase = LoadPhase::Idle;
+        true
+    }
+    pub fn active(&self) -> bool {
+        self.request.is_some()
     }
 }
 

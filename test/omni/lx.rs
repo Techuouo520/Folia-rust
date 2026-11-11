@@ -20,6 +20,10 @@ const UTILS: &str = include_str!("fixtures/lx-utils.js");
 mod edges;
 #[path = "lx_multiple.rs"]
 mod multiple;
+#[path = "prefetch.rs"]
+mod prefetch;
+#[path = "ranges.rs"]
+mod ranges;
 
 fn start(code: &str, limits: Limits) -> Result<Script, SourceError> {
     Script::start(code.into(), parse_metadata(code)?, Default::default(), limits)

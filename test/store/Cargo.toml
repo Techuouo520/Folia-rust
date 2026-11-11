@@ -13,3 +13,4 @@ folia-store.workspace = true
 tempfile.workspace = true
 toml.workspace = true
 tracing = "0.1.44"
+tracing-subscriber.workspace = true

@@ -66,6 +66,7 @@ where
             }
         }
         if shared.state() != PlayerState::Playing {
+            shared.starved.store(false, std::sync::atomic::Ordering::Release);
             out.fill(T::EQUILIBRIUM);
             return;
         }
@@ -74,6 +75,7 @@ where
         let available = consumer.slots().min(out.len());
         let available = available - available % channels;
         let decoder_done = shared.decoder_done.load(std::sync::atomic::Ordering::Acquire);
+        shared.starved.store(available < out.len() && !decoder_done, std::sync::atomic::Ordering::Release);
         if available < out.len() && !decoder_done && shared.started() {
             shared.add_underrun(((out.len() - available) / channels) as u64);
         }

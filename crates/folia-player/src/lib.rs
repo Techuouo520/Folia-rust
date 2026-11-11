@@ -13,6 +13,8 @@ pub use convert::map_channels;
 pub use equalizer::{Biquad, Coefficients, Control, Parameters, Processor};
 pub use folia_core::AudioFrame;
 pub use shared::PlayerState;
+/// Packet decoding for playback and offline audio inspection, without opening an output device.
+pub use source::Source as DecodedSource;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,6 +49,12 @@ pub enum PlayerError {
     Thread(#[source] std::io::Error),
 }
 
+impl Drop for Player {
+    fn drop(&mut self) {
+        self.cancel_input();
+    }
+}
+
 /// What the UI needs to draw the transport: state, position and length in seconds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Status {
@@ -62,6 +70,15 @@ pub struct Player {
     rate: u32,
     analyser: Analyser,
     equalizer: equalizer::Control,
+    input: std::sync::Mutex<InputControl>,
+}
+
+#[derive(Default)]
+struct InputControl {
+    audio: Option<folia_core::AudioInput>,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    waiting: Arc<std::sync::atomic::AtomicBool>,
+    preparing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Player {
@@ -77,7 +94,15 @@ impl Player {
             .spawn(move || decoder.run())
             .map_err(PlayerError::Thread)?;
         tracing::info!(rate = output.rate, channels = output.channels, "audio output opened");
-        Ok(Self { commands, shared, stream: output.stream, rate: output.rate, analyser, equalizer })
+        Ok(Self {
+            commands,
+            shared,
+            stream: output.stream,
+            rate: output.rate,
+            analyser,
+            equalizer,
+            input: Default::default(),
+        })
     }
 
     /// Hands the equalizer and effect settings to the audio callback. No lock is taken there.
@@ -92,11 +117,20 @@ impl Player {
 
     /// Starts playing `path` from the beginning.
     pub fn load(&self, path: &Path) {
+        self.load_input(path.to_owned().into());
+    }
+
+    pub fn load_input(&self, input: folia_core::AudioInput) {
+        let load = self.prepare_input(Some(input), 0.0);
+        self.shared.duration.store(0.0);
+        self.shared.request_flush(0.0);
         // Mark the new track as playing now, so a status read before the decoder starts never sees the old end.
         self.shared.decoder_done.store(false, std::sync::atomic::Ordering::Release);
         self.shared.set_state(PlayerState::Playing);
         self.run_stream(true);
-        self.send(Command::Load(path.to_owned()));
+        if let Some(load) = load {
+            self.send(Command::Load(load));
+        }
     }
 
     pub fn pause(&self) {
@@ -112,14 +146,54 @@ impl Player {
     }
 
     pub fn seek(&self, seconds: f64) {
+        let Some(load) = self.prepare_input(None, seconds.max(0.0)) else { return };
+        self.shared.request_flush(seconds.max(0.0));
+        self.shared.decoder_done.store(false, std::sync::atomic::Ordering::Release);
         self.run_stream(true);
-        self.send(Command::Seek(seconds));
+        self.send(Command::Load(load));
+    }
+
+    /// Initial decoding, an outstanding seek, or uncached reads while the output has run dry.
+    pub fn is_buffering(&self) -> bool {
+        let input = self.input.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        input.preparing.load(std::sync::atomic::Ordering::Acquire)
+            || (input.waiting.load(std::sync::atomic::Ordering::Acquire)
+                && self.shared.starved.load(std::sync::atomic::Ordering::Acquire)
+                && self.shared.state() == PlayerState::Playing)
     }
 
     pub fn stop(&self) {
+        self.cancel_input();
         self.shared.set_state(PlayerState::Idle);
         self.send(Command::Stop);
         self.run_stream(false);
+    }
+
+    fn prepare_input(&self, audio: Option<folia_core::AudioInput>, position: f64) -> Option<decoder::Load> {
+        let mut input = self.input.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(audio) = audio {
+            input.audio = Some(audio);
+        }
+        let audio = input.audio.clone()?;
+        input.cancelled.store(true, std::sync::atomic::Ordering::Release);
+        input.cancelled = Default::default();
+        input.waiting = Default::default();
+        input.preparing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        Some(decoder::Load {
+            audio,
+            cancelled: input.cancelled.clone(),
+            waiting: input.waiting.clone(),
+            preparing: input.preparing.clone(),
+            position,
+        })
+    }
+
+    fn cancel_input(&self) {
+        let mut input = self.input.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        input.cancelled.store(true, std::sync::atomic::Ordering::Release);
+        input.waiting.store(false, std::sync::atomic::Ordering::Release);
+        input.preparing.store(false, std::sync::atomic::Ordering::Release);
+        input.audio = None;
     }
 
     pub fn volume(&self) -> f32 {

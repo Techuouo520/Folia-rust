@@ -312,7 +312,7 @@ impl PlayerBar {
     fn step(&mut self, playback: &Playback, now: Instant) {
         let ms = self.ms(now);
         self.hover = self.hover.step(ms);
-        let open = if self.forced {
+        let open = if self.forced || playback.is_buffering() {
             true
         } else if self.home {
             self.hover.expanded
@@ -572,14 +572,17 @@ impl PlayerBar {
         let size = PLAY * scale;
         let fill = Color { a: look.primary.a * shown, ..look.primary };
         let glyph = Color { a: shown, ..look.background };
-        let face: Element<'a, Message> = if playback.is_playing() {
-            variant(Variant::FilledPause, 20.0 * scale, glyph)
-        } else {
-            // `ml-1` nudges the triangle right.
-            container(variant(Variant::FilledPlay, 20.0 * scale, glyph))
-                .padding(iced::Padding { left: 4.0 * scale, ..iced::Padding::ZERO })
-                .into()
-        };
+        let face: Element<'a, Message> =
+            if playback.loading.active() || (playback.is_buffering() && playback.is_playing()) {
+                crate::icons::spinner(20.0 * scale, glyph, playback.loading_angle(now))
+            } else if playback.is_playing() {
+                variant(Variant::FilledPause, 20.0 * scale, glyph)
+            } else {
+                // `ml-1` nudges the triangle right.
+                container(variant(Variant::FilledPlay, 20.0 * scale, glyph))
+                    .padding(iced::Padding { left: 4.0 * scale, ..iced::Padding::ZERO })
+                    .into()
+            };
         let face = container(face).center(Length::Fixed(size)).style(move |_| container::Style {
             background: Some(Background::Color(fill)),
             border: Border { radius: (size / 2.0).into(), ..Border::default() },
@@ -590,7 +593,7 @@ impl PlayerBar {
             },
             ..container::Style::default()
         });
-        let can_toggle = playback.current().is_some();
+        let can_toggle = playback.current().is_some() && !playback.loading.active() && !look.controls_disabled;
         let press = can_toggle.then_some(Message::Playback(playback::Message::Toggle));
         let button = button(face).padding(0).on_press_maybe(press).style(|_, _| button::Style::default());
         let button = mouse_area(button).on_enter(Message::PlayHover(true)).on_exit(Message::PlayHover(false));
@@ -674,6 +677,19 @@ fn progress<'a>(playback: &Playback, look: &Look<'a>, shown: f32) -> Element<'a,
                 border_color: Color::TRANSPARENT,
             },
         });
+    let bar: Element<'a, Message> = if playback.loading.active() || look.controls_disabled {
+        container(space())
+            .width(Length::Fill)
+            .height(6)
+            .style(move |_| container::Style {
+                background: Some(track.into()),
+                border: Border { radius: radius.into(), ..Default::default() },
+                ..Default::default()
+            })
+            .into()
+    } else {
+        bar.into()
+    };
     row![time(position, Alignment::End), bar, time(duration, Alignment::Start)]
         .spacing(12)
         .align_y(Alignment::Center)

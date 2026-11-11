@@ -559,6 +559,8 @@ midnightDefault = "Mặc định nửa đêm"
 daylightDefault = "Mặc định ban ngày"
 
 [status]
+graphicsInitializationFailed = "Không thể khởi tạo đồ họa. Hãy thử đặt WGPU_BACKEND=dx12 hoặc WGPU_BACKEND=vulkan."
+loadingSong = "Đang tải URL bài hát..."
 queueShuffled = "Đã xáo trộn hàng đợi"
 liked = "Đã thêm vào Bài hát đã thích"
 unliked = "Đã bỏ thích"

@@ -1,6 +1,5 @@
 // The decoder thread: opens tracks, decodes and converts them, and keeps the ring buffer filled.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
@@ -20,9 +19,16 @@ const FLUSH_TIMEOUT: Duration = Duration::from_millis(300);
 const UNDERRUN_REPORT: Duration = Duration::from_secs(1);
 
 pub enum Command {
-    Load(PathBuf),
-    Seek(f64),
+    Load(Load),
     Stop,
+}
+
+pub struct Load {
+    pub audio: folia_core::AudioInput,
+    pub cancelled: Arc<std::sync::atomic::AtomicBool>,
+    pub waiting: Arc<std::sync::atomic::AtomicBool>,
+    pub preparing: Arc<std::sync::atomic::AtomicBool>,
+    pub position: f64,
 }
 
 pub struct Decoder {
@@ -35,6 +41,9 @@ pub struct Decoder {
     pending_from: usize,
     rate: u32,
     last_report: Instant,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    load_started: Option<Instant>,
+    preparing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Decoder {
@@ -56,6 +65,9 @@ impl Decoder {
             pending_from: 0,
             rate,
             last_report: Instant::now(),
+            cancelled: Default::default(),
+            load_started: None,
+            preparing: Default::default(),
         }
     }
 
@@ -97,35 +109,49 @@ impl Decoder {
 
     fn handle(&mut self, command: Command) {
         match command {
-            Command::Load(path) => {
-                self.reset(0.0);
-                match Source::open(&path) {
-                    Ok(source) => {
+            Command::Load(Load { audio: input, cancelled, waiting, preparing, position }) => {
+                if cancelled.load(Ordering::Acquire) {
+                    return;
+                }
+                self.load_started = Some(Instant::now());
+                self.cancelled = cancelled.clone();
+                self.preparing = preparing;
+                self.source = None;
+                self.reset(position);
+                let started = Instant::now();
+                let opened = Source::with_status(&input, cancelled.clone(), waiting).and_then(|mut source| {
+                    let reached = if position > 0.0 { source.seek(position)? } else { 0.0 };
+                    Ok((source, reached))
+                });
+                match opened {
+                    Ok((source, reached)) if !cancelled.load(Ordering::Acquire) => {
+                        if position > 0.0 {
+                            self.reset(reached);
+                        }
                         self.shared.duration.store(source.duration);
                         self.source = Some(source);
-                        self.shared.set_state(PlayerState::Playing);
-                        tracing::info!(path = %path.display(), "track loaded");
+                        tracing::debug!(
+                            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                            "playback decoder opened"
+                        );
+                        tracing::info!(path = %input.path.display(), "track loaded");
                     }
-                    Err(err) => self.fail(&err),
-                }
-            }
-            Command::Seek(seconds) => {
-                let Some(source) = &mut self.source else { return };
-                match source.seek(seconds) {
-                    Ok(reached) => self.reset(reached),
-                    Err(err) => self.fail(&err),
+                    Err(err) if !cancelled.load(Ordering::Acquire) => self.fail(&err),
+                    _ => {}
                 }
             }
             Command::Stop => {
                 self.clear(0.0);
                 self.source = None;
-                self.shared.set_state(PlayerState::Idle);
             }
         }
     }
 
     /// Pushes converted samples; decodes more when none are waiting. Returns false when the buffer is full.
     fn flush_pending(&mut self) -> bool {
+        if self.cancelled.load(Ordering::Acquire) {
+            return false;
+        }
         if self.pending_from >= self.pending.len() {
             self.pending.clear();
             self.pending_from = 0;
@@ -140,6 +166,12 @@ impl Decoder {
         }
         if let Ok(chunk) = self.producer.write_chunk_uninit(count) {
             self.pending_from += chunk.fill_from_iter(rest.iter().copied());
+            if !self.cancelled.load(Ordering::Acquire) {
+                self.preparing.store(false, Ordering::Release);
+            }
+            if let Some(started) = self.load_started.take() {
+                tracing::debug!(elapsed_ms = started.elapsed().as_secs_f64() * 1000.0, "playback first PCM queued");
+            }
         }
         true
     }
@@ -151,12 +183,17 @@ impl Decoder {
             return false;
         }
         let Some(source) = &mut self.source else { return false };
-        let result = match source.next() {
+        let packet = source.next_packet();
+        if self.cancelled.load(Ordering::Acquire) {
+            return false;
+        }
+        let result = match packet {
             Ok(Some(block)) => self.converter.push(&block, &mut self.pending),
             Ok(None) => {
                 self.shared.decoder_done.store(true, Ordering::Release);
                 return false;
             }
+            Err(_) if self.cancelled.load(Ordering::Acquire) => return false,
             Err(err) => Err(err),
         };
         if let Err(err) = result {
@@ -194,6 +231,10 @@ impl Decoder {
     }
 
     fn fail(&mut self, err: &PlayerError) {
+        if self.cancelled.load(Ordering::Acquire) {
+            return;
+        }
+        self.preparing.store(false, Ordering::Release);
         tracing::error!(error = err as &dyn std::error::Error, "playback failed");
         self.source = None;
         self.shared.set_state(PlayerState::Failed);

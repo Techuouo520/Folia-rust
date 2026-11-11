@@ -20,6 +20,12 @@ pub use plate::{Plate, compile_plate, css_saturate, glass_over, source_over, to_
 pub use scene::{Program as StyleScene, capture as capture_canvas};
 pub use wash::{Glow, Veil, Wash};
 
+pub mod backend;
+mod host;
+mod host_widget;
+pub use host::Renderer as HostRenderer;
+pub use host_widget::host;
+
 use pipeline::{Fullscreen, Slot};
 
 use std::marker::PhantomData;

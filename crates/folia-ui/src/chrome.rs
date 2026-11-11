@@ -17,6 +17,18 @@ const CORNER: f32 = 14.0;
 const BAR: f32 = 32.0;
 const BUTTON: f32 = 44.0;
 
+/// Fullscreen monitor sizes are valid even below the windowed minimum after DPI conversion.
+pub fn resize_viewport(current: iced::Size, reported: iced::Size, fullscreen: bool) -> iced::Size {
+    if !reported.width.is_finite() || !reported.height.is_finite() || reported.width <= 0.0 || reported.height <= 0.0 {
+        return current;
+    }
+    if !fullscreen && (reported.width < crate::MIN_WINDOW_SIZE.width || reported.height < crate::MIN_WINDOW_SIZE.height)
+    {
+        return current;
+    }
+    reported
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Message {
     Drag,

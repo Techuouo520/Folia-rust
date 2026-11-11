@@ -8,8 +8,10 @@ publish.workspace = true
 path = "lib.rs"
 
 [dependencies]
+tempfile.workspace = true
 folia-omni = { path = "../../crates/folia-omni" }
 folia-core.workspace = true
+folia-player.workspace = true
 folia-store.workspace = true
 folia-i18n.workspace = true
 folia-lyrics.workspace = true

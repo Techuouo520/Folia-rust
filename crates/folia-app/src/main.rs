@@ -7,7 +7,6 @@ use folia_store::{
     Store,
 };
 use folia_ui::{Init, Shell};
-use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
@@ -48,31 +47,6 @@ fn platform_window() -> iced::window::settings::PlatformSpecific {
     iced::window::settings::PlatformSpecific::default()
 }
 
-/// Renders one tracing event into the text the session log panel shows and the file keeps.
-#[derive(Default)]
-struct EventText(String);
-
-impl Visit for EventText {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        self.record(field, &value);
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.record(field, &format_args!("{value:?}"));
-    }
-}
-
-impl EventText {
-    fn record(&mut self, field: &Field, value: &dyn std::fmt::Display) {
-        use std::fmt::Write as _;
-        if field.name() == "message" {
-            let _ = write!(self.0, "{value}");
-        } else {
-            let _ = write!(self.0, " {}={value}", field.name());
-        }
-    }
-}
-
 /// Feeds every event to the in-memory session log and, when its switch is on, the file.
 struct SessionLines {
     log: RuntimeLog,
@@ -80,9 +54,7 @@ struct SessionLines {
 
 impl<S: Subscriber> Layer<S> for SessionLines {
     fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
-        let mut text = EventText::default();
-        event.record(&mut text);
-        self.log.push(*event.metadata().level(), event.metadata().target(), &text.0);
+        self.log.record_event(event);
     }
 }
 
@@ -120,6 +92,7 @@ fn main() -> anyhow::Result<()> {
     let i18n = I18n::new(general.language.resolve(system_locale.as_deref()))?;
     tracing::info!(config = %store.dir().display(), language = i18n.language().code(), "starting");
     folia_ui::install_fonts();
+    let graphics_failure = i18n.t("status.graphicsInitializationFailed").to_owned();
 
     let init = Init {
         appearance: store.load_or_default::<AppearanceSettings>(),
@@ -140,12 +113,26 @@ fn main() -> anyhow::Result<()> {
         i18n,
         system_locale,
     };
-    iced::application(move || Shell::new(init.clone()), Shell::update, Shell::view)
+    let result = iced::application(move || Shell::new(init.clone()), Shell::update, host_view)
         .title(Shell::title)
         .theme(Shell::theme)
         .subscription(Shell::subscription)
         .window(window_settings()?)
-        .run()?;
+        .run();
+    if let Err(err) = result {
+        tracing::error!(error = &err as &dyn std::error::Error, "application initialization failed");
+        log.sync();
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title("Folia")
+            .set_description(format!("{graphics_failure}\n\n{err}"))
+            .show();
+        return Err(err.into());
+    }
     log.sync();
     Ok(())
+}
+
+fn host_view(shell: &Shell) -> iced::Element<'_, folia_ui::Message, iced::Theme, folia_render::HostRenderer> {
+    folia_render::host(shell.view())
 }

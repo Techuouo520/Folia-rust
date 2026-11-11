@@ -52,6 +52,7 @@ pub struct Shared {
     /// Set by the decoder once every sample of the track is in the ring buffer.
     pub decoder_done: AtomicBool,
     pub duration: AtomicF64,
+    pub starved: AtomicBool,
     /// Callbacks that ran dry mid-track since the last report, and the frames they filled with silence.
     underruns: AtomicU64,
     silent_frames: AtomicU64,
@@ -69,6 +70,7 @@ impl Shared {
             flush_done: AtomicU64::new(0),
             decoder_done: AtomicBool::new(false),
             duration: AtomicF64::default(),
+            starved: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
             silent_frames: AtomicU64::new(0),
         }
@@ -91,6 +93,9 @@ impl Shared {
     }
 
     pub fn position(&self, rate: u32) -> f64 {
+        if self.flush_requested.load(Ordering::Acquire) != self.flush_done.load(Ordering::Acquire) {
+            return self.pending_base.load();
+        }
         self.base.load() + self.played_frames.load(Ordering::Acquire) as f64 / f64::from(rate)
     }
 

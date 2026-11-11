@@ -11,6 +11,8 @@ name = "folia"
 path = "src/main.rs"
 
 [dependencies]
+folia-render.workspace = true
+rfd.workspace = true
 folia-i18n.workspace = true
 folia-store.workspace = true
 folia-ui.workspace = true

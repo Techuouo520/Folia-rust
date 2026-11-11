@@ -56,6 +56,7 @@ mod wall_shift;
 mod workbench;
 
 pub use background::{error_chain, format_time};
+pub use chrome::resize_viewport;
 pub use developer::Developer;
 pub use equalizer_dialog::{Look as EqualizerLook, view as equalizer_view};
 pub use focus_card::{Direction as CardDirection, Key as CardKey};
@@ -71,9 +72,10 @@ pub use overlay::{
 pub use panel::{LikeLook, Message as PanelMessage, PlayerPanel, Room as PanelRoom, View as PanelView, like_look};
 pub use platform_highlight::ProviderHighlight;
 pub use platform_rows::{ProviderRowStatus, order_provider_rows};
+pub use playback::{AudioFailure, LoadPhase, Loading, Message as PlaybackMessage, Playback};
 pub use playback_navigation::PlaybackNavigation;
 /// The floating capsule. `shown` is its 0.26s ease-out hide, shared by opacity, offset and scale.
-pub use player_bar::{CapsuleBox, PlayerBar, capsule_box};
+pub use player_bar::{CapsuleBox, Look as PlayerBarLook, PlayerBar, capsule_box};
 pub use playlist_dialog::{Dialog as PlaylistDialog, Look as PlaylistLook, Message as PlaylistMessage, PlaylistChoice};
 pub use reorder::drag_to_reorder;
 pub use search_results::format_duration;
@@ -103,7 +105,6 @@ use lucide_static_svg::Icon;
 
 use crate::background::{blocking, save};
 use crate::library::LibraryPage;
-use crate::playback::Playback;
 use crate::search::SearchPage;
 
 /// The window folia-app opens; the shell lays out before the first resize event arrives.
@@ -583,6 +584,7 @@ impl Shell {
             Message::Playback(playback::Message::Tick) | Message::Workbench(workbench::Message::Frame)
         );
         let task = self.handle(message);
+        let task = Task::batch([task, self.playback.refresh_prefetch().map(Message::Playback)]);
         self.refresh_visualizer_seed();
         if self.page != before || self.playback.current().is_none() {
             self.play_navigation.cancel();
@@ -846,7 +848,8 @@ impl Shell {
             }
             Message::WindowResized(size) => {
                 // A minimized window reports a size below the minimum (Windows: 160×28); keep the last real viewport.
-                if size.width < MIN_WINDOW_SIZE.width || size.height < MIN_WINDOW_SIZE.height {
+                let size = chrome::resize_viewport(self.window_size, size, self.fullscreen);
+                if size == self.window_size {
                     return Task::none();
                 }
                 self.window_size = size;
@@ -1299,6 +1302,9 @@ impl Shell {
             return iced::window::oldest().map(Message::WindowReady);
         };
         self.fullscreen = !self.fullscreen;
+        self.drag_armed = false;
+        self.drag_from = None;
+        folia_render::backend::fullscreen_frame(self.fullscreen);
         let mode = if self.fullscreen { iced::window::Mode::Fullscreen } else { iced::window::Mode::Windowed };
         iced::window::set_mode(id, mode)
     }
@@ -1320,9 +1326,12 @@ impl Shell {
             let _ = self.panel(panel::Message::QualitySelect(quality_select::Message::Close));
         }
         match message {
-            chrome::Message::Drag if chrome::button_down() => iced::window::drag(id),
+            chrome::Message::Drag if !self.fullscreen && chrome::button_down() => iced::window::drag(id),
             chrome::Message::Drag => Task::none(),
             chrome::Message::DragArm => {
+                if self.fullscreen {
+                    return Task::none();
+                }
                 // The press is on the strip; the subscription's `PointerHeld(true)` may come after the first move.
                 self.pointer_held = true;
                 self.drag_armed = true;
@@ -1335,10 +1344,15 @@ impl Shell {
                 self.drag_from = None;
                 Task::none()
             }
-            chrome::Message::Resize(direction) if chrome::button_down() => iced::window::drag_resize(id, direction),
+            chrome::Message::Resize(direction) if !self.fullscreen && chrome::button_down() => {
+                iced::window::drag_resize(id, direction)
+            }
             chrome::Message::Resize(_) => Task::none(),
             chrome::Message::Minimize => iced::window::minimize(id, true),
             chrome::Message::ToggleMaximize => {
+                if self.fullscreen {
+                    return Task::none();
+                }
                 self.maximized = !self.maximized;
                 iced::window::toggle_maximize(id)
             }
@@ -1728,6 +1742,16 @@ impl Shell {
         if let Some(fade) = &self.page_fade {
             frame = frame.push(fade.view(now));
         }
+        if let Some((opacity, shift)) = self.playback.loading_notice(now) {
+            frame = frame.push(status_toast::loading_view(
+                &self.i18n,
+                daylight,
+                self.window_size.width,
+                opacity,
+                shift,
+                self.playback.loading_angle(now),
+            ));
+        }
         if let Some((provider, opacity, shift)) = self.playback.subscription_notice(now)
             && let Some(platform) = self
                 .omni
@@ -1783,7 +1807,9 @@ impl Shell {
             fullscreen: self.fullscreen,
         };
         frame = frame.push(self.titlebar.view(look, now).map(Message::Chrome));
-        frame = frame.push(chrome::resize_frame().map(Message::Chrome));
+        if !self.fullscreen {
+            frame = frame.push(chrome::resize_frame().map(Message::Chrome));
+        }
         let now = std::time::Instant::now();
         if self.splash.showing(now) {
             // A canvas for the plain cover keeps a GPU allocation after the splash is gone.
@@ -1850,6 +1876,7 @@ impl Shell {
     /// A status toast is on screen, so the page under it has to feed the blur.
     fn notice_visible(&self, now: std::time::Instant) -> bool {
         self.playback.subscription_notice(now).is_some_and(|(_, opacity, _)| opacity > 0.0)
+            || self.playback.loading_notice(now).is_some_and(|(opacity, _)| opacity > 0.0)
             || self.library.online.sync_notice(now).is_some_and(|(_, _, _, opacity, _)| opacity > 0.0)
     }
 
@@ -1963,6 +1990,15 @@ impl Shell {
         if self.playback.notice_animating(now) {
             parts.push(iced::window::frames().map(|_| Message::Playback(playback::Message::NoticeFrame)));
         }
+        let loading_motion = self.playback.loading.active()
+            || (self.playback.is_playing() && self.playback.is_buffering())
+            || self.playback.loading_notice(now).is_some();
+        if loading_motion {
+            parts.push(
+                iced::time::every(std::time::Duration::from_secs_f64(1.0 / 60.0))
+                    .map(|_| Message::Playback(playback::Message::Tick)),
+            );
+        }
         if self.library.online.sync_notice_animating(now) {
             parts.push(
                 iced::window::frames().map(|_| Message::Library(library::Message::Online(online::Message::SyncFrame))),
@@ -2005,7 +2041,7 @@ impl Shell {
                 parts.push(iced::window::frames().map(|_| Message::Search(search::Message::Frame)));
             }
         }
-        if self.playback.is_playing() {
+        if self.playback.is_playing() && !loading_motion {
             let tick = |_| Message::Playback(playback::Message::Tick);
             let playback = if self.page != Page::NowPlaying {
                 iced::time::every(std::time::Duration::from_millis(250)).map(tick)

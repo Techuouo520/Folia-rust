@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use folia_player::{Analyser, Player, PlayerState, TAP_CAPACITY, map_channels, push_samples};
 
 mod equalizer;
+mod progressive;
 
 #[test]
 fn maps_channels() {

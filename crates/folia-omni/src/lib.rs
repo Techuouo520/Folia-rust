@@ -1,6 +1,9 @@
 // Online music: one facade (`Omni`) over every platform provider; only providers talk to platform APIs.
 
+mod audio_cache;
+mod audio_ranges;
 pub mod lx;
+pub use audio_cache::{PrefetchPlan, prefetch_indices, url_is_fresh};
 mod paging;
 mod providers;
 mod qr;
@@ -31,6 +34,8 @@ pub enum OmniError {
     UnknownProvider(String),
     #[error("request failed")]
     Http(#[from] reqwest::Error),
+    #[error("audio download timed out after 60 seconds waiting for {0}")]
+    AudioTimeout(&'static str),
     #[error("platform answered with code {0}")]
     Platform(i64),
     #[error("unexpected response: {0}")]
@@ -364,6 +369,7 @@ pub struct Omni {
     keyring_service: String,
     covers: Arc<tokio::sync::Semaphore>,
     sources: Arc<lx::Sources>,
+    audio_cache: Arc<audio_cache::AudioCache>,
 }
 
 impl Omni {
@@ -380,6 +386,7 @@ impl Omni {
             keyring_service,
             covers,
             sources: Arc::default(),
+            audio_cache: Arc::default(),
         })
     }
 
@@ -450,15 +457,18 @@ impl Omni {
     }
 
     pub fn enable_source(&self, id: &str, enabled: bool) -> Result<lx::SourceSettings, lx::SourceError> {
+        self.audio_cache.invalidate();
         self.sources.enable(id, enabled, self.http.clone())
     }
 
     /// Changes the source's position in the playback fallback order without restarting any script.
     pub fn move_source(&self, id: &str, index: usize) -> Result<lx::SourceSettings, lx::SourceError> {
+        self.audio_cache.invalidate();
         self.sources.move_to(id, index)
     }
 
     pub fn remove_source(&self, id: &str) -> Result<lx::SourceSettings, lx::SourceError> {
+        self.audio_cache.invalidate();
         self.sources.remove(id)
     }
 
@@ -563,7 +573,7 @@ impl Omni {
 
     /// The song's lyrics with chorus marks resolved as `getLyrics` does: existing marks, the platform's ranges, or
     /// the most repeated lines.
-    pub async fn lyrics(&self, song: &OnlineId) -> Result<Option<Lyrics>, OmniError> {
+    async fn fetch_lyrics(&self, song: &OnlineId) -> Result<Option<Lyrics>, OmniError> {
         let Some(found) = self.provider(&song.provider)?.lyrics(song).await? else {
             log_chorus(song, ChorusSource::None, 0);
             return Ok(None);
@@ -599,7 +609,11 @@ impl Omni {
     }
 
     pub async fn check_login(&self, provider: &str, key: &str) -> Result<LoginState, OmniError> {
-        self.provider(provider)?.check_login(key).await
+        let state = self.provider(provider)?.check_login(key).await?;
+        if matches!(state, LoginState::Confirmed) {
+            self.audio_cache.invalidate();
+        }
+        Ok(state)
     }
 
     pub async fn account(&self, provider: &str) -> Result<Option<Account>, OmniError> {
@@ -615,6 +629,7 @@ impl Omni {
     }
 
     pub async fn logout(&self, provider: &str) -> Result<(), OmniError> {
+        self.audio_cache.invalidate();
         self.provider(provider)?.logout().await
     }
 
@@ -747,102 +762,6 @@ impl Omni {
     /// from before levels were recorded plays for any preference, and a preview is never reused.
     pub async fn fetch_audio(&self, song: &OnlineId, preference: AudioQuality) -> Result<PathBuf, OmniError> {
         self.fetch_track_audio(&Track { online: Some(song.clone()), ..Track::default() }, preference).await
-    }
-
-    /// Keeps the song metadata available to custom sources, then uses the shared download cache.
-    pub async fn fetch_track_audio(&self, track: &Track, preference: AudioQuality) -> Result<PathBuf, OmniError> {
-        let song = track.online.as_ref().ok_or(OmniError::Unavailable)?;
-        let provider = self.provider(&song.provider)?;
-        let level = resolve_quality(provider.audio_quality_levels(), preference);
-        let dir = self.cache_dir.join("audio");
-        let stem = format!("{}-{}", song.provider, song.id);
-        if let Some(info) = provider.lx_music_info(track) {
-            for (id, script) in self.sources.active(info.source) {
-                let custom_stem = format!("{stem}-lx-{id}-{}", preference.id());
-                if let Some(cached) = cached_file(&dir, &custom_stem) {
-                    return Ok(cached);
-                }
-                if let Some(source) = Self::custom_audio_source(&id, &script, &info, preference).await {
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(60),
-                        self.cache_audio_source(&dir, &custom_stem, source),
-                    )
-                    .await
-                    {
-                        Ok(Ok(path)) => return Ok(path),
-                        Ok(Err(err)) => tracing::warn!(
-                            source = id,
-                            provider = song.provider,
-                            error = &err as &dyn std::error::Error,
-                            "custom source download failed; trying the next source"
-                        ),
-                        Err(err) => tracing::warn!(
-                            source = id,
-                            error = &err as &dyn std::error::Error,
-                            "custom source download timed out; trying the next source"
-                        ),
-                    }
-                }
-            }
-        }
-        let cache_stem = format!("{stem}-{}", level.id());
-        if let Some(cached) = cached_file(&dir, &cache_stem) {
-            return Ok(cached);
-        }
-        if let Some(legacy) = cached_file(&dir, &stem) {
-            tracing::info!(song = %stem, "audio cached before levels is reused");
-            return Ok(legacy);
-        }
-
-        if let Some(file) = provider.audio_file(song, level) {
-            let AudioFile { bytes, extension, level: delivered } = file.await?;
-            let path = dir.join(format!("{cache_stem}.{extension}"));
-            let io_err = |source| OmniError::Io { path: path.clone(), source };
-            std::fs::create_dir_all(&dir).map_err(io_err)?;
-            let partial = path.with_extension("part");
-            std::fs::write(&partial, &bytes).map_err(io_err)?;
-            std::fs::rename(&partial, &path).map_err(io_err)?;
-            tracing::info!(song = %stem, level = delivered.id(), bytes = bytes.len(), "audio cached from the platform");
-            return Ok(path);
-        }
-        let source = provider.audio_source(song, level).await?;
-        tracing::info!(provider = song.provider, "audio resolved through native platform");
-        self.cache_audio_source(&dir, &cache_stem, source).await
-    }
-
-    async fn cache_audio_source(
-        &self,
-        dir: &Path,
-        cache_stem: &str,
-        source: AudioSource,
-    ) -> Result<PathBuf, OmniError> {
-        // A preview would stand in for the whole song once the account may play it, so it gets a name never looked up.
-        let name = if source.preview { format!("{cache_stem}-preview") } else { cache_stem.to_owned() };
-        let path = dir.join(format!("{name}.{}", source.extension));
-        let io_err = |source| OmniError::Io { path: path.clone(), source };
-        std::fs::create_dir_all(dir).map_err(io_err)?;
-        let mut response = self
-            .http
-            .get(&source.url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|err| OmniError::Http(err.without_url()))?;
-        let partial = path.with_extension("part");
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            bytes.extend_from_slice(&chunk);
-        }
-        std::fs::write(&partial, &bytes).map_err(io_err)?;
-        std::fs::rename(&partial, &path).map_err(io_err)?;
-        tracing::info!(
-            song = cache_stem,
-            level = source.level.id(),
-            bytes = bytes.len(),
-            preview = source.preview,
-            "audio cached"
-        );
-        Ok(path)
     }
 
     /// Downloads a cover once into `covers/` and returns the cached file. The platform's CDN is asked for a `px`

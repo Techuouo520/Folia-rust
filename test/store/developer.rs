@@ -4,6 +4,40 @@ use std::fs;
 use std::time::Duration;
 
 use folia_store::{DeveloperSettings, LogMode, MemoryMonitor, RuntimeLog, Store, StoreError, clamp_interval_ms};
+
+#[test]
+fn structured_error_causes_reach_both_memory_and_file() {
+    use tracing_subscriber::prelude::*;
+    struct Capture(RuntimeLog);
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Capture {
+        fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+            self.0.record_event(event);
+        }
+    }
+    #[derive(Debug)]
+    struct Failure(std::io::Error);
+    impl std::fmt::Display for Failure {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("request failed")
+        }
+    }
+    impl std::error::Error for Failure {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("runtime.log");
+    let log = RuntimeLog::new(path.clone());
+    log.configure(true, true, LogMode::Overwrite);
+    let error = Failure(std::io::Error::new(std::io::ErrorKind::TimedOut, "operation timed out"));
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(Capture(log.clone())), || {
+        tracing::error!(error = &error as &dyn std::error::Error, "audio download failed");
+    });
+    assert!(log.entries()[0].message.contains("error=request failed: operation timed out"));
+    log.sync();
+    assert!(std::fs::read_to_string(path).unwrap().contains("error=request failed: operation timed out"));
+}
 use tracing::Level;
 
 fn lines(path: &std::path::Path) -> Vec<String> {

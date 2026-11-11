@@ -13,6 +13,7 @@ folia-core.workspace = true
 folia-i18n.workspace = true
 folia-render.workspace = true
 folia-ui.workspace = true
+folia-omni.workspace = true
 folia-visualizer.workspace = true
 iced.workspace = true
 iced_runtime = "0.14.0"

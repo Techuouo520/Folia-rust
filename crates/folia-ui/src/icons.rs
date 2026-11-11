@@ -12,6 +12,12 @@ pub fn icon<'a, M: 'a>(icon: Icon, size: f32, color: Color) -> Element<'a, M> {
     tinted(svg::Handle::from_memory(icon.svg_bytes()), size, color)
 }
 
+/// A cached Lucide loader rotated once per second while an operation is pending.
+pub fn spinner<'a, M: 'a>(size: f32, color: Color, angle: f32) -> Element<'a, M> {
+    static HANDLE: LazyLock<svg::Handle> = LazyLock::new(|| svg::Handle::from_memory(Icon::LoaderCircle.svg_bytes()));
+    Element::new(Glyph { handle: HANDLE.clone(), size, color, angle })
+}
+
 /// Lucide glyphs the original draws with changed attributes, such as `fill="currentColor"`.
 #[derive(Debug, Clone, Copy)]
 pub enum Variant {
@@ -56,7 +62,7 @@ fn patched(icon: Icon, from: &str, to: &str) -> svg::Handle {
 }
 
 fn tinted<'a, M: 'a>(handle: svg::Handle, size: f32, color: Color) -> Element<'a, M> {
-    Element::new(Glyph { handle, size, color })
+    Element::new(Glyph { handle, size, color, angle: 0.0 })
 }
 
 // iced rounds image edges half-to-even, so an icon at x.5 shrinks a pixel and loses 1px dots; snap the origin first.
@@ -64,6 +70,7 @@ struct Glyph {
     handle: svg::Handle,
     size: f32,
     color: Color,
+    angle: f32,
 }
 
 impl<M, Theme, Renderer: iced::advanced::svg::Renderer> Widget<M, Theme, Renderer> for Glyph {
@@ -91,7 +98,7 @@ impl<M, Theme, Renderer: iced::advanced::svg::Renderer> Widget<M, Theme, Rendere
         let glyph = iced::advanced::svg::Svg {
             handle: self.handle.clone(),
             color: Some(Color { a: 1.0, ..self.color }),
-            rotation: Radians(0.0),
+            rotation: Radians(self.angle),
             opacity: self.color.a,
         };
         renderer.draw_svg(glyph, snapped, snapped);

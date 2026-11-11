@@ -65,17 +65,7 @@ where
     .discard()
 }
 
-/// `error: cause: cause` on one line, for showing an error chain in the interface.
-pub fn error_chain(err: &dyn Error) -> String {
-    let mut text = err.to_string();
-    let mut source = err.source();
-    while let Some(cause) = source {
-        text.push_str(": ");
-        text.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    text
-}
+pub use folia_store::error_chain;
 
 /// `mm:ss` like the original player.
 pub fn format_time(seconds: f64) -> String {

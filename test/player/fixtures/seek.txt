@@ -1,0 +1,4 @@
+// Synthetic FLAC seek fixture, authored for this repository; no recorded music.
+2 seconds, 44100 Hz, mono signed 16-bit PCM; Python Random(3), randint(-20000, 20000), encoded with ffmpeg FLAC compression_level=5.
+Used to test cancelled seeks and cached-prefix recovery without a range-capable server.
+seek.m4a repeats the same generated WAV to 4 seconds, encoded with ffmpeg AAC at 192k; moov stays at the tail to check progressive metadata handling.

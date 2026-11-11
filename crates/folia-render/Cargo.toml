@@ -13,6 +13,7 @@ iced_wgpu.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
 wgpu.workspace = true
+winit.workspace = true
 
 [lints]
 workspace = true

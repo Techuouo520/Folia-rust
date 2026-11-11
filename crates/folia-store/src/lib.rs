@@ -26,7 +26,7 @@ pub use log_file::{LOG_ENTRIES, LOG_LINES, LogFile};
 pub use memory::{MEMORY_HISTORY, MemoryHistory, MemoryMonitor, MemorySample};
 pub use playback::PlaybackSettings;
 pub use player::{BOTTOM_BAR_BASE, PlayerSettings, bottom_bar_max_offset, clamp_bottom_bar_offset};
-pub use runtime_log::{LogLine, RuntimeLog, clock, iso};
+pub use runtime_log::{LogLine, RuntimeLog, clock, error_chain, iso};
 pub use sources::{CustomSource, SourceMetadata, SourcePlatform, SourceSettings};
 pub use theme::{DualTheme, StoredTheme, ThemeSettings, ThemeSource};
 pub use visualizer::VisualizerSettings;

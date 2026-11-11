@@ -6,6 +6,7 @@ mod chrome_motion;
 mod developer;
 mod glass_tone;
 mod icon_dots;
+mod loading;
 #[cfg(test)]
 mod monet;
 mod panelfix;

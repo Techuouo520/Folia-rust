@@ -255,6 +255,61 @@ fn guarded() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[test]
+#[cfg_attr(feature = "ci", ignore = "requires hardware GPU")]
+fn loading_capsule_keeps_a_visible_rotating_lucide_glyph() {
+    use std::time::{Duration, Instant};
+    let _guard = guarded();
+    folia_ui::install_fonts();
+    let temp = tempfile::tempdir().unwrap();
+    let omni = folia_omni::Omni::new(temp.path().into(), "unused".into()).unwrap();
+    let mut playback = folia_ui::Playback::new(Default::default(), Some(omni));
+    let track = folia_core::Track {
+        id: -1,
+        title: "Loading fixture".into(),
+        duration: 120.0,
+        online: Some(folia_core::OnlineId { provider: "qq".into(), id: "fixture".into() }),
+        ..Default::default()
+    };
+    let _ = playback.play(vec![track], 0, None);
+    let start = Instant::now();
+    let mut bar = folia_ui::PlayerBar::new(start);
+    bar.set_home(true);
+    bar.sync(&playback, W as f32, start);
+    let now = start + Duration::from_secs(2);
+    bar.sync(&playback, W as f32, now);
+    let i18n = folia_i18n::I18n::new(folia_core::Language::En).unwrap();
+    let look = || folia_ui::PlayerBarLook {
+        i18n: &i18n,
+        primary: Color::WHITE,
+        secondary: Color::WHITE,
+        background: Color::BLACK,
+        daylight: false,
+        window: Size::new(W as f32, H as f32),
+        bottom: 24.0,
+        modal: false,
+        controls_disabled: false,
+    };
+    let mut picture = Picture::new();
+    picture.frame(bar.view(&playback, look(), now).map(|_| Msg::Monet), Cache::new());
+    let first = picture.screenshot();
+    picture.frame(bar.view(&playback, look(), now + Duration::from_millis(250)).map(|_| Msg::Monet), Cache::new());
+    let second = picture.screenshot();
+    let changed: Vec<_> = first
+        .chunks_exact(4)
+        .zip(second.chunks_exact(4))
+        .enumerate()
+        .filter(|(_, (a, b))| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 8))
+        .map(|(index, _)| (index as u32 % W, index as u32 / W))
+        .collect();
+    assert!(changed.len() > 10, "loading must show an animated glyph even on the home page");
+    let xmin = changed.iter().map(|p| p.0).min().unwrap();
+    let xmax = changed.iter().map(|p| p.0).max().unwrap();
+    let ymin = changed.iter().map(|p| p.1).min().unwrap();
+    let ymax = changed.iter().map(|p| p.1).max().unwrap();
+    assert!(xmax - xmin <= 25 && ymax - ymin <= 25, "only the 20px loader rotates: {xmin},{ymin}..{xmax},{ymax}");
+}
+
+#[test]
 fn classic_enters_the_glass_source() {
     let _guard = guarded();
     folia_ui::install_fonts();
