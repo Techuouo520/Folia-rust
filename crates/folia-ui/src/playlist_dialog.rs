@@ -1,7 +1,9 @@
 // The playlist picker over the window, from `PlaylistSelectionDialog` and `TextInputDialog`.
 
+use crate::typeface::text;
+use crate::typeface::text_input;
 use folia_i18n::I18n;
-use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, space, text, text_input, tooltip};
+use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, space, tooltip};
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Size, Theme as IcedTheme};
 use lucide_static_svg::Icon;
 
@@ -162,7 +164,7 @@ fn picker<'a>(look: &Look<'a>) -> Element<'a, Message> {
     let card_h = (fixed + if empty { 82.0 } else { body_extra }).min(max_h);
 
     let description = text(look.i18n.t("home.playlists"))
-        .size(13)
+        .size(crate::typeface::size::CONTROL)
         .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(21.0)))
         .color(tokens.t2)
         .width(Length::Fill);
@@ -187,7 +189,7 @@ fn creating<'a>(dialog: &Dialog, look: &Look<'a>) -> Element<'a, Message> {
     let width = (look.window.width - 32.0).clamp(200.0, SHEET_S);
     let height = (look.window.height - 32.0).clamp(160.0, 208.0);
     let description = text(look.i18n.t("localMusic.enterPlaylistName"))
-        .size(13)
+        .size(crate::typeface::size::CONTROL)
         .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(21.0)))
         .color(tokens.t2);
     let body = column![
@@ -225,7 +227,7 @@ fn field_input<'a>(look: &Look<'a>, name: &str, tokens: Tokens) -> Element<'a, M
         .id(iced::widget::Id::new(NAME_INPUT))
         .on_input(Message::Name)
         .on_submit(Message::Confirm)
-        .size(13)
+        .size(crate::typeface::size::CONTROL)
         .padding(Padding { top: 8.0, right: 12.0, bottom: 8.0, left: 12.0 })
         .style(move |_theme: &IcedTheme, _status| iced::widget::text_input::Style {
             background: Background::Color(tokens.fill),
@@ -241,8 +243,8 @@ fn field_input<'a>(look: &Look<'a>, name: &str, tokens: Tokens) -> Element<'a, M
 fn header<'a>(look: &Look<'a>, title_key: &'a str) -> Element<'a, Message> {
     let tokens = look.tokens;
     let title = text(look.i18n.t(title_key))
-        .size(16)
-        .font(settings_kit::SEMIBOLD)
+        .size(crate::typeface::size::DIALOG_TITLE)
+        .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
         .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(32.0)))
         .color(tokens.t1);
     let close = button(container(icon(Icon::X, 16.0, tokens.t2)).center(Length::Fixed(32.0)))
@@ -257,7 +259,7 @@ fn header<'a>(look: &Look<'a>, title_key: &'a str) -> Element<'a, Message> {
                 ..button::Style::default()
             }
         });
-    let close = tooltip(close, text(look.i18n.t("ui.close")).size(12), tooltip::Position::Top)
+    let close = tooltip(close, text(look.i18n.t("ui.close")).size(crate::typeface::size::HINT), tooltip::Position::Top)
         .style(settings_kit::faded_box(1.0));
     container(row![title, space().width(Length::Fill), close].spacing(12).align_y(Alignment::Start))
         .width(Length::Fill)
@@ -271,7 +273,7 @@ fn create_button<'a>(look: &Look<'a>, tokens: Tokens) -> Element<'a, Message> {
     button(
         row![
             icon(Icon::Plus, 16.0, tokens.t1),
-            text(look.i18n.t("localMusic.createPlaylist")).size(13).color(tokens.t1),
+            text(look.i18n.t("localMusic.createPlaylist")).size(crate::typeface::size::CONTROL).color(tokens.t1),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
@@ -294,12 +296,14 @@ fn create_button<'a>(look: &Look<'a>, tokens: Tokens) -> Element<'a, Message> {
 fn list<'a>(look: &Look<'a>, height: f32, empty: bool) -> Element<'a, Message> {
     let tokens = look.tokens;
     if empty {
-        return container(text(look.i18n.t("localMusic.noPlaylistsFound")).size(13).color(tokens.t3))
-            .width(Length::Fill)
-            .height(Length::Fixed(height))
-            .center_x(Length::Fill)
-            .center_y(Length::Fixed(height))
-            .into();
+        return container(
+            text(look.i18n.t("localMusic.noPlaylistsFound")).size(crate::typeface::size::CONTROL).color(tokens.t3),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(height))
+        .center_x(Length::Fill)
+        .center_y(Length::Fixed(height))
+        .into();
     }
     let mut rows = column![].spacing(0);
     for (index, choice) in look.playlists.iter().enumerate() {
@@ -321,12 +325,12 @@ fn list<'a>(look: &Look<'a>, height: f32, empty: bool) -> Element<'a, Message> {
 fn row_button<'a>(tokens: Tokens, choice: &'a PlaylistChoice, index: usize) -> Element<'a, Message> {
     let words = column![
         text(choice.name.clone())
-            .size(14)
+            .size(crate::typeface::size::BODY)
             .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(20.0)))
             .color(tokens.t1)
             .wrapping(iced::widget::text::Wrapping::None),
         text(choice.detail.clone())
-            .size(12)
+            .size(crate::typeface::size::HINT)
             .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(18.0)))
             .color(tokens.t2)
             .wrapping(iced::widget::text::Wrapping::None),
@@ -352,7 +356,7 @@ fn sheet_button<'a>(tokens: Tokens, label: &'a str, primary: bool, on_press: Opt
     let enabled = on_press.is_some();
     let text_color = if primary { tokens.on_accent } else { tokens.t1 };
     let ink = if enabled { text_color } else { Color { a: text_color.a * 0.4, ..text_color } };
-    button(container(text(label).size(13).color(ink)).center_y(Length::Fixed(32.0)))
+    button(container(text(label).size(crate::typeface::size::CONTROL).color(ink)).center_y(Length::Fixed(32.0)))
         .height(Length::Fixed(32.0))
         .padding(Padding { top: 0.0, right: 12.0, bottom: 0.0, left: 12.0 })
         .on_press_maybe(on_press)

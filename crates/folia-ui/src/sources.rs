@@ -1,5 +1,7 @@
 // Custom source settings run imports and persistence off the UI thread and show only localized failure summaries.
 
+use crate::typeface::text;
+use crate::typeface::text_input;
 use std::path::PathBuf;
 
 use folia_i18n::I18n;
@@ -8,7 +10,7 @@ use folia_omni::{
     lx::{SourceSettings, UpdateAlert},
 };
 use folia_store::Store;
-use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, stack, text, text_input};
+use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, stack};
 use iced::{Alignment, Border, Color, Element, Length, Task};
 
 use crate::settings_kit::{self as kit, Group, Row, Tokens};
@@ -173,8 +175,11 @@ impl Sources {
         }
         let card = container(
             column![
-                text(i18n.format("options.sourceUpdate", &[("name", name)])).size(18).color(tokens.t1),
-                scrollable(text(alert.log.clone()).size(14).color(tokens.t2)).height(Length::Shrink),
+                text(i18n.format("options.sourceUpdate", &[("name", name)]))
+                    .size(crate::typeface::size::SUBHEADING)
+                    .color(tokens.t1),
+                scrollable(text(alert.log.clone()).size(crate::typeface::size::BODY).color(tokens.t2))
+                    .height(Length::Shrink),
                 buttons,
             ]
             .spacing(16),
@@ -210,7 +215,7 @@ impl Sources {
             .on_submit_maybe(
                 (!self.busy && !self.url.trim().is_empty()).then_some(crate::Message::Sources(Message::ImportUrl)),
             )
-            .size(13)
+            .size(crate::typeface::size::CONTROL)
             .padding([9, 10])
             .style(move |_, status| text_input::Style {
                 background: tokens.fill.into(),
@@ -342,11 +347,15 @@ fn control<'a>(
     enabled: bool,
 ) -> Element<'a, crate::Message> {
     let primary = enabled && matches!(message, Message::ImportUrl);
-    button(text(i18n.t(key).to_owned()).size(12).color(if primary { tokens.on_accent } else { tokens.t1 }))
-        .padding([7, 10])
-        .style(move |_, _| kit::rounded_button(if primary { tokens.accent } else { tokens.fill }, 8.0))
-        .on_press_maybe(enabled.then_some(crate::Message::Sources(message)))
-        .into()
+    button(text(i18n.t(key).to_owned()).size(crate::typeface::size::HINT).color(if primary {
+        tokens.on_accent
+    } else {
+        tokens.t1
+    }))
+    .padding([7, 10])
+    .style(move |_, _| kit::rounded_button(if primary { tokens.accent } else { tokens.fill }, 8.0))
+    .on_press_maybe(enabled.then_some(crate::Message::Sources(message)))
+    .into()
 }
 
 fn run(

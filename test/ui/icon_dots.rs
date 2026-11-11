@@ -2,7 +2,7 @@
 
 use iced::advanced::renderer::{Headless, Style};
 use iced::widget::{container, svg};
-use iced::{Color, Element, Font, Length, Pixels, Size, Theme};
+use iced::{Color, Element, Length, Pixels, Size, Theme};
 use iced_runtime::user_interface::{Cache, UserInterface};
 use lucide_static_svg::Icon;
 
@@ -58,7 +58,7 @@ fn shot(offset: f32, snap: bool) -> Vec<u8> {
     let root: Element<'_, (), Theme, iced::Renderer> =
         container(button).padding(iced::Padding { top: offset, left: offset, right: 0.0, bottom: 0.0 }).into();
     let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), None)).unwrap();
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
     let mut ui = UserInterface::build(root, Size::new(40.0, 40.0), Cache::default(), &mut renderer);
     ui.draw(&mut renderer, &Theme::Light, &Style { text_color: ink }, iced::mouse::Cursor::Unavailable);
     renderer.screenshot(

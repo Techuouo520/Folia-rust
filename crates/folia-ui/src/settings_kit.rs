@@ -1,14 +1,15 @@
 // The settings window's parts, after the original `modal/settings/kit`: colours, rows in cards, switch, choice, list, tabs.
 
+use crate::typeface::text;
 use folia_core::{Rgb, Theme};
-use iced::widget::{button, column, container, pick_list, row, scrollable, space, stack, text};
+use iced::widget::{button, column, container, pick_list, row, scrollable, space, stack};
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Padding, Shadow, Vector};
 
 use crate::icons::icon;
 
 const ON_ACCENT_DARK: Rgb = Rgb::hex(0x17171a);
 const ON_ACCENT_LIGHT: Rgb = Rgb::hex(0xffffff);
-pub const SEMIBOLD: Font = crate::typeface::font(iced::font::Weight::Semibold);
+pub const SEMIBOLD: Font = crate::typeface::SEMIBOLD;
 /// Height of a row with a hint line: `min-h-14 py-2.5`, a 20px label and an 18px hint 2px under it.
 pub const ROW_HINT_HEIGHT: f32 = 60.0;
 /// Space above a group (`mt-7`, `mt-5` for the first) and its heading line with the gap under it.
@@ -295,22 +296,22 @@ pub(crate) fn group_with_rows<'a, M: 'a>(
     });
     let mut body = column![space().height(if first { FIRST_GROUP_GAP } else { GROUP_GAP })];
     if !bare {
-        let heading = text(title).size(13).line_height(px(20.0)).font(SEMIBOLD).color(tokens.t2);
+        let heading = crate::typeface::GROUP.text(title).color(tokens.t2);
         body = body.push(container(heading).height(24).align_y(Alignment::Center).padding([0, 4]));
         body = body.push(space().height(8));
     }
     body = body.push(card);
     if let Some(foot) = foot {
-        let line = text(foot).size(12).line_height(px(18.0)).color(tokens.t3);
+        let line = crate::typeface::HINT.text(foot).color(tokens.t3);
         body = body.push(container(line).padding(Padding { top: 8.0, right: 4.0, bottom: 0.0, left: 4.0 }));
     }
     body.into()
 }
 
 fn row_view<'a, M: 'a>(tokens: Tokens, entry: Row<'a, M>) -> Element<'a, M> {
-    let mut label = column![text(entry.label).size(14).line_height(px(20.0)).color(tokens.t1)];
+    let mut label = column![crate::typeface::LABEL.text(entry.label).color(tokens.t1)];
     if let Some(hint) = entry.hint {
-        label = label.push(space().height(2)).push(text(hint).size(12).line_height(px(18.0)).color(tokens.t2));
+        label = label.push(space().height(2)).push(crate::typeface::HINT.text(hint).color(tokens.t2));
     }
     let left = if entry.sub { 40.0 } else { 16.0 };
     let content = row![container(label).width(Length::Fill), entry.control].spacing(24).align_y(Alignment::Center);
@@ -440,7 +441,7 @@ fn segmented_choices<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
         let selected = option == value;
         let ink = if selected { tokens.t1 } else { tokens.t2 };
         let ink = if enabled { ink } else { Color { a: ink.a * 0.4, ..ink } };
-        let label = container(text(label).size(13).color(ink)).center_x(width).center_y(28);
+        let label = container(text(label).size(crate::typeface::size::CONTROL).color(ink)).center_x(width).center_y(28);
         let choice = button(label).padding(0).style(move |_, status| button::Style {
             text_color: if enabled && (selected || status == button::Status::Hovered) { tokens.t1 } else { ink },
             ..button::Style::default()
@@ -460,9 +461,10 @@ pub fn select<'a, T: Clone + PartialEq + 'a, M: Clone + 'a>(
     let widest = options.iter().map(|choice| label_width(&choice.label, 13.0)).fold(0.0, f32::max);
     let width = (widest + 12.0 + 8.0 + 8.0 + 16.0).clamp(136.0, 240.0);
     pick_list(options, Some(value), on_change)
+        .font(crate::typeface::adapt(crate::typeface::SYSTEM))
         .width(width)
         .padding(Padding { top: 7.0, right: 8.0, bottom: 7.0, left: 12.0 })
-        .text_size(13)
+        .text_size(crate::typeface::size::CONTROL)
         .text_line_height(px(18.0))
         .handle(pick_list::Handle::Arrow { size: Some(16.into()) })
         .style(move |_, status| pick_list::Style {
@@ -500,7 +502,7 @@ pub fn tabs<'a, M: Clone + 'a>(
     let mut strip = row![].spacing(22);
     for (index, ((label, message), width)) in tabs.into_iter().zip(widths.iter().copied()).enumerate() {
         let current = chosen == Some(index);
-        let label = container(text(label).size(13)).center_x(width).center_y(36);
+        let label = container(text(label).size(crate::typeface::size::CONTROL)).center_x(width).center_y(36);
         strip = strip.push(button(label).padding(0).on_press(message).style(move |_, status| button::Style {
             text_color: if current || status == button::Status::Hovered { tokens.t1 } else { tokens.t2 },
             ..button::Style::default()
@@ -522,7 +524,7 @@ pub fn tabs<'a, M: Clone + 'a>(
 
 /// A plain value in a row's control slot.
 pub fn value<'a, M: 'a>(tokens: Tokens, content: String) -> Element<'a, M> {
-    text(content).size(13).color(tokens.t2).into()
+    text(content).size(crate::typeface::size::CONTROL).color(tokens.t2).into()
 }
 
 /// A shortcut as key caps (`kit/KeyCapture` `Keys`): 22px quiet caps joined by plus signs.
@@ -530,19 +532,24 @@ pub fn keys<'a, M: 'a>(tokens: Tokens, keys: &[&'a str]) -> Element<'a, M> {
     let mut line = row![].spacing(4).align_y(Alignment::Center);
     for (index, key) in keys.iter().enumerate() {
         if index > 0 {
-            line = line.push(text("+").size(11).color(tokens.t3));
+            line = line.push(text("+").size(crate::typeface::size::CAPTION).color(tokens.t3));
         }
         let width = label_width(key, 11.0).max(24.0) + 12.0;
-        let cap = container(text(*key).size(11).font(Font::MONOSPACE).color(tokens.t2))
-            .width(width)
-            .height(22)
-            .center_x(width)
-            .center_y(22)
-            .style(move |_| container::Style {
-                background: Some(tokens.fill.into()),
-                border: Border { color: tokens.line2, width: 1.0, radius: 6.0.into() },
-                ..container::Style::default()
-            });
+        let cap = container(
+            text(*key)
+                .size(crate::typeface::size::CAPTION)
+                .font(crate::typeface::adapt(Font::MONOSPACE))
+                .color(tokens.t2),
+        )
+        .width(width)
+        .height(22)
+        .center_x(width)
+        .center_y(22)
+        .style(move |_| container::Style {
+            background: Some(tokens.fill.into()),
+            border: Border { color: tokens.line2, width: 1.0, radius: 6.0.into() },
+            ..container::Style::default()
+        });
         line = line.push(cap);
     }
     line.into()
@@ -605,7 +612,7 @@ fn slide(widths: &[f32], at: f32) -> (f32, f32) {
 }
 
 fn label_width(label: &str, size: f32) -> f32 {
-    folia_visualizer::measure(label, size, Font::DEFAULT, f32::INFINITY).width.ceil()
+    crate::typeface::measure(label, size, crate::typeface::SYSTEM, f32::INFINITY).width.ceil()
 }
 
 fn px(value: f32) -> iced::widget::text::LineHeight {

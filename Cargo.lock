@@ -1617,6 +1617,8 @@ dependencies = [
  "iced_wgpu",
  "parking_lot",
  "tracing",
+ "unicode-script",
+ "unicode-vo",
  "wgpu",
  "winit",
 ]

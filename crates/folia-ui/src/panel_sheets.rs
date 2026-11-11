@@ -1,10 +1,12 @@
 // The sheets the player panel opens over the window: the audio effects window, the theme quick editor and
 // the lyric file window. Each keeps its own draft; the shell applies what a sheet hands it.
 
+use crate::typeface::text;
+use crate::typeface::text_input;
 use folia_core::{EQUALIZER_MAX_GAIN_DB, EQUALIZER_MIN_GAIN_DB, EqualizerSettings, Rgb, SOUND_PRESETS};
 use folia_i18n::I18n;
 use folia_store::DualTheme;
-use iced::widget::{button, column, container, mouse_area, row, space, text, text_input};
+use iced::widget::{button, column, container, mouse_area, row, space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Size, Theme as IcedTheme};
 use lucide_static_svg::Icon;
 
@@ -242,7 +244,10 @@ fn sheet<'a>(
     let tokens = Faded::new(look.tokens, look.tokens.t1, look.tokens.accent, look.daylight, 1.0);
     let closing = mouse_area(container(space()).width(Length::Fill).height(Length::Fill)).on_release(close.clone());
     let head = row![
-        text(title).size(18).font(typeface::font(iced::font::Weight::Semibold)).color(look.tokens.t1),
+        text(title)
+            .size(crate::typeface::size::SUBHEADING)
+            .font(crate::typeface::adapt(typeface::font(iced::font::Weight::Semibold)))
+            .color(look.tokens.t1),
         space().width(Length::Fill),
         button(container(icon(Icon::X, 18.0, look.tokens.t2)).center(Length::Fixed(32.0)))
             .padding(0)
@@ -299,9 +304,13 @@ fn theme_editor<'a>(editor: &'a Editor, look: &Look<'a>) -> Element<'a, Message>
         let chosen = editor.light == light;
         sides = sides.push(
             button(
-                container(text(i18n.t(key)).size(13).color(if chosen { tokens.t1 } else { tokens.t2 }))
-                    .center_x(Length::Fill)
-                    .center_y(Length::Fill),
+                container(text(i18n.t(key)).size(crate::typeface::size::CONTROL).color(if chosen {
+                    tokens.t1
+                } else {
+                    tokens.t2
+                }))
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
             )
             .width(Length::Fill)
             .height(Length::Fill)
@@ -333,7 +342,7 @@ fn theme_editor<'a>(editor: &'a Editor, look: &Look<'a>) -> Element<'a, Message>
     for (index, name) in names.iter().enumerate() {
         rows = rows.push(
             row![
-                text(i18n.t(name)).size(13).color(tokens.t2).width(Length::Fixed(120.0)),
+                text(i18n.t(name)).size(crate::typeface::size::CONTROL).color(tokens.t2).width(Length::Fixed(120.0)),
                 button(container(space()).width(Length::Fixed(22.0)).height(Length::Fixed(22.0)))
                     .padding(0)
                     .style(move |_theme: &IcedTheme, _status| button::Style {
@@ -351,7 +360,7 @@ fn theme_editor<'a>(editor: &'a Editor, look: &Look<'a>) -> Element<'a, Message>
                     })
                     .on_press(Message::EditorColor(index)),
                 text(format!("#{:02x}{:02x}{:02x}", colors[index].r, colors[index].g, colors[index].b))
-                    .size(11)
+                    .size(crate::typeface::size::CAPTION)
                     .color(tokens.t3),
             ]
             .spacing(10)
@@ -377,7 +386,7 @@ fn theme_editor<'a>(editor: &'a Editor, look: &Look<'a>) -> Element<'a, Message>
     let name = text_input(i18n.t("themePark.namePlaceholder"), &editor.name)
         .on_input(Message::EditorName)
         .on_submit(Message::EditorSave)
-        .size(13)
+        .size(crate::typeface::size::CONTROL)
         .padding(8)
         .style(move |_theme: &IcedTheme, _status| iced::widget::text_input::Style {
             background: Background::Color(tokens.fill),
@@ -394,8 +403,12 @@ fn theme_editor<'a>(editor: &'a Editor, look: &Look<'a>) -> Element<'a, Message>
     .spacing(8)
     .align_y(Alignment::Center);
     let body = column![
-        row![sides, space().width(Length::Fill), text(i18n.t("options.customTheme")).size(12).color(tokens.t3)]
-            .align_y(Alignment::Center),
+        row![
+            sides,
+            space().width(Length::Fill),
+            text(i18n.t("options.customTheme")).size(crate::typeface::size::HINT).color(tokens.t3)
+        ]
+        .align_y(Alignment::Center),
         rows,
         swatches,
         name,
@@ -420,9 +433,9 @@ fn lyric_file<'a>(look: &Look<'a>) -> Element<'a, Message> {
         Some(i18n.t("lyricExport.formatLrcDesc")),
         Message::LyricExport,
     );
-    let no_lyrics = text(i18n.t("lyricExport.noLyrics")).size(12).color(tokens.t3);
+    let no_lyrics = text(i18n.t("lyricExport.noLyrics")).size(crate::typeface::size::HINT).color(tokens.t3);
     let body = column![
-        text(i18n.t("lyricFile.description")).size(12).color(tokens.t3),
+        text(i18n.t("lyricFile.description")).size(crate::typeface::size::HINT).color(tokens.t3),
         section_label(i18n.t("lyricFile.importHeading"), tokens),
         import,
         section_label(i18n.t("lyricFile.exportHeading"), tokens),
@@ -435,9 +448,9 @@ fn lyric_file<'a>(look: &Look<'a>) -> Element<'a, Message> {
 }
 
 fn row_button<'a>(tokens: Faded, title: &'a str, hint: Option<&'a str>, message: Message) -> Element<'a, Message> {
-    let mut body = column![text(title).size(13).color(tokens.t1)].spacing(2);
+    let mut body = column![text(title).size(crate::typeface::size::CONTROL).color(tokens.t1)].spacing(2);
     if let Some(hint) = hint {
-        body = body.push(text(hint).size(11).color(tokens.t3));
+        body = body.push(text(hint).size(crate::typeface::size::CAPTION).color(tokens.t3));
     }
     button(body)
         .width(Length::Fill)
@@ -455,7 +468,7 @@ fn row_button<'a>(tokens: Faded, title: &'a str, hint: Option<&'a str>, message:
 }
 
 fn quiet<'a>(tokens: Faded, label: &'a str, message: Message) -> Element<'a, Message> {
-    button(text(label).size(13).color(tokens.t2))
+    button(text(label).size(crate::typeface::size::CONTROL).color(tokens.t2))
         .padding(iced::Padding { top: 8.0, right: 12.0, bottom: 8.0, left: 12.0 })
         .on_press(message)
         .style(move |_theme: &IcedTheme, status| {
@@ -471,7 +484,7 @@ fn quiet<'a>(tokens: Faded, label: &'a str, message: Message) -> Element<'a, Mes
 }
 
 fn primary<'a>(tokens: Faded, label: &'a str, message: Message) -> Element<'a, Message> {
-    button(text(label).size(13).color(tokens.on_accent))
+    button(text(label).size(crate::typeface::size::CONTROL).color(tokens.on_accent))
         .padding(iced::Padding { top: 8.0, right: 14.0, bottom: 8.0, left: 14.0 })
         .on_press(message)
         .style(move |_theme: &IcedTheme, _status| button::Style {
@@ -483,7 +496,11 @@ fn primary<'a>(tokens: Faded, label: &'a str, message: Message) -> Element<'a, M
 }
 
 fn section_label<'a>(label: &'a str, tokens: Faded) -> Element<'a, Message> {
-    text(label).size(12).font(typeface::font(iced::font::Weight::Semibold)).color(tokens.t3).into()
+    text(label)
+        .size(crate::typeface::size::HINT)
+        .font(crate::typeface::adapt(typeface::font(iced::font::Weight::Semibold)))
+        .color(tokens.t3)
+        .into()
 }
 
 fn custom_index(preset: &str) -> Option<usize> {

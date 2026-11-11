@@ -258,7 +258,7 @@ fn letter_widths() -> [f32; 5] {
         for family in FAMILIES {
             for italic in [false, true] {
                 let font = face_font(family, Weight::ExtraBold, italic);
-                widest = widest.max(folia_visualizer::measure(&text, 100.0, font, 10_000.0).width);
+                widest = widest.max(crate::typeface::measure(&text, 100.0, font, 10_000.0).width);
             }
         }
         if widest > 0.0 {
@@ -270,7 +270,7 @@ fn letter_widths() -> [f32; 5] {
 
 fn face_font(family: Family, weight: Weight, italic: bool) -> Font {
     let style = if italic { iced::font::Style::Italic } else { iced::font::Style::Normal };
-    crate::typeface::with(Font { family, style, ..Font::DEFAULT }, weight)
+    crate::typeface::with(Font { family, style, ..crate::typeface::SYSTEM }, weight)
 }
 
 pub(crate) struct SplashProgram<'a> {
@@ -416,7 +416,7 @@ fn fill_letter(frame: &mut Frame, letter: char, face: Face, at: Point, font_px: 
         position: at,
         color: Color { a: alpha, ..Color::WHITE },
         size: font_px.into(),
-        font: face_font(family, weight, face.italic),
+        font: crate::typeface::adapt(face_font(family, weight, face.italic)),
         align_x: iced::widget::text::Alignment::Center,
         align_y: iced::alignment::Vertical::Center,
         shaping: iced::widget::text::Shaping::Advanced,

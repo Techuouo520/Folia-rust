@@ -1,5 +1,6 @@
 // Home page: the cover wall of the current tab (online playlists, radio, explore, albums, or local songs) and its layers.
 
+use crate::typeface::text;
 use std::path::PathBuf;
 
 use folia_core::{Theme, Track};
@@ -11,7 +12,7 @@ use folia_store::HomeTab;
 use std::time::Instant;
 
 use iced::widget::scrollable::Viewport;
-use iced::widget::{canvas, column, container, shader, stack, text};
+use iced::widget::{canvas, column, container, shader, stack};
 use iced::{Alignment, Color, Element, Length, Task, mouse};
 
 use crate::background::{blocking, error_chain};
@@ -1726,14 +1727,14 @@ fn hint<'a>(
     let rise = 6.0 * (1.0 - fade);
     let title = text(title)
         .size(title_size)
-        .line_height(iced::widget::text::LineHeight::Relative(1.18))
-        .font(crate::typeface::font(iced::font::Weight::Bold))
+        .line_height(crate::typeface::leading::EM_1_18)
+        .font(crate::typeface::adapt(crate::typeface::BOLD))
         .color(Color { a: 0.22 * fade, ..ink })
         .align_x(Alignment::Center)
         .width(Length::Fill);
     let body = text(body)
         .size(body_size)
-        .line_height(iced::widget::text::LineHeight::Relative(1.65))
+        .line_height(crate::typeface::leading::EM_1_65)
         .color(Color { a: 0.36 * fade, ..ink })
         .align_x(Alignment::Center)
         .width(Length::Fill);

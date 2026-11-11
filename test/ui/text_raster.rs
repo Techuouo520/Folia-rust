@@ -83,7 +83,8 @@ fn chinese_interface_text_raster() {
         }
         ink.push((*label, sum));
     }
-    let dir = std::path::PathBuf::from(std::env::var("TEMP").unwrap()).join("folia-nebbia-fix");
+    let output = tempfile::tempdir().unwrap();
+    let dir = output.path();
     std::fs::create_dir_all(&dir).unwrap();
     image.save(dir.join("iced-raster.png")).unwrap();
     std::fs::write(dir.join("iced-raster.txt"), format!("{ink:?}")).unwrap();
@@ -183,7 +184,8 @@ fn chinese_interface_text_cryoglyph() {
             image.put_pixel(x, y, image::Rgba(px));
         }
     }
-    let dir = std::path::PathBuf::from(std::env::var("TEMP").unwrap()).join("folia-nebbia-fix");
+    let output = tempfile::tempdir().unwrap();
+    let dir = output.path();
     std::fs::create_dir_all(&dir).unwrap();
     image.save(dir.join("cryoglyph-patched.png")).unwrap();
     std::fs::write(dir.join("cryoglyph-patched.txt"), ink.to_string()).unwrap();

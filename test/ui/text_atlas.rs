@@ -5,7 +5,7 @@ use folia_visualizer::styles::monet::Event as MonetEvent;
 use folia_visualizer::{Scene, Style, Values};
 use iced::advanced::renderer::{Headless, Style as RenderStyle};
 use iced::widget::{Canvas, column, container, row, text};
-use iced::{Color, Element, Font, Length, Pixels, Size, Theme};
+use iced::{Color, Element, Length, Pixels, Size, Theme};
 use iced_runtime::user_interface::{Cache, UserInterface};
 
 const W: u32 = 1920;
@@ -82,7 +82,8 @@ fn panel_pixels(shot: &[u8]) -> Vec<u8> {
 }
 
 fn save(name: &str, shot: &[u8]) {
-    let dir = std::env::temp_dir().join("folia-textfix");
+    let output = tempfile::tempdir().unwrap();
+    let dir = output.path();
     let _ = std::fs::create_dir_all(&dir);
     let _ = image::RgbaImage::from_raw(W, H, shot.to_vec()).map(|img| img.save(dir.join(name)));
 }
@@ -129,7 +130,7 @@ fn draw(
 }
 
 fn renderer() -> iced::Renderer {
-    pollster::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), None)).unwrap()
+    pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap()
 }
 
 /// Frames to play, from `FOLIA_ATLAS_FRAMES`. Before the fix the shared atlas filled up at frame 21298.

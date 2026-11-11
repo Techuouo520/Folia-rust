@@ -1,5 +1,7 @@
 // The now-playing player panel: frame from `PanelShell`, handle from `PanelHandle`, tabs from `UnifiedPanel`.
 
+use crate::typeface::text;
+use crate::typeface::text_input;
 use std::time::Instant;
 
 use folia_core::{AudioQuality, Repeat, Theme, Track};
@@ -9,9 +11,7 @@ use folia_render::Plate;
 use folia_store::{ReplayGainMode, ThemeMode, ThemeSource};
 use folia_visualizer::{Ease, QuickControl, QuickKind, Style};
 use iced::widget::text::LineHeight;
-use iced::widget::{
-    button, column, container, image, mouse_area, row, shader, slider, space, stack, text, text_input, tooltip,
-};
+use iced::widget::{button, column, container, image, mouse_area, row, shader, slider, space, stack, tooltip};
 use iced::{Alignment, Background, Border, Color, Element, Length, Size, Task, Theme as IcedTheme};
 use lucide_static_svg::Icon;
 
@@ -242,7 +242,7 @@ impl PlayerPanel {
                         row![
                             container(if on { icon(Icon::Check, 13.0, tokens.accent) } else { space().into() })
                                 .width(Length::Fixed(16.0)),
-                            text(view.i18n.t(style.label_key())).size(13).color(tokens.t1),
+                            text(view.i18n.t(style.label_key())).size(crate::typeface::size::CONTROL).color(tokens.t1),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
@@ -254,7 +254,10 @@ impl PlayerPanel {
                 );
             }
             let head = row![
-                text(view.i18n.t("options.randomPoolChoose")).size(13).font(settings_kit::SEMIBOLD).color(tokens.t1),
+                text(view.i18n.t("options.randomPoolChoose"))
+                    .size(crate::typeface::size::CONTROL)
+                    .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
+                    .color(tokens.t1),
                 space().width(Length::Fill),
                 text_btn(view.i18n.t("ui.close"), tokens.t3, Some(Message::PoolClose)),
             ]
@@ -264,7 +267,7 @@ impl PlayerPanel {
             let field = text_input(view.i18n.t("localMusic.enterPlaylistName"), name)
                 .on_input(Message::SaveQueueName)
                 .on_submit(Message::SaveQueueConfirm)
-                .size(13)
+                .size(crate::typeface::size::CONTROL)
                 .padding(8)
                 .style(move |_theme: &IcedTheme, _status| iced::widget::text_input::Style {
                     background: Background::Color(tokens.win),
@@ -282,8 +285,8 @@ impl PlayerPanel {
             .align_y(Alignment::Center);
             column![
                 text(view.i18n.t("localMusic.saveQueueAsPlaylist"))
-                    .size(13)
-                    .font(settings_kit::SEMIBOLD)
+                    .size(crate::typeface::size::CONTROL)
+                    .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
                     .color(tokens.t1),
                 field,
                 container(buttons).width(Length::Fill).align_x(Alignment::End),
@@ -940,9 +943,9 @@ fn header<'a>(
     let lift = -4.0 * (1.0 - fold.folded);
     let lines = column![
         text(title)
-            .size(14)
+            .size(crate::typeface::size::BODY)
             .line_height(LineHeight::Absolute(iced::Pixels(20.0)))
-            .font(settings_kit::SEMIBOLD)
+            .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
             .color(small_ink)
             .wrapping(iced::widget::text::Wrapping::None),
         artists(view, small, 12.0, 18.0),
@@ -961,16 +964,19 @@ fn header<'a>(
     let credits = column![
         button(
             text(title)
-                .size(18)
+                .size(crate::typeface::size::SUBHEADING)
                 .line_height(LineHeight::Absolute(iced::Pixels(26.0)))
-                .font(settings_kit::SEMIBOLD)
+                .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
                 .color(big_ink)
         )
         .padding(0)
         .on_press_maybe((view.track.is_some() && fold.under > 0.5).then_some(Message::CopySongInfo))
         .style(button::text),
         artists(view, big, 13.0, 20.0),
-        text(album).size(12).line_height(LineHeight::Absolute(iced::Pixels(18.0))).color(big.t3),
+        text(album)
+            .size(crate::typeface::size::HINT)
+            .line_height(LineHeight::Absolute(iced::Pixels(18.0)))
+            .color(big.t3),
     ];
     let under = column![credits, actions(view, big, big_ink, swap)].padding(pad(14.0, 4.0, 0.0, 4.0));
 
@@ -1046,7 +1052,7 @@ fn source_pill<'a>(view: View<'a>, tokens: Faded, ink: Color, name: &'a str, hov
     let tint = fade(if hovered { tokens.t1 } else { tokens.t2 }, open);
     let fill = fade(if hovered { tokens.fill2 } else { tokens.fill }, open);
     let mark = container(icon(Icon::Crosshair, 14.0, tint)).center(Length::Fixed(14.0));
-    let label = text(name).size(12).color(tint).wrapping(iced::widget::text::Wrapping::None);
+    let label = text(name).size(crate::typeface::size::HINT).color(tint).wrapping(iced::widget::text::Wrapping::None);
     let body = row![mark, label].spacing(6).align_y(Alignment::Center);
     let body = container(body).center_y(Length::Fixed(32.0)).padding(pad(0.0, 12.0, 0.0, 10.0)).clip(true);
     let button =
@@ -1056,7 +1062,7 @@ fn source_pill<'a>(view: View<'a>, tokens: Faded, ink: Color, name: &'a str, hov
             ..button::Style::default()
         });
     let button = mouse_area(button).on_enter(Message::PillHover(true)).on_exit(Message::PillHover(false));
-    tooltip(button, text(tip).size(12), tooltip::Position::Top).style(tokens.tip()).into()
+    tooltip(button, text(tip).size(crate::typeface::size::HINT), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
 /// The heart's paint and shape: filled on `--pn-like` when liked, hollow on `--st-t2` otherwise, the whole control at
@@ -1111,7 +1117,7 @@ fn heart<'a>(view: View<'a>, tokens: Faded, ink: Color, filled: bool, swap: f32)
             }
         },
     );
-    tooltip(button, text(tip).size(12), tooltip::Position::Top).style(tokens.tip()).into()
+    tooltip(button, text(tip).size(crate::typeface::size::HINT), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
 /// `TabDock`: one raised mark shared by the tabs, sliding from the old tab to the new one (`move`, 220ms).
@@ -1155,9 +1161,13 @@ fn dock<'a>(
     let buttons = tabs.into_iter().map(|(id, label)| {
         let on = id == tab;
         button(
-            container(text(label).size(13).color(if on { ink } else { Color { a: ink.a, ..tokens.t2 } }))
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
+            container(text(label).size(crate::typeface::size::CONTROL).color(if on {
+                ink
+            } else {
+                Color { a: ink.a, ..tokens.t2 }
+            }))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
         )
         .padding(0)
         .width(Length::Fill)
@@ -1216,9 +1226,13 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
             .on_release(Message::VolumeDone)
             .width(Length::Fill)
             .style(move |_, _| settings_kit::slider_style(tokens.tokens())),
-        container(text(format!("{}%", (shown * 100.0).round() as i32)).size(12).color(Color { a: ink.a, ..tokens.t2 }))
-            .width(Length::Fixed(38.0))
-            .align_x(Alignment::End),
+        container(
+            text(format!("{}%", (shown * 100.0).round() as i32))
+                .size(crate::typeface::size::HINT)
+                .color(Color { a: ink.a, ..tokens.t2 })
+        )
+        .width(Length::Fixed(38.0))
+        .align_x(Alignment::End),
     ]
     .spacing(8)
     .align_y(Alignment::Center)
@@ -1284,8 +1298,10 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
     let transparent = row![
         container(
             tooltip(
-                text(view.i18n.t("options.transparentPlayerBackground")).size(14).color(fade(tokens.t2, ink.a * 0.4)),
-                text(view.i18n.t("options.transparentPlayerBackgroundUnavailable")).size(12),
+                text(view.i18n.t("options.transparentPlayerBackground"))
+                    .size(crate::typeface::size::BODY)
+                    .color(fade(tokens.t2, ink.a * 0.4)),
+                text(view.i18n.t("options.transparentPlayerBackgroundUnavailable")).size(crate::typeface::size::HINT),
                 tooltip::Position::Top,
             )
             .style(tokens.tip())
@@ -1354,7 +1370,7 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
         view.i18n.t("theme.midnightDefault").to_owned()
     };
     let name_row = row![
-        text(theme_name).size(13).color(fade(tokens.t2, ink.a)).width(Length::Fill),
+        text(theme_name).size(crate::typeface::size::CONTROL).color(fade(tokens.t2, ink.a)).width(Length::Fill),
         day_night(tokens, ink, view.daylight),
         text_btn(view.i18n.t("ui.generateAITheme"), fade(tokens.t2, ink.a * 0.4), None),
     ]
@@ -1423,16 +1439,24 @@ fn quick_toggle<'a>(
                 ..button::Style::default()
             }
         });
-    tooltip(button, text(tip.to_owned()).size(12), tooltip::Position::Top).style(tokens.tip()).into()
+    tooltip(button, text(tip.to_owned()).size(crate::typeface::size::HINT), tooltip::Position::Top)
+        .style(tokens.tip())
+        .into()
 }
 
 fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Faded, ink: Color) -> Element<'a, Message> {
     if view.queue.is_empty() {
-        return text(view.i18n.t("queue.empty")).size(13).color(Color { a: ink.a, ..tokens.t2 }).into();
+        return text(view.i18n.t("queue.empty"))
+            .size(crate::typeface::size::CONTROL)
+            .color(Color { a: ink.a, ..tokens.t2 })
+            .into();
     }
     let head = row![
-        text(view.i18n.t("queue.title")).size(13).font(settings_kit::SEMIBOLD).color(Color { a: ink.a, ..tokens.t2 }),
-        text(view.queue.len().to_string()).size(13).color(Color { a: ink.a, ..tokens.t3 }),
+        text(view.i18n.t("queue.title"))
+            .size(crate::typeface::size::CONTROL)
+            .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
+            .color(Color { a: ink.a, ..tokens.t2 }),
+        text(view.queue.len().to_string()).size(crate::typeface::size::CONTROL).color(Color { a: ink.a, ..tokens.t3 }),
         space().width(Length::Fill),
         text_btn(
             view.i18n.t("localMusic.saveQueueAsPlaylist"),
@@ -1483,7 +1507,8 @@ fn source_tab<'a>(view: View<'a>, tokens: Faded) -> Element<'a, Message> {
     } else {
         i18n.t("localMusic.statusLocal")
     };
-    let source = text(source).size(13).color(tokens.t2).wrapping(iced::widget::text::Wrapping::None);
+    let source =
+        text(source).size(crate::typeface::size::CONTROL).color(tokens.t2).wrapping(iced::widget::text::Wrapping::None);
     // The reset keeps its place at 0 so the number beside it does not move.
     let offset_ms = (view.lyric_offset * 1000.0).round() as i64;
     let reset = icon_btn(
@@ -1551,7 +1576,7 @@ fn source_tab<'a>(view: View<'a>, tokens: Faded) -> Element<'a, Message> {
     ];
     if let Some(hint) = hint {
         column = column.push(
-            container(text(hint).size(12).color(tokens.t3))
+            container(text(hint).size(crate::typeface::size::HINT).color(tokens.t3))
                 .width(Length::Fill)
                 .align_x(Alignment::End)
                 .padding(pad(0.0, 4.0, 4.0, 4.0)),
@@ -1564,9 +1589,11 @@ fn source_tab<'a>(view: View<'a>, tokens: Faded) -> Element<'a, Message> {
 fn gain_segment<'a>(tokens: Faded, label: &'a str, chosen: bool, message: Message) -> Element<'a, Message> {
     let ink = if chosen { tokens.t1 } else { tokens.t2 };
     button(
-        container(text(label).size(13).color(ink).wrapping(iced::widget::text::Wrapping::None))
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
+        container(
+            text(label).size(crate::typeface::size::CONTROL).color(ink).wrapping(iced::widget::text::Wrapping::None),
+        )
+        .center_x(Length::Fill)
+        .center_y(Length::Fill),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -1587,7 +1614,7 @@ fn gain_segment<'a>(tokens: Faded, label: &'a str, chosen: bool, message: Messag
 
 /// `PanelRow`: at least 44px, `px-1 py-1.5`, a 14px name on the left and the controls to the right.
 fn panel_row<'a>(tokens: Faded, label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
-    let name = text(label).size(14).line_height(iced::Pixels(20.0)).color(tokens.t1);
+    let name = text(label).size(crate::typeface::size::BODY).line_height(iced::Pixels(20.0)).color(tokens.t1);
     let name = container(name).width(Length::Fixed(72.0));
     let control = container(control).width(Length::Fill).align_x(Alignment::End);
     row![name, control]
@@ -1614,9 +1641,11 @@ fn stepper<'a>(tokens: Faded, value_ms: i64, label: &'a str) -> Element<'a, Mess
     };
     let number = if value_ms > 0 { format!("+{value_ms}") } else { value_ms.to_string() };
     let mono = iced::Font::MONOSPACE;
-    let value = text(number).size(13).font(mono).color(tokens.t1);
+    let value = text(number).size(crate::typeface::size::CONTROL).font(crate::typeface::adapt(mono)).color(tokens.t1);
     let value = container(value).width(Length::Fixed(48.0)).align_x(Alignment::End);
-    let unit = container(text("ms").size(12).font(mono).color(tokens.t3)).padding(pad(0.0, 4.0, 0.0, 3.0));
+    let unit =
+        container(text("ms").size(crate::typeface::size::HINT).font(crate::typeface::adapt(mono)).color(tokens.t3))
+            .padding(pad(0.0, 4.0, 0.0, 3.0));
     let body = row![step(Icon::Minus, value_ms - 250), value, unit, step(Icon::Plus, value_ms + 250)]
         .align_y(Alignment::Center);
     let pill = container(body).center_y(Length::Fixed(32.0)).style(move |_theme: &IcedTheme| container::Style {
@@ -1624,7 +1653,7 @@ fn stepper<'a>(tokens: Faded, value_ms: i64, label: &'a str) -> Element<'a, Mess
         border: Border { radius: 8.0.into(), ..Border::default() },
         ..container::Style::default()
     });
-    tooltip(pill, text(label).size(12), tooltip::Position::Top).style(tokens.tip()).into()
+    tooltip(pill, text(label).size(crate::typeface::size::HINT), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
 /// `PanelButton`: 32px, `rounded-lg`, `--st-fill`, a 14px icon and 13px text; disabled it is at 40%.
@@ -1637,7 +1666,8 @@ fn panel_button<'a>(
 ) -> Element<'a, Message> {
     let enabled = on_press.is_some();
     let ink = if enabled { tokens.t1 } else { fade(tokens.t1, 0.4) };
-    let label = text(label).size(13).color(ink).wrapping(iced::widget::text::Wrapping::None);
+    let label =
+        text(label).size(crate::typeface::size::CONTROL).color(ink).wrapping(iced::widget::text::Wrapping::None);
     let body = row![icon(lucide, 14.0, ink), label].spacing(6).align_y(Alignment::Center);
     let button = button(container(body).center_y(Length::Fixed(32.0)).center_x(Length::Fill))
         .height(Length::Fixed(32.0))
@@ -1739,9 +1769,9 @@ fn account_card<'a>(
     let warn = if view.daylight { Color::from_rgb8(0xb9, 0x7a, 0x10) } else { Color::from_rgb8(0xe3, 0xa9, 0x49) };
     let mut name = row![
         text(account.nickname.clone())
-            .size(14)
-            .font(settings_kit::SEMIBOLD)
-            .line_height(LineHeight::Absolute(20.0.into()))
+            .size(crate::typeface::size::BODY)
+            .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
+            .line_height(crate::typeface::leading::PX_20_0)
             .color(ink)
     ]
     .spacing(6)
@@ -1752,8 +1782,8 @@ fn account_card<'a>(
     let words = column![
         name,
         text(format!("{} · ID: {}", platform.short_name, account.id))
-            .size(12)
-            .line_height(LineHeight::Absolute(18.0.into()))
+            .size(crate::typeface::size::HINT)
+            .line_height(crate::typeface::leading::PX_18_0)
             .color(tokens.t2),
     ];
     let logout = icon_btn(
@@ -1775,7 +1805,9 @@ fn account_card<'a>(
 fn action_button<'a>(tokens: Faded, lucide: Icon, label: &'a str, on_press: Option<Message>) -> Element<'a, Message> {
     let enabled = on_press.is_some();
     let ink = if enabled { tokens.t1 } else { fade(tokens.t1, 0.4) };
-    let body = row![icon(lucide, 14.0, ink), text(label).size(13).color(ink)].spacing(6).align_y(Alignment::Center);
+    let body = row![icon(lucide, 14.0, ink), text(label).size(crate::typeface::size::CONTROL).color(ink)]
+        .spacing(6)
+        .align_y(Alignment::Center);
     button(container(body).center_y(Length::Fixed(32.0)).center_x(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fixed(32.0))
@@ -1919,7 +1951,7 @@ fn tile<'a>(tokens: Faded, lucide: Icon, label: &'a str, lit: bool, on_press: Op
     button(
         column![
             container(icon(lucide, 18.0, icon_color)).width(Length::Fill).align_x(Alignment::Start),
-            text(label).size(12).color(label_color),
+            text(label).size(crate::typeface::size::HINT).color(label_color),
         ]
         .spacing(8)
         .padding(pad(10.0, 10.0, 9.0, 10.0)),
@@ -1940,7 +1972,7 @@ fn tile<'a>(tokens: Faded, lucide: Icon, label: &'a str, lit: bool, on_press: Op
 }
 
 fn labeled<'a>(ink: Color, label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
-    row![text(label).size(14).color(ink).width(Length::Fill), control]
+    row![text(label).size(crate::typeface::size::BODY).color(ink).width(Length::Fill), control]
         .spacing(12)
         .align_y(Alignment::Center)
         .padding(pad(6.0, 4.0, 6.0, 4.0))
@@ -1949,7 +1981,7 @@ fn labeled<'a>(ink: Color, label: &'a str, control: Element<'a, Message>) -> Ele
 }
 
 fn text_btn<'a>(label: &'a str, color: Color, on_press: Option<Message>) -> Element<'a, Message> {
-    button(text(label).size(13).color(color))
+    button(text(label).size(crate::typeface::size::CONTROL).color(color))
         .padding(pad(8.0, 12.0, 8.0, 12.0))
         .on_press_maybe(on_press)
         .style(button::text)
@@ -1991,7 +2023,7 @@ fn icon_btn<'a>(
             ..button::Style::default()
         }
     });
-    tooltip(button, text(tip).size(12), tooltip::Position::Top).style(tokens.tip()).into()
+    tooltip(button, text(tip).size(crate::typeface::size::HINT), tooltip::Position::Top).style(tokens.tip()).into()
 }
 
 fn intensity_key(intensity: folia_core::AnimationIntensity) -> &'static str {
@@ -2008,7 +2040,8 @@ fn chip<'a>(tokens: Faded, alpha: f32, tip: &str, label: &'a str, on_press: Opti
     let alpha = if on_press.is_some() { alpha } else { alpha * 0.4 };
     let enabled = on_press.is_some();
     let button = button(
-        container(text(label).size(12).wrapping(iced::widget::text::Wrapping::None)).center_y(Length::Fixed(28.0)),
+        container(text(label).size(crate::typeface::size::HINT).wrapping(iced::widget::text::Wrapping::None))
+            .center_y(Length::Fixed(28.0)),
     )
     .height(Length::Fixed(28.0))
     .padding(pad(0.0, 10.0, 0.0, 10.0))
@@ -2023,7 +2056,9 @@ fn chip<'a>(tokens: Faded, alpha: f32, tip: &str, label: &'a str, on_press: Opti
             ..button::Style::default()
         }
     });
-    tooltip(button, text(tip.to_owned()).size(12), tooltip::Position::Top).style(tokens.tip()).into()
+    tooltip(button, text(tip.to_owned()).size(crate::typeface::size::HINT), tooltip::Position::Top)
+        .style(tokens.tip())
+        .into()
 }
 
 fn source_seg_press<'a>(
@@ -2033,7 +2068,8 @@ fn source_seg_press<'a>(
     on: bool,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
-    let label = text(label).size(13).color(if on { ink } else { Color { a: ink.a, ..tokens.t2 } });
+    let label =
+        text(label).size(crate::typeface::size::CONTROL).color(if on { ink } else { Color { a: ink.a, ..tokens.t2 } });
     button(container(label).center_x(Length::Fill).center_y(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -2057,7 +2093,8 @@ fn source_seg_press<'a>(
 }
 
 fn source_seg<'a>(tokens: Faded, ink: Color, label: &'a str, on: bool, tip: Option<&'a str>) -> Element<'a, Message> {
-    let label = text(label).size(13).color(if on { ink } else { fade(tokens.t2, ink.a * 0.4) });
+    let label =
+        text(label).size(crate::typeface::size::CONTROL).color(if on { ink } else { fade(tokens.t2, ink.a * 0.4) });
     let button = button(container(label).center_x(Length::Fill).center_y(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -2069,7 +2106,9 @@ fn source_seg<'a>(tokens: Faded, ink: Color, label: &'a str, on: bool, tip: Opti
             ..button::Style::default()
         });
     match tip {
-        Some(tip) => tooltip(button, text(tip).size(12), tooltip::Position::Top).style(tokens.tip()).into(),
+        Some(tip) => tooltip(button, text(tip).size(crate::typeface::size::HINT), tooltip::Position::Top)
+            .style(tokens.tip())
+            .into(),
         None => button.into(),
     }
 }

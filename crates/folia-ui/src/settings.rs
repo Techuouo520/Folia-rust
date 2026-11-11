@@ -1,5 +1,7 @@
 // The settings window, after the original `SettingsModal`: a side list of categories, a page of option cards, search.
 
+use crate::typeface::text;
+use crate::typeface::text_input;
 use std::time::Instant;
 
 use folia_core::{Language, LanguagePreference, Theme};
@@ -7,9 +9,7 @@ use folia_i18n::I18n;
 use folia_store::{AppearanceSettings, FrameRate, ThemeMode};
 use folia_visualizer::{Ease, Style, tween};
 use iced::widget::scrollable::Viewport;
-use iced::widget::{
-    Id, button, column, container, mouse_area, opaque, row, scrollable, space, stack, text, text_input,
-};
+use iced::widget::{Id, button, column, container, mouse_area, opaque, row, scrollable, space, stack};
 use iced::{Alignment, Border, Color, Element, Length, Padding, Shadow, Size, Task, Vector, mouse};
 use lucide_static_svg::Icon;
 
@@ -419,7 +419,7 @@ impl Settings {
         }
         let mut nav = column![space().height(4)];
         for (group_key, sections) in NAV {
-            let label = text(i18n.t(group_key)).size(12).color(tokens.t3);
+            let label = text(i18n.t(group_key)).size(crate::typeface::size::HINT).color(tokens.t3);
             nav = nav.push(container(label).padding(Padding { top: 14.0, right: 10.0, bottom: 4.0, left: 10.0 }));
             let items = sections.iter().map(|section| nav_item(i18n, tokens, *section, active, true));
             nav = nav.push(column(items).spacing(1));
@@ -442,8 +442,8 @@ impl Settings {
     fn search_field<'a>(&'a self, i18n: &'a I18n, tokens: Tokens) -> Element<'a, crate::Message> {
         let input = text_input(i18n.t("options.settingsSearchPlaceholder"), &self.query)
             .on_input(|query| crate::Message::Settings(Message::Query(query)))
-            .size(13)
-            .line_height(iced::widget::text::LineHeight::Absolute(18.0.into()))
+            .size(crate::typeface::size::CONTROL)
+            .line_height(crate::typeface::leading::PX_18_0)
             .padding(Padding { top: 6.0, right: 30.0, bottom: 6.0, left: 32.0 })
             .style(move |_, status| text_input::Style {
                 background: tokens.fill.into(),
@@ -486,8 +486,7 @@ impl Settings {
         let groups = groups_of(self.section);
         let has_tabs = !searching && groups.len() > 1;
         let close = kit::icon_button(tokens, Icon::X, 16.0, crate::Message::Settings(Message::Close));
-        let title =
-            text(title).size(20).line_height(iced::widget::text::LineHeight::Absolute(32.0.into())).font(kit::SEMIBOLD);
+        let title = crate::typeface::PAGE_TITLE.text(title);
         let plain = !searching && !has_tabs;
         let top = row![title, space().width(Length::Fill), close].align_y(Alignment::Center).padding(Padding {
             top: gutter.title_top,
@@ -502,7 +501,9 @@ impl Settings {
             } else {
                 i18n.t("options.settingsSearchEmpty").to_owned()
             };
-            let summary = container(text(summary).size(13).color(tokens.t2)).height(36).align_y(Alignment::Center);
+            let summary = container(text(summary).size(crate::typeface::size::CONTROL).color(tokens.t2))
+                .height(36)
+                .align_y(Alignment::Center);
             return column![
                 top,
                 container(summary).padding(Padding {
@@ -799,7 +800,7 @@ fn search_results<'a>(i18n: &'a I18n, tokens: Tokens, query: &str) -> Element<'a
             card = card.push(container(kit::hairline(tokens)).padding(Padding::ZERO.left(16.0)));
         }
         let line = row![
-            text(hit.label).size(14).color(tokens.t1).width(Length::Fill),
+            text(hit.label).size(crate::typeface::size::BODY).color(tokens.t1).width(Length::Fill),
             kit::value(tokens, hit.path),
             icon(Icon::ChevronRight, 16.0, tokens.t2)
         ]
@@ -832,7 +833,7 @@ fn nav_item<'a>(
 ) -> Element<'a, crate::Message> {
     let current = active == Some(section);
     let color = if current { tokens.t1 } else { tokens.t2 };
-    let label = text(i18n.t(section.label_key())).size(13).color(color);
+    let label = text(i18n.t(section.label_key())).size(crate::typeface::size::CONTROL).color(color);
     let content: Element<'a, crate::Message> = if wide {
         let mark = if current { color } else { Color { a: color.a * 0.7, ..color } };
         row![icon(section.icon(), 16.0, mark), label].spacing(10).align_y(Alignment::Center).into()

@@ -1,12 +1,13 @@
 // The player panel's mode rows from `ModeStepperRow.tsx` and the picture picker they open (`QuickEffectPicker.tsx`).
 
+use crate::typeface::text;
 use std::time::Instant;
 
 use folia_core::{Lyrics, Theme};
 use folia_i18n::I18n;
 use folia_render::Plate;
 use folia_visualizer::{Ease, Scene, Style};
-use iced::widget::{button, canvas, column, container, mouse_area, row, scrollable, shader, space, stack, svg, text};
+use iced::widget::{button, canvas, column, container, mouse_area, row, scrollable, shader, space, stack, svg};
 use iced::{Alignment, Background, Border, Color, Element, Length, Size};
 use lucide_static_svg::Icon;
 
@@ -226,12 +227,20 @@ impl Pickers {
             .rotation(iced::Radians(std::f32::consts::PI * self.chevron[which as usize].value(now)))
             .style(move |_, _| svg::Style { color: Some(Color { a: 1.0, ..tokens.t3 }) })
             .opacity(tokens.t3.a * alpha);
-        let name =
-            row![text(label).size(14).line_height(iced::Pixels(19.0)).color(fade(tokens.t1, alpha * enter)), chevron]
-                .spacing(4)
-                .align_y(Alignment::Center);
+        let name = row![
+            text(label)
+                .size(crate::typeface::size::BODY)
+                .line_height(iced::Pixels(19.0))
+                .color(fade(tokens.t1, alpha * enter)),
+            chevron
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center);
         let words = column![
-            text(caption).size(11.5).line_height(iced::Pixels(15.0)).color(fade(tokens.t3, alpha * enter)),
+            text(caption)
+                .size(crate::typeface::size::ACCOUNT_STATUS)
+                .line_height(iced::Pixels(15.0))
+                .color(fade(tokens.t3, alpha * enter)),
             name
         ];
         // The mode slides in from the step's side; `pl-1.5` shifts with it.
@@ -398,9 +407,9 @@ impl Pickers {
         let ink = if chosen || hovered { tokens.t1 } else { tokens.t2 };
         let weight = if chosen { iced::font::Weight::Semibold } else { iced::font::Weight::Normal };
         let caption = text(label)
-            .size(12)
+            .size(crate::typeface::size::HINT)
             .line_height(iced::Pixels(18.0))
-            .font(crate::typeface::font(weight))
+            .font(crate::typeface::adapt(crate::typeface::font(weight)))
             .color(fade(ink))
             .wrapping(iced::widget::text::Wrapping::None);
         let body =
@@ -516,7 +525,10 @@ fn more_button<'a>(look: Look<'a>, alpha: f32) -> Element<'a, crate::panel::Mess
         ..container::Style::default()
     });
     let label = row![
-        text(look.i18n.t("ui.moreSettings")).size(13).color(fade(tokens.t2)).width(Length::Fill),
+        text(look.i18n.t("ui.moreSettings"))
+            .size(crate::typeface::size::CONTROL)
+            .color(fade(tokens.t2))
+            .width(Length::Fill),
         icon(Icon::ChevronRight, 14.0, fade(tokens.t2)),
     ]
     .align_y(Alignment::Center);

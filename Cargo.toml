@@ -11,6 +11,8 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/Techuouo520/Folia-rust"
 
 [workspace.dependencies]
+unicode-script = "0.5.8"
+unicode-vo = "0.1.0"
 folia-core = { path = "crates/folia-core" }
 folia-store = { path = "crates/folia-store" }
 folia-i18n = { path = "crates/folia-i18n" }

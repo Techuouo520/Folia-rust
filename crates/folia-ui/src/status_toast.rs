@@ -1,9 +1,10 @@
 // Subscription failures and sync results use the original StatusToast's single-line plate and lifetime.
 
+use crate::typeface::body_text as text;
 use folia_i18n::I18n;
 use folia_omni::Platform;
 use folia_render::Plate;
-use iced::widget::{container, row, shader, stack, text};
+use iced::widget::{container, row, shader, stack};
 use iced::{Alignment, Color, Element, Length, Padding};
 
 use crate::platform_icon::mark_faded;
@@ -77,9 +78,11 @@ pub fn message_view<'a, M: 'a>(
     shift: f32,
 ) -> Element<'a, M> {
     let colour = if ok { Color::from_rgb8(0x22, 0xc5, 0x5e) } else { Color::from_rgb8(0xef, 0x44, 0x44) };
-    let mark = iced::widget::container(
-        iced::widget::text(if ok { "\u{2713}" } else { "!" }).size(13).color(Color { a: opacity, ..colour }),
-    )
+    let mark = iced::widget::container(crate::icons::icon(
+        if ok { lucide_static_svg::Icon::CircleCheck } else { lucide_static_svg::Icon::CircleAlert },
+        18.0,
+        Color { a: opacity, ..colour },
+    ))
     .center(Length::Fixed(20.0));
     plate(mark.into(), words, daylight, width, opacity, shift)
 }
@@ -94,20 +97,20 @@ fn plate<'a, M: 'a>(
 ) -> Element<'a, M> {
     let ink = if daylight { Color::from_rgb8(0x27, 0x27, 0x2a) } else { Color::WHITE };
     let ink = Color { a: opacity, ..ink };
-    let font = crate::typeface::font(iced::font::Weight::Medium);
+    let font = crate::typeface::with(folia_render::typeface::BODY, iced::font::Weight::Medium);
     let content = row![
         mark,
         text(title.clone())
-            .size(14)
-            .font(font)
+            .size(crate::typeface::size::BODY)
+            .font(crate::typeface::adapt(font))
             .color(ink)
-            .line_height(iced::widget::text::LineHeight::Absolute(24.0.into()))
+            .line_height(crate::typeface::leading::PX_24_0)
     ]
     .spacing(10)
     .align_y(Alignment::Center);
     // `statusToast.css`: `blur(14px) saturate(1.3)`. Opacity fades the blur, the fill, the ring and the shadow.
     let max_body = 640.0_f32.min((width - 32.0).max(1.0));
-    let measured = folia_visualizer::measure(&title, 14.0, font, (max_body - 62.0).max(1.0));
+    let measured = crate::typeface::measure(&title, 14.0, font, (max_body - 62.0).max(1.0));
     let body_w = (measured.width + 62.0).min(max_body).max(1.0);
     let body_h = measured.height.max(26.0) + 18.0;
     let body_x = ((width - body_w) * 0.5).max(0.0);

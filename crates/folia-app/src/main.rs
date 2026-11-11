@@ -113,7 +113,9 @@ fn main() -> anyhow::Result<()> {
         i18n,
         system_locale,
     };
+    let interface_font = folia_ui::interface_font_for(init.i18n.language());
     let result = iced::application(move || Shell::new(init.clone()), Shell::update, host_view)
+        .default_font(interface_font)
         .title(Shell::title)
         .theme(Shell::theme)
         .subscription(Shell::subscription)

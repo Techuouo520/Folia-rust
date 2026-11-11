@@ -321,7 +321,7 @@ fn bar_button<'a>(
     match title {
         Some(title) if shown => iced::widget::tooltip(
             hovered,
-            iced::widget::text(title.to_owned()).size(12),
+            crate::typeface::text(title.to_owned()).size(crate::typeface::size::HINT),
             iced::widget::tooltip::Position::Bottom,
         )
         .style(container::rounded_box)
@@ -362,7 +362,11 @@ pub fn round_button<'a, M: Clone + 'a>(
                 Shadow { color: Color { a: 0.28, ..Color::BLACK }, offset: Vector::new(0.0, 4.0), blur_radius: 12.0 };
             style
         });
-    iced::widget::tooltip(button, iced::widget::text(label.to_owned()).size(12), iced::widget::tooltip::Position::Top)
-        .style(container::rounded_box)
-        .into()
+    iced::widget::tooltip(
+        button,
+        crate::typeface::text(label.to_owned()).size(crate::typeface::size::HINT),
+        iced::widget::tooltip::Position::Top,
+    )
+    .style(container::rounded_box)
+    .into()
 }

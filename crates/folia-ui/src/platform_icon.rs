@@ -1,11 +1,12 @@
 // The platforms' app icons for their marks, decoded once; a platform without one keeps its letter on its colour.
 
+use crate::typeface::text;
 use std::sync::LazyLock;
 
 use folia_core::Rgb;
 use folia_omni::Platform;
+use iced::widget::container;
 use iced::widget::image::Handle;
-use iced::widget::{container, text};
 use iced::{Background, Border, Color, Element, Length, Theme};
 
 const SIDE: u32 = 128;
@@ -52,7 +53,7 @@ pub(crate) fn mark_faded<'a, M: 'a>(platform: Platform, size: f32, alpha: f32) -
     container(
         text(platform.letter.to_string())
             .size((size * 0.42).round())
-            .font(crate::typeface::font(iced::font::Weight::Bold))
+            .font(crate::typeface::adapt(crate::typeface::BOLD))
             .color(on),
     )
     .center(Length::Fixed(size))

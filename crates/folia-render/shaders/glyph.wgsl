@@ -40,6 +40,10 @@ fn vs(@builtin(vertex_index) index: u32, sprite: SpriteIn) -> VsOut {
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    let coverage = textureSample(atlas, atlas_sampler, in.uv).r;
+    var coverage = textureSample(atlas, atlas_sampler, in.uv).r;
+    if screen.size.z > 0.5 {
+        let luminance = dot(in.color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        coverage = pow(coverage, mix(1.8, 1.0, smoothstep(0.1, 0.9, luminance)));
+    }
     return vec4<f32>(in.color.rgb, in.color.a * coverage);
 }

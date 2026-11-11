@@ -18,7 +18,7 @@ pub fn installed_families() -> Vec<String> {
     for face in system.raw().db().faces() {
         for (name, _) in &face.families {
             let name = name.trim();
-            if !name.is_empty() {
+            if !name.is_empty() && !name.starts_with("Folia CSS ") {
                 families.insert(name.to_owned());
             }
         }

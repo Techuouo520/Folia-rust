@@ -1,12 +1,13 @@
 // The focus card (`useBravaisFocus`, `BravaisFocusCardBody`): a song grown to 6x6 in its block, the block making room.
 
+use crate::typeface::text;
 use std::sync::LazyLock;
 use std::time::Instant;
 
 use folia_core::Track;
 use folia_i18n::I18n;
 use folia_visualizer::Ease;
-use iced::widget::{button, column, container, pin, row, text, tooltip};
+use iced::widget::{button, column, container, pin, row, tooltip};
 use iced::{Alignment, Background, Border, Color, Element, Length, Rectangle, Size, Vector};
 use lucide_static_svg::Icon;
 
@@ -466,8 +467,8 @@ pub fn body<'a>(i18n: &'a I18n, card: Card<'a>, reveal: (f32, f32)) -> Element<'
     let title = container(
         text(card.track.title.clone())
             .size(title_size)
-            .line_height(iced::widget::text::LineHeight::Relative(0.95))
-            .font(crate::typeface::font(iced::font::Weight::Bold))
+            .line_height(crate::typeface::leading::EM_0_95)
+            .font(crate::typeface::adapt(crate::typeface::BOLD))
             .color(ink),
     )
     .max_width((card.rect.width - 64.0 * s) * 0.76)
@@ -475,7 +476,7 @@ pub fn body<'a>(i18n: &'a I18n, card: Card<'a>, reveal: (f32, f32)) -> Element<'
     .clip(true);
     // `.bravais-focus-links`: 17px, 650, at 85%; the separators at half that.
     let link = |value: String| {
-        text(value).size(17.0 * s).font(crate::typeface::font(iced::font::Weight::Bold)).color(fade(0.85))
+        text(value).size(17.0 * s).font(crate::typeface::adapt(crate::typeface::BOLD)).color(fade(0.85))
     };
     let mark = |value: &'static str| text(value).size(17.0 * s).color(fade(0.85 * 0.5));
     let mut links: Vec<Element<'a, Action>> = Vec::new();
@@ -518,9 +519,9 @@ pub fn body<'a>(i18n: &'a I18n, card: Card<'a>, reveal: (f32, f32)) -> Element<'
                     }
                 });
             match tip {
-                Some(tip) => {
-                    tooltip(press, text(tip).size(12), tooltip::Position::Top).style(container::rounded_box).into()
-                }
+                Some(tip) => tooltip(press, text(tip).size(crate::typeface::size::HINT), tooltip::Position::Top)
+                    .style(container::rounded_box)
+                    .into(),
                 None => press.into(),
             }
         };
@@ -552,7 +553,7 @@ pub fn body<'a>(i18n: &'a I18n, card: Card<'a>, reveal: (f32, f32)) -> Element<'
         icon(glyph, 18.0 * s, lit(0.8)),
         text(i18n.t(label).to_owned())
             .size(15.0 * s)
-            .font(crate::typeface::font(iced::font::Weight::Bold))
+            .font(crate::typeface::adapt(crate::typeface::BOLD))
             .color(lit(0.8))
     ]
     .spacing(8.0 * s)

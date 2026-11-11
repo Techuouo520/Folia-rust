@@ -8,7 +8,7 @@ use folia_store::{AppearanceSettings, FontStyle, RowSource, SubtitleContentMode}
 use folia_ui::{Hotspot, Workbench, WorkbenchLook, WorkbenchMessage, WorkbenchTab, hotspot_at};
 use folia_visualizer::{Background, Item, Style};
 use iced::advanced::renderer::{Headless, Style as DrawStyle};
-use iced::{Color, Element, Font, Pixels, Point, Size, Theme as IcedTheme};
+use iced::{Color, Element, Pixels, Point, Size, Theme as IcedTheme};
 use iced_runtime::user_interface::{Cache, UserInterface};
 
 const W: u32 = 1240;
@@ -33,7 +33,8 @@ fn hotspot_hit_test_follows_the_original_boxes() {
 #[test]
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn workbench_tabs_render() {
-    let dir = std::env::temp_dir().join("folia-workbench");
+    let output = tempfile::tempdir().unwrap();
+    let dir = output.path();
     std::fs::create_dir_all(&dir).unwrap();
     let i18n = I18n::new(Language::En).unwrap();
     let theme = Theme::MIDNIGHT;
@@ -93,7 +94,7 @@ fn sample_appearance() -> AppearanceSettings {
 fn paint<M>(root: Element<'_, M>, clear: Color) -> Vec<u8> {
     folia_ui::install_fonts();
     let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), None)).unwrap();
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
     let mut ui = UserInterface::build(root, Size::new(W as f32, H as f32), Cache::default(), &mut renderer);
     let style = DrawStyle { text_color: Color::WHITE };
     ui.draw(&mut renderer, &IcedTheme::Dark, &style, iced::mouse::Cursor::Unavailable);
@@ -104,7 +105,7 @@ fn paint<M>(root: Element<'_, M>, clear: Color) -> Vec<u8> {
 fn paint_scrolled<M: Clone>(root: Element<'_, M>, clear: Color, distance: f32) -> Vec<u8> {
     folia_ui::install_fonts();
     let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), None)).unwrap();
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
     let mut ui = UserInterface::build(root, Size::new(W as f32, H as f32), Cache::default(), &mut renderer);
     let cursor = iced::mouse::Cursor::Available(Point::new(1000.0, 500.0));
     let events = [

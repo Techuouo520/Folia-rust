@@ -1,5 +1,6 @@
 // The shared sign-in window (`LoginHost`, `LoginScreen`, `LoginWindow`): platform column, code tile, message and steps.
 
+use crate::typeface::text;
 use std::time::{Duration, Instant};
 
 use folia_core::Rgb;
@@ -7,7 +8,7 @@ use folia_i18n::I18n;
 use folia_omni::{Account, LoginQr, LoginState, Omni, OmniError, Platform};
 use folia_visualizer::Ease;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, gradient};
-use iced::widget::{button, canvas as canvas_widget, column, container, mouse_area, row, space, stack, text};
+use iced::widget::{button, canvas as canvas_widget, column, container, mouse_area, row, space, stack};
 use iced::{
     Alignment, Background, Border, Color, Element, Font, Length, Padding, Point, Rectangle, Renderer, Shadow, Size,
     Task, Theme, Vector, mouse,
@@ -49,8 +50,8 @@ const EASE_IN_OUT: Ease = Ease::new(0.65, 0.0, 0.35, 1.0);
 const DONE_FRONT: f64 = 110.0;
 const DONE_LEAVE: f64 = 1260.0;
 const DONE_END: f64 = 1800.0;
-const SEMIBOLD: Font = crate::typeface::font(iced::font::Weight::Semibold);
-const MEDIUM: Font = crate::typeface::font(iced::font::Weight::Medium);
+const SEMIBOLD: Font = crate::typeface::SEMIBOLD;
+const MEDIUM: Font = crate::typeface::MEDIUM;
 
 /// `LoginCaseId`s a QR sign-in can end in, with their class (`LoginCaseKind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -782,10 +783,15 @@ impl Login {
             .on_press(Message::CancelSignOut)
             .style(button::text);
         let header = row![
-            container(text(title).size(16).font(SEMIBOLD).color(tokens.t1))
-                .width(Length::Fill)
-                .height(Length::Fixed(32.0))
-                .align_y(Alignment::Center),
+            container(
+                text(title)
+                    .size(crate::typeface::size::DIALOG_TITLE)
+                    .font(crate::typeface::adapt(SEMIBOLD))
+                    .color(tokens.t1)
+            )
+            .width(Length::Fill)
+            .height(Length::Fixed(32.0))
+            .align_y(Alignment::Center),
             close
         ]
         .spacing(12)
@@ -795,8 +801,8 @@ impl Login {
             body = body.push(
                 container(
                     text(lines.join("\n"))
-                        .size(13)
-                        .line_height(iced::widget::text::LineHeight::Absolute(21.0.into()))
+                        .size(crate::typeface::size::CONTROL)
+                        .line_height(crate::typeface::leading::PX_21_0)
                         .color(tokens.t2),
                 )
                 .padding(Padding { top: 4.0, right: 24.0, bottom: 16.0, left: 24.0 }),
@@ -871,8 +877,9 @@ impl Login {
         if let Some(platform) = platform {
             heading = heading.push(mark_faded(platform, 24.0, tokens.t1.a));
         }
-        heading = heading
-            .push(text(title).size(16).font(SEMIBOLD).color(tokens.t1).wrapping(iced::widget::text::Wrapping::None));
+        heading = heading.push(
+            crate::typeface::SHEET_TITLE.text(title).color(tokens.t1).wrapping(iced::widget::text::Wrapping::None),
+        );
         let close = button(container(icon(Icon::X, 16.0, tokens.t2)).center(Length::Fill))
             .width(Length::Fixed(32.0))
             .height(Length::Fixed(32.0))
@@ -886,7 +893,7 @@ impl Login {
             });
         let close = iced::widget::Tooltip::new(
             close,
-            text(i18n.t("home.closeLogin")).size(12),
+            text(i18n.t("home.closeLogin")).size(crate::typeface::size::HINT),
             iced::widget::tooltip::Position::Bottom,
         );
         let header =
@@ -950,7 +957,7 @@ impl Login {
         let lit = self.lit(&rows);
         let items = rows.iter().map(|&platform| self.platform_row(look, tokens, platform, lie, height, now));
         let list: Element<'a, Message> = if rows.is_empty() {
-            container(text(i18n.t("login.noPlatformMatch")).size(13).color(tokens.t3))
+            container(text(i18n.t("login.noPlatformMatch")).size(crate::typeface::size::CONTROL).color(tokens.t3))
                 .padding([24.0, 0.0])
                 .center_x(Length::Fill)
                 .into()
@@ -974,7 +981,7 @@ impl Login {
         }
         let field = iced::widget::text_input(i18n.t("login.searchPlatforms"), &self.query)
             .on_input(Message::Query)
-            .size(13)
+            .size(crate::typeface::size::CONTROL)
             .padding(0)
             .style(move |_theme: &Theme, _status| iced::widget::text_input::Style {
                 background: Background::Color(Color::TRANSPARENT),
@@ -1021,8 +1028,13 @@ impl Login {
         face = face.push(mark_faded(platform, if lie { 22.0 } else { 30.0 }, dim * tokens.t1.a));
         if lie {
             face = face.push(
-                container(text(platform.short_name).size(13).color(color).wrapping(iced::widget::text::Wrapping::None))
-                    .max_width(120.0),
+                container(
+                    text(platform.short_name)
+                        .size(crate::typeface::size::CONTROL)
+                        .color(color)
+                        .wrapping(iced::widget::text::Wrapping::None),
+                )
+                .max_width(120.0),
             );
         } else {
             let note: Element<'a, Message> = if signed_in {
@@ -1034,7 +1046,10 @@ impl Login {
                     if look.daylight { Color::from_rgb8(0x1e, 0x9a, 0x5c) } else { Color::from_rgb8(0x56, 0xc9, 0x8d) };
                 row![
                     dot(Color { a: tokens.t1.a, ..ok }, 6.0),
-                    text(name).size(11.5).color(tokens.t3).wrapping(iced::widget::text::Wrapping::None)
+                    crate::typeface::ACCOUNT_STATUS
+                        .text(name)
+                        .color(tokens.t3)
+                        .wrapping(iced::widget::text::Wrapping::None)
                 ]
                 .spacing(6)
                 .align_y(Alignment::Center)
@@ -1047,12 +1062,15 @@ impl Login {
                 } else {
                     ("login.rowSignedOut", tokens.t3)
                 };
-                text(i18n.t(key)).size(11.5).color(note).wrapping(iced::widget::text::Wrapping::None).into()
+                crate::typeface::ACCOUNT_STATUS
+                    .text(i18n.t(key))
+                    .color(note)
+                    .wrapping(iced::widget::text::Wrapping::None)
+                    .into()
             };
             let names = column![
-                text(platform.short_name)
-                    .size(13)
-                    .font(MEDIUM)
+                crate::typeface::PROVIDER
+                    .text(platform.short_name)
                     .color(color)
                     .wrapping(iced::widget::text::Wrapping::None),
                 note
@@ -1099,7 +1117,7 @@ impl Login {
         if off {
             iced::widget::Tooltip::new(
                 hovered,
-                text(i18n.t("home.providerNotConfigured")).size(12),
+                text(i18n.t("home.providerNotConfigured")).size(crate::typeface::size::HINT),
                 iced::widget::tooltip::Position::Right,
             )
             .into()
@@ -1280,19 +1298,13 @@ impl Login {
                 i18n.t(platform.login_title).to_owned()
             }
         };
-        let mut words = column![
-            text(headline)
-                .size(20)
-                .font(SEMIBOLD)
-                .line_height(iced::widget::text::LineHeight::Absolute(28.0.into()))
-                .color(tokens.t1)
-        ];
+        let mut words = column![crate::typeface::HEADLINE.text(headline).color(tokens.t1)];
         if let Some(note) = note {
             words = words.push(
                 container(
                     text(note)
-                        .size(13)
-                        .line_height(iced::widget::text::LineHeight::Absolute(20.0.into()))
+                        .size(crate::typeface::size::CONTROL)
+                        .line_height(crate::typeface::leading::PX_20_0)
                         .color(tokens.t2),
                 )
                 .padding(Padding::ZERO.top(6.0)),
@@ -1300,13 +1312,21 @@ impl Login {
         }
         if let Some((said, code)) = quote {
             let mut line = row![
-                text(label.to_owned()).size(12).font(SEMIBOLD).color(tokens.t1),
-                container(text(said).size(12).color(tokens.t2)).width(Length::Fill)
+                text(label.to_owned())
+                    .size(crate::typeface::size::HINT)
+                    .font(crate::typeface::adapt(SEMIBOLD))
+                    .color(tokens.t1),
+                container(text(said).size(crate::typeface::size::HINT).color(tokens.t2)).width(Length::Fill)
             ]
             .spacing(8)
             .align_y(Alignment::Start);
             if let Some(code) = code {
-                line = line.push(text(code).size(12).font(Font::MONOSPACE).color(tokens.t3));
+                line = line.push(
+                    text(code)
+                        .size(crate::typeface::size::HINT)
+                        .font(crate::typeface::adapt(Font::MONOSPACE))
+                        .color(tokens.t3),
+                );
             }
             let fill = tokens.fill;
             words = words.push(
@@ -1436,7 +1456,7 @@ fn account_picture<'a>(look: &Look<'a>, platform: Platform, size: f32, tokens: T
                 _ => String::new(),
             };
             let fill = tokens.fill2;
-            container(text(initial).size((size * 0.42).round()).font(SEMIBOLD).color(tokens.t1))
+            container(text(initial).size((size * 0.42).round()).font(crate::typeface::adapt(SEMIBOLD)).color(tokens.t1))
                 .center(Length::Fixed(size))
                 .style(move |_theme: &Theme| container::Style {
                     background: Some(Background::Color(fill)),
@@ -1471,26 +1491,30 @@ fn account_picture<'a>(look: &Look<'a>, platform: Platform, size: f32, tokens: T
 /// The kit's `Button`: 32px high, 13px, a fill or the accent.
 fn kit_button<'a>(label: String, primary: bool, message: Message, tokens: Tokens) -> Element<'a, Message> {
     let color = if primary { tokens.on_accent } else { tokens.t1 };
-    button(container(text(label).size(13).color(color)).height(Length::Fill).align_y(Alignment::Center))
-        .height(Length::Fixed(32.0))
-        .padding([0.0, 12.0])
-        .on_press(message)
-        .style(move |_theme: &Theme, status| {
-            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let fill = match (primary, hot) {
-                (true, false) => tokens.accent,
-                (true, true) => Color { a: tokens.accent.a * 0.9, ..tokens.accent },
-                (false, false) => tokens.fill,
-                (false, true) => tokens.fill2,
-            };
-            button::Style {
-                background: Some(Background::Color(fill)),
-                border: Border { radius: 8.0.into(), ..Border::default() },
-                text_color: color,
-                ..button::Style::default()
-            }
-        })
-        .into()
+    button(
+        container(text(label).size(crate::typeface::size::CONTROL).color(color))
+            .height(Length::Fill)
+            .align_y(Alignment::Center),
+    )
+    .height(Length::Fixed(32.0))
+    .padding([0.0, 12.0])
+    .on_press(message)
+    .style(move |_theme: &Theme, status| {
+        let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let fill = match (primary, hot) {
+            (true, false) => tokens.accent,
+            (true, true) => Color { a: tokens.accent.a * 0.9, ..tokens.accent },
+            (false, false) => tokens.fill,
+            (false, true) => tokens.fill2,
+        };
+        button::Style {
+            background: Some(Background::Color(fill)),
+            border: Border { radius: 8.0.into(), ..Border::default() },
+            text_color: color,
+            ..button::Style::default()
+        }
+    })
+    .into()
 }
 
 /// `WaitButton`: counts down to the retry, its fill growing a step each second.
@@ -1501,7 +1525,9 @@ fn wait_button<'a>(i18n: &I18n, failure: &Failure, tokens: Tokens, now: Instant)
     // `(total - left + 1) / total`, slid over each second as the width transition does.
     let grown = ((total - left + 1.0) / total).clamp(0.0, 1.0);
     let seconds = (left.ceil() as u32).to_string();
-    let label = text(i18n.format("login.retryIn", &[("seconds", seconds.as_str())])).size(13).color(tokens.t2);
+    let label = text(i18n.format("login.retryIn", &[("seconds", seconds.as_str())]))
+        .size(crate::typeface::size::CONTROL)
+        .color(tokens.t2);
     let fill2 = tokens.fill2;
     let bar = row![
         container(space()).width(Length::FillPortion((grown * 1000.0) as u16)).height(Length::Fill).style(
@@ -1526,9 +1552,12 @@ fn wait_button<'a>(i18n: &I18n, failure: &Failure, tokens: Tokens, now: Instant)
 /// The details toggle: `login.details` and a chevron that turns over when open.
 fn details_toggle<'a>(i18n: &I18n, open: bool, tokens: Tokens) -> Element<'a, Message> {
     let chevron = if open { Icon::ChevronUp } else { Icon::ChevronDown };
-    let face = row![text(i18n.t("login.details").to_owned()).size(13).color(tokens.t2), icon(chevron, 14.0, tokens.t2)]
-        .spacing(4)
-        .align_y(Alignment::Center);
+    let face = row![
+        text(i18n.t("login.details").to_owned()).size(crate::typeface::size::CONTROL).color(tokens.t2),
+        icon(chevron, 14.0, tokens.t2)
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
     button(container(face).height(Length::Fill).align_y(Alignment::Center))
         .height(Length::Fixed(32.0))
         .padding([0.0, 8.0])
@@ -1556,11 +1585,20 @@ fn details<'a>(look: &Look<'a>, tokens: Tokens, label: &str, failure: &Failure) 
     // `grid-cols-[auto_minmax(0,1fr)]`: the names' column is as wide as the widest name.
     let span = |name: &str| name.chars().map(|c| if c.is_ascii() { 6.6 } else { 12.0 }).sum::<f32>();
     let name_width = facts.iter().map(|(name, _)| span(name)).fold(0.0, f32::max).ceil();
-    let leading = iced::widget::text::LineHeight::Absolute(20.0.into());
+    let leading = crate::typeface::leading::PX_20_0;
     let rows = column(facts.into_iter().map(|(name, value)| {
         row![
-            text(name.to_owned()).size(12).line_height(leading).color(tokens.t3).width(Length::Fixed(name_width)),
-            text(value).size(12).line_height(leading).font(Font::MONOSPACE).color(tokens.t2).width(Length::Fill),
+            text(name.to_owned())
+                .size(crate::typeface::size::HINT)
+                .line_height(leading)
+                .color(tokens.t3)
+                .width(Length::Fixed(name_width)),
+            text(value)
+                .size(crate::typeface::size::HINT)
+                .line_height(leading)
+                .font(crate::typeface::adapt(Font::MONOSPACE))
+                .color(tokens.t2)
+                .width(Length::Fill),
         ]
         .spacing(16)
         .into()
@@ -1636,8 +1674,8 @@ fn flood<'a>(look: &Look<'a>, platform: Platform, ms: f64, opacity: f32, narrow:
         _ => platform.short_name.to_owned(),
     };
     let letter = text(platform.letter.to_string())
-        .size(196)
-        .font(crate::typeface::font(iced::font::Weight::ExtraBold))
+        .size(crate::typeface::size::LOGIN_WATERMARK)
+        .font(crate::typeface::adapt(crate::typeface::EXTRA_BOLD))
         .color(Color { a: 0.10 * watermark, ..on });
     let watermark = container(iced::widget::float(letter).translate(move |_, _| Vector::new(24.0 * drift, 0.0)))
         .width(Length::Fill)
@@ -1668,8 +1706,8 @@ fn flood<'a>(look: &Look<'a>, platform: Platform, ms: f64, opacity: f32, narrow:
                 .into(),
                 None => container(
                     text(platform.letter.to_string())
-                        .size(37)
-                        .font(crate::typeface::font(iced::font::Weight::Bold))
+                        .size(crate::typeface::size::LOGIN_INITIAL)
+                        .font(crate::typeface::adapt(crate::typeface::BOLD))
                         .color(Color { a: picture_in, ..on }),
                 )
                 .center(Length::Fixed(88.0))
@@ -1703,13 +1741,16 @@ fn flood<'a>(look: &Look<'a>, platform: Platform, ms: f64, opacity: f32, narrow:
     let picture = iced::widget::float(picture).scale(scale).translate(move |_, _| Vector::new(0.0, -lift));
     let lines = column![
         iced::widget::float(
-            text(look.i18n.t("home.loginSuccess")).size(13).font(MEDIUM).color(Color { a: line1, ..on })
+            text(look.i18n.t("home.loginSuccess"))
+                .size(crate::typeface::size::CONTROL)
+                .font(crate::typeface::adapt(MEDIUM))
+                .color(Color { a: line1, ..on })
         )
         .translate(move |_, _| Vector::new(0.0, 10.0 * (1.0 - line1))),
         iced::widget::float(
             text(name)
-                .size(28)
-                .font(SEMIBOLD)
+                .size(crate::typeface::size::QUOTE)
+                .font(crate::typeface::adapt(SEMIBOLD))
                 .color(Color { a: line2, ..on })
                 .wrapping(iced::widget::text::Wrapping::None)
         )

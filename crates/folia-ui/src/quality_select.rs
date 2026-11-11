@@ -1,11 +1,12 @@
 // The account tab's audio quality select from `CustomSelect.tsx`: a compact trigger and a menu that opens above it.
 
+use crate::typeface::text;
 use std::time::Instant;
 
 use folia_core::AudioQuality;
 use folia_i18n::I18n;
 use folia_render::Plate;
-use iced::widget::{button, column, container, mouse_area, row, shader, stack, svg, text};
+use iced::widget::{button, column, container, mouse_area, row, shader, stack, svg};
 use iced::{Alignment, Border, Color, Element, Length, Vector};
 use lucide_static_svg::Icon;
 
@@ -297,7 +298,7 @@ impl Select {
 
 /// The width of a label at the trigger's 13px.
 fn label_width(label: &str) -> f32 {
-    folia_visualizer::measure(label, TRIGGER_FONT, iced::Font::DEFAULT, f32::INFINITY).width.ceil()
+    crate::typeface::measure(label, TRIGGER_FONT, crate::typeface::SYSTEM, f32::INFINITY).width.ceil()
 }
 
 struct MenuPlate<'a> {

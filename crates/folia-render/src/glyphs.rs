@@ -445,6 +445,7 @@ pub struct Glyphs {
     raster: SwashCache,
     frame: u64,
     count: u32,
+    interface: bool,
 }
 
 impl std::fmt::Debug for Glyphs {
@@ -494,7 +495,13 @@ impl Glyphs {
             raster: SwashCache::new(),
             frame: 0,
             count: 0,
+            interface: false,
         }
+    }
+
+    /// Calibrates grid-fitted interface glyphs against Chromium's grayscale raster.
+    pub fn interface(device: &wgpu::Device, format: wgpu::TextureFormat, capacity: usize) -> Self {
+        Self { interface: true, ..Self::new(device, format, capacity, Vec::new()) }
     }
 
     /// Rasterizes glyphs the atlas lacks and uploads one instance per sprite, so sprite `i` is instance `i`.
@@ -532,7 +539,7 @@ impl Glyphs {
             repacked = true;
         }
         let mut uniform = [0_u8; 16];
-        for (index, value) in [screen[0], screen[1], 0.0, 0.0].into_iter().enumerate() {
+        for (index, value) in [screen[0], screen[1], f32::from(self.interface), 0.0].into_iter().enumerate() {
             uniform[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
         }
         queue.write_buffer(&shared.uniform, 0, &uniform);
@@ -773,7 +780,7 @@ fn bind_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,

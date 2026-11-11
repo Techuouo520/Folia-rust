@@ -1,0 +1,226 @@
+[
+  {
+    "text": "书库",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": false,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "书库",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": true,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "歌单",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": false,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "歌单",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": true,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "电台",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": false,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "电台",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": true,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "探索",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": false,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "探索",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": true,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "专辑",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": false,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "专辑",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": true,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "本地",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": false,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "本地",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": true,
+    "width": 13.796875,
+    "height": 26.40625
+  },
+  {
+    "text": "Folia音乐（测试）",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": false,
+    "width": 13.796875,
+    "height": 113.828125
+  },
+  {
+    "text": "Folia音乐（测试）",
+    "size": 12,
+    "tracking": 1.2000000000000002,
+    "dark": true,
+    "width": 13.796875,
+    "height": 113.828125
+  },
+  {
+    "text": "书库",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": false,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "书库",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": true,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "歌单",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": false,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "歌单",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": true,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "电台",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": false,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "电台",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": true,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "探索",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": false,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "探索",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": true,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "专辑",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": false,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "专辑",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": true,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "本地",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": false,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "本地",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": true,
+    "width": 16.09375,
+    "height": 33.046875
+  },
+  {
+    "text": "Folia音乐（测试）",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": false,
+    "width": 16.09375,
+    "height": 145.109375
+  },
+  {
+    "text": "Folia音乐（测试）",
+    "size": 14,
+    "tracking": 2.52,
+    "dark": true,
+    "width": 16.09375,
+    "height": 145.109375
+  }
+]

@@ -1,10 +1,11 @@
 // The home seam: a 120px strip, a 64px spine, or an edge tab, from `bravaisHome.css`.
 
+use crate::typeface::text;
 use std::time::{Duration, Instant};
 
 use folia_render::Plate;
 
-use iced::widget::{button, column, container, mouse_area, row, shader, space, stack, text};
+use iced::widget::{button, column, container, mouse_area, row, shader, space, stack};
 use iced::{Alignment, Background, Border, Color, Element, Length, Size, Theme, Vector};
 use lucide_static_svg::Icon;
 
@@ -188,7 +189,7 @@ fn search_crumbs<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
 
 /// `.bravais-seam-level`: the fold's word, reused as the panel's close action.
 fn seam_level_button<'a>(label: &'a str, ink: Color) -> Element<'a, Message> {
-    button(text(label).size(11).color(soft(ink)))
+    button(text(label).size(crate::typeface::size::CAPTION).color(soft(ink)))
         .padding([3.0, 9.0])
         .on_press(Message::CloseSearch)
         .style(move |_theme: &Theme, status| {
@@ -215,7 +216,7 @@ fn search_field<'a>(host: &Host<'a>, ink: Color, query: &'a str) -> Element<'a, 
         .id(super::search_id())
         .on_input(Message::SearchQuery)
         .on_submit(Message::SubmitSearch)
-        .size(16)
+        .size(crate::typeface::size::DIALOG_TITLE)
         .padding(iced::Padding { top: 12.0, right: 42.0, bottom: 12.0, left: 36.0 })
         .style(move |_theme: &Theme, status| iced::widget::text_input::Style {
             background: Background::Color(fill),
@@ -257,8 +258,8 @@ fn search_field<'a>(host: &Host<'a>, ink: Color, query: &'a str) -> Element<'a, 
 
 fn search_hint<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
     text(super::tr(host, "libraryBravaisHome.searchHint"))
-        .size(12)
-        .line_height(iced::widget::text::LineHeight::Relative(1.45))
+        .size(crate::typeface::size::HINT)
+        .line_height(crate::typeface::leading::EM_1_45)
         .color(soft(ink))
         .width(Length::Fill)
         .into()
@@ -397,7 +398,14 @@ fn tab_column<'a>(host: &Host<'a>, ink: Color, fit: Fit) -> Element<'a, Message>
     let tabs = host.tabs.iter().zip(shorts).map(|(&(tab, label), short)| {
         let shown = if fit == Fit::Short { short } else { label.to_owned() };
         let active = tab == host.current;
-        let face = tracked_col(&shown, size, track, if active { ink } else { soft(ink) });
+        let face = tracked_col_weight(
+            &shown,
+            size,
+            track,
+            if active { ink } else { soft(ink) },
+            iced::font::Weight::Bold,
+            fit == Fit::Short,
+        );
         let hint = (fit == Fit::Short).then_some(label);
         home_tab(face, pad, active, ink, Message::SelectTab(tab), hint)
     });
@@ -444,9 +452,9 @@ fn account_entry<'a>(slot: &AccountSlot<'a>, ink: Color, spine: bool) -> Element
         container(picture).center(Length::Fixed(36.0)).into()
     } else {
         let name = text(slot.name.clone())
-            .size(12)
-            .font(extra_bold())
-            .line_height(iced::widget::text::LineHeight::Relative(1.3))
+            .size(crate::typeface::size::HINT)
+            .font(crate::typeface::adapt(extra_bold()))
+            .line_height(crate::typeface::leading::EM_1_3)
             .align_x(Alignment::Center)
             .color(ink)
             .wrapping(if slot.guest {
@@ -503,7 +511,7 @@ fn avatar<'a>(slot: &AccountSlot<'a>, size: f32, ink: Color) -> Element<'a, Mess
     let mark = slot.mark;
     let letter = text(slot.letter.to_string())
         .size(if size < 30.0 { 12.0 } else { 14.0 })
-        .font(crate::typeface::font(iced::font::Weight::Black))
+        .font(crate::typeface::adapt(crate::typeface::BLACK))
         .color(Color::WHITE);
     container(letter)
         .center(Length::Fixed(size))
@@ -537,18 +545,6 @@ fn collection_title<'a>(
         (false, true) if narrow => 26.0,
         (false, true) => (640.0 / seam.title.chars().count().max(1) as f32).round().clamp(20.0, 40.0),
     };
-    let glyphs = seam
-        .title
-        .chars()
-        .map(|ch| {
-            text(ch.to_string())
-                .size(size)
-                .font(extra_bold())
-                .color(ink)
-                .line_height(iced::widget::text::LineHeight::Relative(if horizontal { 1.15 } else { 1.25 }))
-                .into()
-        })
-        .collect::<Vec<Element<'a, Message>>>();
     let title: Element<'a, Message> = if horizontal {
         let max_width = if narrow {
             host.window_width - 2.0 * 14.0
@@ -557,25 +553,50 @@ fn collection_title<'a>(
         } else {
             let quotes: f32 = ["“", "”"]
                 .into_iter()
-                .map(|mark| folia_visualizer::measure(mark, 36.0, iced::Font::DEFAULT, f32::MAX).width)
+                .map(|mark| crate::typeface::measure(mark, 36.0, crate::typeface::SYSTEM, f32::MAX).width)
                 .sum();
             let inner = host.window_width - 2.0 * (host.window_width * 0.03).max(24.0);
             inner * 0.48 - quotes - 2.0 * 8.0
         };
-        container(row(glyphs).spacing(size * 0.01).wrap())
-            .max_width(max_width)
-            .max_height(size * 1.15 * if spine || narrow { 1.0 } else { 2.0 })
-            .clip(true)
-            .into()
+        container(folia_render::text_run::text(
+            &seam.title,
+            folia_render::text_run::Style {
+                font: extra_bold(),
+                size,
+                line_height: size * 1.15,
+                tracking: size * 0.01,
+                vertical: false,
+                upright: false,
+                width: Some(max_width),
+            },
+            ink,
+        ))
+        .max_width(max_width)
+        .max_height(size * 1.15 * if spine || narrow { 1.0 } else { 2.0 })
+        .clip(true)
+        .into()
     } else {
-        column(glyphs).spacing(size * 0.04).align_x(Alignment::Center).into()
+        folia_render::text_run::text(
+            &seam.title,
+            folia_render::text_run::Style {
+                font: extra_bold(),
+                size,
+                line_height: size * 1.25,
+                tracking: size * 0.04,
+                vertical: true,
+                upright: false,
+                width: None,
+            },
+            ink,
+        )
     };
     let face: Element<'a, Message> = if spine && horizontal {
         container(title).padding([2.0, 6.0]).into()
     } else if !quoted {
         title
     } else if horizontal {
-        let quote = |mark| text(mark).size(36).line_height(iced::widget::text::LineHeight::Relative(0.9));
+        let quote =
+            |mark| text(mark).size(crate::typeface::size::LARGE_QUOTE).line_height(crate::typeface::leading::EM_0_9);
         row![
             container(quote("“")).height(Length::Fill).align_y(Alignment::Start).padding(iced::Padding::ZERO.top(5.4)),
             title,
@@ -586,7 +607,7 @@ fn collection_title<'a>(
         .into()
     } else {
         let quote = |mark, side| {
-            container(text(mark).size(28).line_height(iced::widget::text::LineHeight::Relative(0.6)))
+            container(text(mark).size(crate::typeface::size::QUOTE).line_height(crate::typeface::leading::EM_0_6))
                 .width(Length::Fill)
                 .align_x(side)
         };
@@ -608,9 +629,9 @@ fn collection_full_row<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color)
     ]
     .spacing(if narrow { 10 } else { 20 })
     .align_y(Alignment::Center);
-    let mut info = column![text(seam.meta.clone()).size(12).color(soft(ink))].spacing(8);
+    let mut info = column![text(seam.meta.clone()).size(crate::typeface::size::HINT).color(soft(ink))].spacing(8);
     if let Some(status) = &host.status {
-        info = info.push(text(status.clone()).size(12).color(ink));
+        info = info.push(text(status.clone()).size(crate::typeface::size::HINT).color(ink));
     }
     let play = chrome_button(
         Icon::Play,
@@ -691,11 +712,11 @@ fn collection_full<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
         filter_field(host, seam, ink),
         area,
         hairline(ink, 0.12),
-        text(seam.meta.clone()).size(12).color(soft(ink))
+        text(seam.meta.clone()).size(crate::typeface::size::HINT).color(soft(ink))
     ]
     .spacing(14);
     if let Some(status) = &host.status {
-        body = body.push(text(status.clone()).size(12).color(ink));
+        body = body.push(text(status.clone()).size(crate::typeface::size::HINT).color(ink));
     }
     let mut actions = vec![
         chrome_button(
@@ -767,7 +788,8 @@ fn crumbs<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color, panel: bool)
         .height(Length::Fixed(32.0));
     if panel {
         // `.bravais-seam-level`: the fold as a word.
-        let label = text(super::tr(host, "libraryBravais.seamFold")).size(11).color(soft(ink));
+        let label =
+            text(super::tr(host, "libraryBravais.seamFold")).size(crate::typeface::size::CAPTION).color(soft(ink));
         line = line.push(button(label).padding([3.0, 9.0]).on_press(Message::Fold).style(
             move |_theme: &Theme, status| {
                 let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -788,10 +810,12 @@ fn crumbs<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color, panel: bool)
 
 /// The crumb trail every seam panel shares: 11px soft ink, one clipped line.
 fn crumb_trail<'a>(trail: String, ink: Color) -> Element<'a, Message> {
-    container(text(trail).size(11).color(soft(ink)).wrapping(iced::widget::text::Wrapping::None))
-        .width(Length::Fill)
-        .clip(true)
-        .into()
+    container(
+        text(trail).size(crate::typeface::size::CAPTION).color(soft(ink)).wrapping(iced::widget::text::Wrapping::None),
+    )
+    .width(Length::Fill)
+    .clip(true)
+    .into()
 }
 
 /// `BravaisSeamFilterField`: a funnel, the input over an underline, then the match count and a clear button.
@@ -803,9 +827,9 @@ fn filter_field<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Ele
         .id(super::filter_id())
         .on_input(Message::Query)
         .on_submit(Message::FilterSubmit)
-        .size(13)
+        .size(crate::typeface::size::CONTROL)
         .padding(0)
-        .font(crate::typeface::font(iced::font::Weight::Bold))
+        .font(crate::typeface::adapt(crate::typeface::BOLD))
         .style(move |_theme: &Theme, _status| iced::widget::text_input::Style {
             background: Background::Color(Color::TRANSPARENT),
             border: Border::default(),
@@ -819,7 +843,9 @@ fn filter_field<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Ele
     let input: Element<'a, Message> = if has_query {
         input.into()
     } else {
-        let hint = text(super::tr(host, "libraryBravais.filterPlaceholder")).size(13).color(soft(ink));
+        let hint = text(super::tr(host, "libraryBravais.filterPlaceholder"))
+            .size(crate::typeface::size::CONTROL)
+            .color(soft(ink));
         stack![input, container(hint).width(Length::Fill).height(Length::Fixed(34.0)).align_y(Alignment::Center)].into()
     };
     let mut line =
@@ -828,7 +854,7 @@ fn filter_field<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Ele
             .align_y(Alignment::Center)
             .height(Length::Fixed(34.0));
     if has_query {
-        line = line.push(text(seam.match_label.clone()).size(11).color(soft(ink)));
+        line = line.push(text(seam.match_label.clone()).size(crate::typeface::size::CAPTION).color(soft(ink)));
         let clear = button(container(icon(Icon::X, 14.0, soft(ink))).center(Length::Fill))
             .width(Length::Fixed(24.0))
             .height(Length::Fixed(24.0))
@@ -854,9 +880,9 @@ fn filter_field<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Ele
 /// all and enqueue. Rows are 44px; click flies the wall to the song, double-click plays it.
 fn list_panel<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Element<'a, Message> {
     let title = text(seam.title.clone())
-        .size(24)
-        .font(crate::typeface::font(iced::font::Weight::ExtraBold))
-        .line_height(iced::widget::text::LineHeight::Relative(1.15))
+        .size(crate::typeface::size::LARGE_TITLE)
+        .font(crate::typeface::adapt(crate::typeface::EXTRA_BOLD))
+        .line_height(crate::typeface::leading::EM_1_15)
         .color(ink)
         .wrapping(iced::widget::text::Wrapping::None);
     let row_px = super::LIST_ROW;
@@ -893,11 +919,11 @@ fn list_panel<'a>(host: &Host<'a>, seam: &super::LayerSeam, ink: Color) -> Eleme
         crumbs(host, seam, ink, true),
         filter_field(host, seam, ink),
         container(title).width(Length::Fill).clip(true),
-        text(seam.meta.clone()).size(12).color(soft(ink)),
+        text(seam.meta.clone()).size(crate::typeface::size::HINT).color(soft(ink)),
     ]
     .spacing(10);
     if let (true, Some(status)) = (seam.rows.is_empty(), &host.status) {
-        body = body.push(text(status.clone()).size(12).color(ink));
+        body = body.push(text(status.clone()).size(crate::typeface::size::HINT).color(ink));
     }
     body.push(container(list).height(Length::Fill))
         .push(actions)
@@ -912,19 +938,26 @@ fn list_row<'a>(host: &Host<'a>, entry: &super::ListRow, index: usize, ink: Colo
     let badge_color = if entry.current { host.accent } else { soft(ink) };
     let badge = container(
         text(entry.badge.clone())
-            .size(11)
-            .font(crate::typeface::font(iced::font::Weight::ExtraBold))
+            .size(crate::typeface::size::CAPTION)
+            .font(crate::typeface::adapt(crate::typeface::EXTRA_BOLD))
             .color(badge_color),
     )
     .width(Length::Fixed(32.0));
     let words = column![
-        text(entry.title.clone()).size(13).font(bold()).color(ink).wrapping(iced::widget::text::Wrapping::None),
-        text(entry.subtitle.clone()).size(11).color(soft(ink)).wrapping(iced::widget::text::Wrapping::None),
+        text(entry.title.clone())
+            .size(crate::typeface::size::CONTROL)
+            .font(crate::typeface::adapt(bold()))
+            .color(ink)
+            .wrapping(iced::widget::text::Wrapping::None),
+        text(entry.subtitle.clone())
+            .size(crate::typeface::size::CAPTION)
+            .color(soft(ink))
+            .wrapping(iced::widget::text::Wrapping::None),
     ];
     let face = row![
         badge,
         container(words).width(Length::Fill).clip(true),
-        text(entry.time.clone()).size(11).color(soft(ink))
+        text(entry.time.clone()).size(crate::typeface::size::CAPTION).color(soft(ink))
     ]
     .spacing(10)
     .align_y(Alignment::Center);
@@ -956,17 +989,22 @@ fn collection_menu<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
         a: ink.a,
     };
     let item = |label: &'a str, message: Message| -> Element<'a, Message> {
-        button(text(label).size(13).font(crate::typeface::font(iced::font::Weight::Bold)).color(ink))
-            .width(Length::Fill)
-            .padding([8.0, 10.0])
-            .on_press(message)
-            .style(move |_theme: &Theme, status| button::Style {
-                background: matches!(status, button::Status::Hovered | button::Status::Pressed)
-                    .then_some(Background::Color(Color { a: 0.14 * ink.a, ..ink })),
-                border: Border { radius: 10.0.into(), ..Border::default() },
-                ..button::Style::default()
-            })
-            .into()
+        button(
+            text(label)
+                .size(crate::typeface::size::CONTROL)
+                .font(crate::typeface::adapt(crate::typeface::BOLD))
+                .color(ink),
+        )
+        .width(Length::Fill)
+        .padding([8.0, 10.0])
+        .on_press(message)
+        .style(move |_theme: &Theme, status| button::Style {
+            background: matches!(status, button::Status::Hovered | button::Status::Pressed)
+                .then_some(Background::Color(Color { a: 0.14 * ink.a, ..ink })),
+            border: Border { radius: 10.0.into(), ..Border::default() },
+            ..button::Style::default()
+        })
+        .into()
     };
     let rule = container(hairline(ink, 0.14)).padding([3.0, 6.0]);
     container(
@@ -1057,9 +1095,12 @@ fn chrome_button_sized<'a>(
     let enabled = on_press.is_some();
     button(
         container(
-            row![icon(glyph, size.icon, ink), text(label).size(size.font).font(bold()).color(ink)]
-                .spacing(8)
-                .align_y(Alignment::Center),
+            row![
+                icon(glyph, size.icon, ink),
+                text(label).size(size.font).font(crate::typeface::adapt(bold())).color(ink)
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
         )
         .height(Length::Fill)
         .align_y(Alignment::Center),
@@ -1153,10 +1194,10 @@ fn row_body<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
         items.push(fold);
         items.push(collection_title(host, seam, ink, true, true));
         if host.window_width > 600.0 {
-            items.push(text(seam.meta.clone()).size(12).color(soft(ink)).into());
+            items.push(text(seam.meta.clone()).size(crate::typeface::size::HINT).color(soft(ink)).into());
         }
         if let Some(status) = &host.status {
-            items.push(text(status.clone()).size(12).color(ink).into());
+            items.push(text(status.clone()).size(crate::typeface::size::HINT).color(ink).into());
         }
         items.push(space().width(Length::Fill).into());
         items.push(if spine {
@@ -1193,7 +1234,7 @@ fn row_body<'a>(host: &Host<'a>, ink: Color) -> Element<'a, Message> {
         });
         items.push(row(tabs).spacing(4).align_y(Alignment::Center).into());
         if let Some(status) = &host.status {
-            items.push(text(status.clone()).size(12).color(soft(ink)).into());
+            items.push(text(status.clone()).size(crate::typeface::size::HINT).color(soft(ink)).into());
         }
         items.push(space().width(Length::Fill).into());
         if let Some(account) = &host.account {
@@ -1380,7 +1421,7 @@ fn menu<'a>(host: &Host<'a>, ink: Color, shown: f32) -> Element<'a, Message> {
 
 fn menu_row<'a>(label: &'a str, on_press: Option<Message>, ink: Color, shown: f32) -> Element<'a, Message> {
     let color = Color { a: ink.a * shown * if on_press.is_some() { 1.0 } else { 0.35 }, ..ink };
-    button(text(label).size(12).color(color))
+    button(text(label).size(crate::typeface::size::HINT).color(color))
         .width(Length::Fill)
         .padding([7, 6])
         .style(button::text)
@@ -1426,17 +1467,22 @@ fn tracked_row<'a>(
     color: Color,
     weight: iced::font::Weight,
 ) -> Element<'a, Message> {
-    let font = crate::typeface::font(weight);
-    let chars =
-        label.chars().map(|ch| text(ch.to_string()).size(size).color(color).font(font).into()).collect::<Vec<_>>();
-    row(chars)
-        .spacing(size * tracking)
+    let style = folia_render::text_run::Style {
+        font: crate::typeface::adapt(crate::typeface::font(weight)),
+        size,
+        line_height: size * 1.3,
+        tracking: size * tracking,
+        vertical: false,
+        upright: false,
+        width: None,
+    };
+    container(folia_render::text_run::text(label, style, color))
         .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: size * indent })
         .into()
 }
 
 fn tracked_col<'a>(label: &str, size: f32, tracking: f32, color: Color) -> Element<'a, Message> {
-    tracked_col_weight(label, size, tracking, color, iced::font::Weight::Bold)
+    tracked_col_weight(label, size, tracking, color, iced::font::Weight::Bold, false)
 }
 
 fn tracked_col_weight<'a>(
@@ -1445,19 +1491,26 @@ fn tracked_col_weight<'a>(
     tracking: f32,
     color: Color,
     weight: iced::font::Weight,
+    upright: bool,
 ) -> Element<'a, Message> {
-    let font = crate::typeface::font(weight);
-    let chars =
-        label.chars().map(|ch| text(ch.to_string()).size(size).color(color).font(font).into()).collect::<Vec<_>>();
-    column(chars).spacing(size * tracking).align_x(Alignment::Center).into()
+    let style = folia_render::text_run::Style {
+        font: crate::typeface::adapt(crate::typeface::font(weight)),
+        size,
+        line_height: size * 1.15,
+        tracking: size * tracking,
+        vertical: true,
+        upright,
+        width: None,
+    };
+    folia_render::text_run::text(label, style, color)
 }
 
 fn extra_bold() -> iced::Font {
-    crate::typeface::font(iced::font::Weight::ExtraBold)
+    crate::typeface::EXTRA_BOLD
 }
 
 fn bold() -> iced::Font {
-    crate::typeface::font(iced::font::Weight::Bold)
+    crate::typeface::BOLD
 }
 
 fn tip<'a>(
@@ -1465,7 +1518,9 @@ fn tip<'a>(
     label: &str,
     position: iced::widget::tooltip::Position,
 ) -> Element<'a, Message> {
-    iced::widget::Tooltip::new(content, text(label.to_owned()).size(12), position).delay(TOOLTIP_DELAY).into()
+    iced::widget::Tooltip::new(content, text(label.to_owned()).size(crate::typeface::size::HINT), position)
+        .delay(TOOLTIP_DELAY)
+        .into()
 }
 
 fn fade(color: Color, opacity: f32) -> Color {
@@ -1517,8 +1572,8 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
     let filter_face = row![
         icon(Icon::ListFilter, 15.0, top_ink),
         text(super::tr(host, "libraryBravais.filterPlaceholder").to_owned())
-            .size(13)
-            .font(crate::typeface::font(iced::font::Weight::Bold))
+            .size(crate::typeface::size::CONTROL)
+            .font(crate::typeface::adapt(crate::typeface::BOLD))
             .color(top_ink)
     ]
     .spacing(8)
@@ -1573,6 +1628,7 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
         0.3,
         fade(ink, 0.85 * entry.scrap()),
         iced::font::Weight::ExtraBold,
+        false,
     ))
     .max_height(height * 0.33 * 0.7)
     .clip(true);
@@ -1595,15 +1651,15 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
         extrude: palette.extrude,
         hero: album.composition.hero,
         entry,
-        font: TITLE_FONT,
+        font: crate::typeface::adapt(TITLE_FONT),
     })
     .width(Length::Fill)
     .height(Length::Fixed(title_height));
     let kicker_in = entry.kicker();
     let kicker = container(
         text(album.kicker.clone())
-            .size(12)
-            .font(crate::typeface::font(iced::font::Weight::ExtraBold))
+            .size(crate::typeface::size::HINT)
+            .font(crate::typeface::adapt(crate::typeface::EXTRA_BOLD))
             .color(fade(paper, kicker_in.0)),
     )
     .padding([6.0, 12.0])
@@ -1631,11 +1687,11 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
     let facts_in = next();
     let mut facts: Vec<Element<'a, Message>> = Vec::new();
     let facts_ink = fade(paper, facts_in.0);
-    let dot = || text("·").size(14).color(fade(facts_ink, 0.5));
+    let dot = || text("·").size(crate::typeface::size::BODY).color(fade(facts_ink, 0.5));
     if !album.artists.is_empty() {
         let name = text(album.artists.clone())
-            .size(19)
-            .font(crate::typeface::font(iced::font::Weight::Black))
+            .size(crate::typeface::size::POSTER_ARTIST)
+            .font(crate::typeface::adapt(crate::typeface::BLACK))
             .color(facts_ink);
         let rule = container(space()).width(Length::Fill).height(Length::Fixed(2.0)).style(move |_theme: &Theme| {
             container::Style { background: Some(Background::Color(facts_ink)), ..container::Style::default() }
@@ -1647,14 +1703,21 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
             facts.push(dot().into());
         }
         facts.push(
-            text(fact.clone()).size(14).font(crate::typeface::font(iced::font::Weight::Bold)).color(facts_ink).into(),
+            text(fact.clone())
+                .size(crate::typeface::size::BODY)
+                .font(crate::typeface::adapt(crate::typeface::BOLD))
+                .color(facts_ink)
+                .into(),
         );
     }
     let mut bottom = column![rise(row(facts).spacing(14).align_y(Alignment::End).wrap().into(), facts_in)].spacing(12);
     if let Some(about) = &album.description {
         let beat = next();
         let blurb = container(
-            text(about.clone()).size(13).color(fade(paper, 0.74 * beat.0)).wrapping(iced::widget::text::Wrapping::None),
+            text(about.clone())
+                .size(crate::typeface::size::CONTROL)
+                .color(fade(paper, 0.74 * beat.0))
+                .wrapping(iced::widget::text::Wrapping::None),
         )
         .width(Length::Fill)
         .clip(true);
@@ -1662,7 +1725,8 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
     }
     if let Some(status) = &host.status {
         let beat = next();
-        bottom = bottom.push(rise(text(status.clone()).size(12).color(fade(paper, beat.0)).into(), beat));
+        bottom = bottom
+            .push(rise(text(status.clone()).size(crate::typeface::size::HINT).color(fade(paper, beat.0)).into(), beat));
     }
     let actions_in = next();
     let alpha = actions_in.0;
@@ -1672,7 +1736,10 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
         let weight = if primary { iced::font::Weight::Black } else { iced::font::Weight::ExtraBold };
         let face = row![
             icon(glyph, 16.0, fade(tint, alpha)),
-            text(label).size(15).font(crate::typeface::font(weight)).color(fade(tint, alpha))
+            text(label)
+                .size(crate::typeface::size::ACTION)
+                .font(crate::typeface::adapt(crate::typeface::font(weight)))
+                .color(fade(tint, alpha))
         ]
         .spacing(8)
         .align_y(Alignment::Center);

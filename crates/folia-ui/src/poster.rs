@@ -281,7 +281,7 @@ pub fn composition(seed: &str) -> Composition {
 /// `--bravais-poster-pad` on the album poster.
 pub const PAD: f32 = 40.0;
 /// The title's face: 900, drawn at the heaviest weight the fonts have.
-pub const TITLE_FONT: iced::Font = crate::typeface::font(iced::font::Weight::Black);
+pub const TITLE_FONT: iced::Font = crate::typeface::BLACK;
 
 /// `resolvePosterWidth`: 46% of the window, between 520 and 680.
 pub fn width(viewport: f32) -> f32 {
@@ -468,14 +468,14 @@ pub fn draw_ground(frame: &mut Frame, size: Size, band: Band<'_>) {
         position: Point::new(ghost_x, h + size_px * 0.12),
         color: faded(paper, 0.07 * dots_alpha),
         size: size_px.into(),
-        font: crate::typeface::font(iced::font::Weight::Black),
+        font: crate::typeface::adapt(crate::typeface::BLACK),
         align_x: if band.composition.ghost_right {
             iced::widget::text::Alignment::Right
         } else {
             iced::widget::text::Alignment::Left
         },
         align_y: iced::alignment::Vertical::Bottom,
-        ..Text::default()
+        ..crate::typeface::canvas_defaults()
     });
 }
 

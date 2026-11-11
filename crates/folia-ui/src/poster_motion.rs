@@ -141,7 +141,7 @@ pub fn layout_title(words: &[(String, bool)], size: f32, width: f32, font: Font)
     for (index, (text, hero)) in words.iter().enumerate() {
         let space = text.trim().is_empty();
         let span_size = if *hero { size * 0.72 } else { size };
-        let advance = folia_visualizer::measure(text, span_size, font, f32::INFINITY).width;
+        let advance = crate::typeface::measure(text, span_size, font, f32::INFINITY).width;
         if space {
             if x > 0.0 {
                 spans.push(Placed {
@@ -165,7 +165,7 @@ pub fn layout_title(words: &[(String, bool)], size: f32, width: f32, font: Font)
         if advance > width {
             for c in text.chars() {
                 let piece = c.to_string();
-                let w = folia_visualizer::measure(&piece, span_size, font, f32::INFINITY).width;
+                let w = crate::typeface::measure(&piece, span_size, font, f32::INFINITY).width;
                 if x > 0.0 && x + w > width {
                     x = 0.0;
                     y += line;
@@ -246,9 +246,9 @@ impl<Message> Program<Message> for Title {
                         position: Point::new(shift, shift),
                         color: Color { a: color.a * alpha * grow, ..*color },
                         size: span.size.into(),
-                        font: self.font,
-                        line_height: iced::widget::text::LineHeight::Relative(1.02),
-                        ..Text::default()
+                        font: crate::typeface::adapt(self.font),
+                        line_height: crate::typeface::leading::EM_1_02,
+                        ..crate::typeface::canvas_defaults()
                     });
                 }
                 frame.fill_text(Text {
@@ -256,9 +256,9 @@ impl<Message> Program<Message> for Title {
                     position: Point::ORIGIN,
                     color: Color { a: self.color.a * alpha, ..self.color },
                     size: span.size.into(),
-                    font: self.font,
-                    line_height: iced::widget::text::LineHeight::Relative(1.02),
-                    ..Text::default()
+                    font: crate::typeface::adapt(self.font),
+                    line_height: crate::typeface::leading::EM_1_02,
+                    ..crate::typeface::canvas_defaults()
                 });
             });
         }

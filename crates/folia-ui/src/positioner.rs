@@ -1,9 +1,10 @@
 // Dragging the bottom bar to a new height, from `PlayerBottomBarPositioner.tsx` and the bar's positioning mode.
 
+use crate::typeface::text;
 use folia_i18n::I18n;
 use folia_store::{BOTTOM_BAR_BASE, bottom_bar_max_offset, clamp_bottom_bar_offset};
 use iced::widget::canvas::{self, Frame, LineDash, Path, Stroke};
-use iced::widget::{button, canvas as canvas_widget, container, mouse_area, row, space, stack, text, tooltip};
+use iced::widget::{button, canvas as canvas_widget, container, mouse_area, row, space, stack, tooltip};
 use iced::{Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Renderer, Size, mouse};
 use lucide_static_svg::Icon;
 
@@ -98,7 +99,9 @@ fn chip<'a>(look: &Look<'a>) -> Element<'a, Message> {
             .padding(0)
             .on_press(message)
             .style(|_, _| button::Style::default());
-        tooltip(press, text(label.to_owned()).size(12), tooltip::Position::Bottom).style(container::rounded_box).into()
+        tooltip(press, text(label.to_owned()).size(crate::typeface::size::HINT), tooltip::Position::Bottom)
+            .style(container::rounded_box)
+            .into()
     };
     let check_ink = if look.daylight { Color::WHITE } else { Color::BLACK };
     let accent = look.accent;
@@ -110,13 +113,19 @@ fn chip<'a>(look: &Look<'a>) -> Element<'a, Message> {
             border: Border { radius: 13.5.into(), ..Border::default() },
             ..button::Style::default()
         });
-    let commit = tooltip(commit, text(look.i18n.t("options.save").to_owned()).size(12), tooltip::Position::Bottom)
-        .style(container::rounded_box);
+    let commit = tooltip(
+        commit,
+        text(look.i18n.t("options.save").to_owned()).size(crate::typeface::size::HINT),
+        tooltip::Position::Bottom,
+    )
+    .style(container::rounded_box);
     let divider = container(space()).width(Length::Fixed(1.0)).height(Length::Fixed(16.0)).style(move |_| {
         container::Style { background: Some(Background::Color(Color { a: 0.2, ..ink })), ..container::Style::default() }
     });
     let body = row![
-        text(look.i18n.t("options.playerBottomBarPositioningHint").to_owned()).size(14).color(ink),
+        text(look.i18n.t("options.playerBottomBarPositioningHint").to_owned())
+            .size(crate::typeface::size::BODY)
+            .color(ink),
         divider,
         quiet(Icon::RotateCcw, look.i18n.t("options.playerBottomBarReset"), Message::Reset),
         quiet(Icon::X, look.i18n.t("ui.cancel"), Message::Cancel),

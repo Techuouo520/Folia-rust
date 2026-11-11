@@ -18,7 +18,7 @@ use iced::advanced::renderer::{Headless, Style as DrawStyle};
 use iced::widget::canvas;
 use iced::widget::image::Handle;
 use iced::widget::scrollable::Viewport;
-use iced::{Color, Element, Font, Length, Pixels, Size, Theme as IcedTheme};
+use iced::{Color, Element, Length, Pixels, Size, Theme as IcedTheme};
 use iced_runtime::user_interface::{Cache, UserInterface};
 
 #[test]
@@ -127,7 +127,8 @@ fn a_modal_leaves_the_capsule_and_the_handle_alone() {
 #[test]
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn search_and_monet_frames_are_written() {
-    let dir = std::env::temp_dir().join("folia-polish");
+    let output = tempfile::tempdir().unwrap();
+    let dir = output.path();
     std::fs::create_dir_all(&dir).unwrap();
     let tracks = sample_tracks();
     let covers = vec![None];
@@ -204,7 +205,7 @@ fn monet_frame() -> Element<'static, folia_visualizer::styles::monet::Event> {
 fn paint<M>(root: Element<'_, M>, clear: Color) -> Vec<u8> {
     folia_ui::install_fonts();
     let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), None)).unwrap();
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
     let mut ui = UserInterface::build(root, Size::new(1200.0, 800.0), Cache::default(), &mut renderer);
     let style = DrawStyle { text_color: Color::WHITE };
     ui.draw(&mut renderer, &IcedTheme::Dark, &style, iced::mouse::Cursor::Unavailable);

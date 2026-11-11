@@ -1,5 +1,6 @@
 // The developer page and its two overlays: the session log, the log file switches and the memory monitor.
 
+use crate::typeface::text;
 use std::collections::BTreeSet;
 use std::path::Path as FilePath;
 use std::time::Instant;
@@ -8,7 +9,7 @@ use folia_i18n::I18n;
 use folia_store::{DeveloperSettings, LogLine, LogMode, MemorySample, RuntimeLog, clock};
 use iced::mouse::Cursor;
 use iced::widget::canvas::{self, Canvas, Frame, Path as CanvasPath, Stroke};
-use iced::widget::{button, column, container, mouse_area, pin, row, scrollable, space, text};
+use iced::widget::{button, column, container, mouse_area, pin, row, scrollable, space};
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Point, Rectangle, Shadow, Size, Vector};
 use lucide_static_svg::Icon;
 use tracing::Level;
@@ -347,7 +348,7 @@ pub fn log_panel<'a>(
     let total = developer.lines.len();
     let summary =
         if visible == total { format!("Console ({visible})") } else { format!("Console ({visible} of {total})") };
-    let heading = text(summary).size(10).color(tokens.t3);
+    let heading = crate::typeface::log_caps(&summary, true, tokens.t3);
     let copy_label = if developer.copied() { "Copied".to_owned() } else { format!("Copy {visible}") };
     let copy = pill(tokens, copy_label.clone(), false, dmsg(Message::Copy));
     let clear = pill(tokens, "Clear".to_owned(), false, dmsg(Message::ClearLog));
@@ -385,9 +386,8 @@ pub fn log_panel<'a>(
         }
         shown += 1;
         let color = level_color(line.level, tokens);
-        let content = text(format!("{} [{}] {}", clock(line.at), line.target, line.message))
-            .size(10)
-            .line_height(iced::widget::text::LineHeight::Absolute(14.0.into()))
+        let content = crate::typeface::LOG_ROW
+            .text(format!("{} [{}] {}", clock(line.at), line.target, line.message))
             .color(color)
             .width(Length::Fill);
         list = list.push(container(content).width(Length::Fill).padding(Padding {
@@ -399,7 +399,7 @@ pub fn log_panel<'a>(
     }
     let list: Element<'a, crate::Message> = if shown == 0 {
         let words = if total == 0 { "Nothing logged yet." } else { "Nothing matches the module filter." };
-        container(text(words).size(11).color(tokens.t3)).padding([4, 8]).into()
+        container(text(words).size(crate::typeface::size::CAPTION).color(tokens.t3)).padding([4, 8]).into()
     } else {
         scrollable(list)
             .height(Length::Fixed(height))
@@ -416,7 +416,7 @@ pub fn log_panel<'a>(
 
 fn pill<'a>(tokens: Tokens, label: String, active: bool, on_press: crate::Message) -> Element<'a, crate::Message> {
     let ink = if active { tokens.t1 } else { tokens.t2 };
-    button(container(text(label).size(10).color(ink)).padding([4, 10]))
+    button(container(crate::typeface::log_caps(&label, false, ink)).padding([4, 10]))
         .padding(0)
         .on_press(on_press)
         .style(move |_, status| button::Style {
@@ -456,7 +456,9 @@ pub fn log_overlay<'a>(
     } else {
         // `ConsoleLogPanel` with capture off.
         container(
-            text("Not recording. Nothing from this session can be read back or copied.").size(11).color(tokens.t3),
+            text("Not recording. Nothing from this session can be read back or copied.")
+                .size(crate::typeface::size::CAPTION)
+                .color(tokens.t3),
         )
         .padding(12)
         .into()
@@ -507,11 +509,11 @@ pub fn memory_overlay<'a>(
     let first = developer.samples.first().map(|s| clock(s.at)).unwrap_or_default();
     let last = developer.samples.last().map(|s| clock(s.at)).unwrap_or_default();
     let axis = row![
-        text(first).size(10).color(tokens.t3),
+        text(first).size(crate::typeface::size::SMALL_BADGE).color(tokens.t3),
         space().width(Length::Fill),
-        text(format!("0 \u{2013} {} MB", max.round())).size(10).color(tokens.t3),
+        text(format!("0 \u{2013} {} MB", max.round())).size(crate::typeface::size::SMALL_BADGE).color(tokens.t3),
         space().width(Length::Fill),
-        text(last).size(10).color(tokens.t3),
+        text(last).size(crate::typeface::size::SMALL_BADGE).color(tokens.t3),
     ]
     .align_y(Alignment::Center);
 
@@ -524,9 +526,13 @@ pub fn memory_overlay<'a>(
             chip.push(container(space()).width(12).height(6).style(move |_| {
                 kit::rounded(if missing { Color { a: 0.25, ..tokens.t3 } } else { series.color() }, 3.0)
             }));
-        chip = chip.push(text(series.label()).size(10).color(if on { tokens.t2 } else { tokens.t3 }));
+        chip = chip.push(text(series.label()).size(crate::typeface::size::SMALL_BADGE).color(if on {
+            tokens.t2
+        } else {
+            tokens.t3
+        }));
         if missing {
-            chip = chip.push(text("n/a").size(10).color(tokens.t3));
+            chip = chip.push(text("n/a").size(crate::typeface::size::SMALL_BADGE).color(tokens.t3));
         }
         let press = (!missing).then(|| dmsg(Message::ToggleSeries(series)));
         let border = Border { color: tokens.line2, width: 1.0, radius: 11.0.into() };
@@ -546,12 +552,14 @@ pub fn memory_overlay<'a>(
         legend = legend.push(chip);
     }
     if SERIES.iter().any(|series| unavailable.contains(series)) {
-        legend = legend.push(text(i18n.t("options.memorySeriesUnavailable")).size(10).color(tokens.t3));
+        legend = legend.push(
+            text(i18n.t("options.memorySeriesUnavailable")).size(crate::typeface::size::SMALL_BADGE).color(tokens.t3),
+        );
     }
 
     let process = row![
         text(latest.map(|s| format!("{} #{}", s.name, s.pid)).unwrap_or_else(|| "\u{2014}".to_owned()))
-            .size(10)
+            .size(crate::typeface::size::SMALL_BADGE)
             .color(tokens.t2)
             .width(Length::Fill),
         cell(latest.map(|s| s.working_set_mb.to_string()).unwrap_or_else(|| "\u{2014}".to_owned()), true),
@@ -561,7 +569,7 @@ pub fn memory_overlay<'a>(
     .spacing(6)
     .align_y(Alignment::Center);
     let columns = row![
-        text("process").size(10).color(tokens.t3).width(Length::Fill),
+        text("process").size(crate::typeface::size::SMALL_BADGE).color(tokens.t3).width(Length::Fill),
         header_cell("ws", tokens),
         header_cell("priv", tokens),
         header_cell("cpu", tokens),
@@ -569,7 +577,7 @@ pub fn memory_overlay<'a>(
     .spacing(6);
 
     let mut body = column![stats, chart, axis, legend].spacing(6);
-    body = body.push(text(i18n.t("options.memoryByProcess")).size(10).color(tokens.t3));
+    body = body.push(text(i18n.t("options.memoryByProcess")).size(crate::typeface::size::SMALL_BADGE).color(tokens.t3));
     body = body.push(columns);
     body = body.push(process);
     if let Some(latest) = latest {
@@ -578,29 +586,36 @@ pub fn memory_overlay<'a>(
                 "{} samples \u{00b7} {}s \u{00b7} cpu {:.1}%",
                 latest.samples, latest.uptime_sec, latest.cpu_percent
             ))
-            .size(10)
+            .size(crate::typeface::size::SMALL_BADGE)
             .color(tokens.t3),
         );
     }
     if settings.memory_log_enabled {
-        body = body.push(text(memory_path.display().to_string()).size(10).color(tokens.t3));
+        body = body
+            .push(text(memory_path.display().to_string()).size(crate::typeface::size::SMALL_BADGE).color(tokens.t3));
     }
     Some(debug_window(i18n, tokens, developer, Panel::Memory, body.into(), window))
 }
 
 fn stat<'a>(i18n: &'a I18n, tokens: Tokens, key: &'a str, value: String) -> Element<'a, crate::Message> {
-    column![text(i18n.t(key)).size(9).color(tokens.t3), text(value).size(13).color(tokens.t1),]
-        .width(Length::Fill)
-        .into()
+    column![
+        text(i18n.t(key)).size(crate::typeface::size::MICRO).color(tokens.t3),
+        text(value).size(crate::typeface::size::CONTROL).color(tokens.t1),
+    ]
+    .width(Length::Fill)
+    .into()
 }
 
 // A column title over `cell`: the same width and right edge as the numbers under it.
 fn header_cell<'a>(title: &'a str, tokens: Tokens) -> Element<'a, crate::Message> {
-    container(text(title).size(10).color(tokens.t3)).width(Length::Fixed(52.0)).align_x(Alignment::End).into()
+    container(text(title).size(crate::typeface::size::SMALL_BADGE).color(tokens.t3))
+        .width(Length::Fixed(52.0))
+        .align_x(Alignment::End)
+        .into()
 }
 
 fn cell<'a>(content: String, right: bool) -> Element<'a, crate::Message> {
-    let text = text(content).size(10);
+    let text = text(content).size(crate::typeface::size::SMALL_BADGE);
     container(text).width(Length::Fixed(52.0)).align_x(if right { Alignment::End } else { Alignment::Start }).into()
 }
 
@@ -621,7 +636,7 @@ fn debug_window<'a>(
         Panel::Log => ("options.consoleLogCapture", "Alt+Shift+D", Message::CloseLog),
         Panel::Memory => ("options.memoryMonitor", "Alt+Shift+M", Message::CloseMemory),
     };
-    let heading = text(i18n.t(title)).size(13).color(tokens.t1);
+    let heading = text(i18n.t(title)).size(crate::typeface::size::CONTROL).color(tokens.t1);
     let keys = kit::keys(tokens, &shortcut.split('+').collect::<Vec<_>>());
     let close = kit::icon_button(tokens, Icon::X, 15.0, dmsg(close));
     let header = row![heading, space().width(Length::Fill), keys, close].spacing(8).align_y(Alignment::Center);

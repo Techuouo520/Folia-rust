@@ -1,9 +1,10 @@
 // Now playing: the lyric canvas fills the window, with a vignette and the translation under it.
 
+use crate::typeface::text;
 use folia_i18n::I18n;
 use folia_render::{Atmosphere, Program};
 use folia_visualizer::{Scene, lyric_view};
-use iced::widget::{column, container, shader, stack, text};
+use iced::widget::{column, container, shader, stack};
 use iced::{Alignment, Color, Element, Font, Length, Size};
 
 use crate::overlay::{self, Subtitle};
@@ -125,11 +126,7 @@ fn subtitle_block<'a, M: 'a>(
 /// The line, with a 1px-down copy of the theme background standing in for `0 1px 2px`.
 fn lined<'a, M: 'a>(content: &'a str, size: f32, font: Font, color: Color, background: Color) -> Element<'a, M> {
     let shadow = Color { a: overlay::SHADOW_ALPHA * color.a, ..background };
-    let ghost = container(text(content).size(size).font(font).color(shadow).center()).padding(iced::Padding {
-        top: overlay::SHADOW_OFFSET_Y,
-        right: 0.0,
-        bottom: 0.0,
-        left: 0.0,
-    });
-    stack![ghost, text(content).size(size).font(font).color(color).center()].into()
+    let ghost = container(text(content).size(size).font(crate::typeface::adapt(font)).color(shadow).center())
+        .padding(iced::Padding { top: overlay::SHADOW_OFFSET_Y, right: 0.0, bottom: 0.0, left: 0.0 });
+    stack![ghost, text(content).size(size).font(crate::typeface::adapt(font)).color(color).center()].into()
 }

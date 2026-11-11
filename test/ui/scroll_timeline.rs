@@ -7,7 +7,7 @@ use folia_i18n::I18n;
 use folia_ui::{Follow, Scroll, Timeline, USER_SCROLL_MS, WHEEL_MS, active_line, seek_time};
 use iced::advanced::renderer::{Headless, Style as DrawStyle};
 use iced::mouse::ScrollDelta;
-use iced::{Color, Font, Pixels, Size, Theme as IcedTheme};
+use iced::{Color, Pixels, Size, Theme as IcedTheme};
 use iced_runtime::user_interface::{Cache, UserInterface};
 
 fn lines() -> Vec<Line> {
@@ -132,7 +132,8 @@ fn a_clicked_line_seeks_to_its_time_on_the_media_clock() {
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn the_timeline_draws_in_daylight_and_midnight() {
     folia_ui::install_fonts();
-    let dir = std::env::temp_dir().join("folia-scroll");
+    let output = tempfile::tempdir().unwrap();
+    let dir = output.path();
     std::fs::create_dir_all(&dir).unwrap();
     let i18n = I18n::new(Language::En).unwrap();
     let lyrics = Lyrics { lines: lines(), ..Lyrics::default() };
@@ -154,7 +155,7 @@ fn the_timeline_draws_in_daylight_and_midnight() {
 
 fn paint(root: iced::Element<'_, folia_ui::TimelineMessage>, daylight: bool) -> Vec<u8> {
     let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), None)).unwrap();
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
     let mut ui = UserInterface::build(root, Size::new(1200.0, 800.0), Cache::default(), &mut renderer);
     let iced_theme = if daylight { IcedTheme::Light } else { IcedTheme::Dark };
     let style = DrawStyle { text_color: Color::WHITE };

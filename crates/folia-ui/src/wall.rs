@@ -35,9 +35,9 @@ const COVER_STEPS: [u32; 3] = [256, 512, 1024];
 /// `FIELD_ASPECT`: the repeat period of the edgeless wall is about this much wider than tall.
 const FIELD_ASPECT: f32 = 2.2;
 const TITLE_LINES: usize = 3;
-const BADGE_FONT: Font = crate::typeface::font(iced::font::Weight::ExtraBold);
-const TITLE_FONT: Font = crate::typeface::font(iced::font::Weight::Bold);
-const ARTIST_FONT: Font = crate::typeface::font(iced::font::Weight::Bold);
+const BADGE_FONT: Font = crate::typeface::EXTRA_BOLD;
+const TITLE_FONT: Font = crate::typeface::BOLD;
+const ARTIST_FONT: Font = crate::typeface::BOLD;
 
 /// `x, y, cols, rows` in cells, from the original `blockTemplates.ts`.
 const TEMPLATES: [[(i32, i32, i32, i32); SLOTS_PER_BLOCK]; 4] = [
@@ -187,7 +187,7 @@ impl Typeset {
     fn for_width(width: f32) -> Self {
         let scale = wall_scale(width);
         let badge = 11.0 * scale;
-        let figures = folia_visualizer::measure("00", badge, BADGE_FONT, f32::INFINITY);
+        let figures = crate::typeface::measure("00", badge, BADGE_FONT, f32::INFINITY);
         Self {
             scale,
             title: (width * 0.02).clamp(22.0, 36.0) * scale,
@@ -307,6 +307,12 @@ struct Ghost {
     heading: bool,
     hue: f32,
     stack: bool,
+}
+
+impl Default for Wall {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Wall {
@@ -596,7 +602,7 @@ impl Wall {
             let Some(tile) = tiles.get(placement.track) else { continue };
             let width = width * typeset.scale - 34.0 * typeset.scale;
             let badge = tile.badge.as_ref().map(|text| {
-                let size = folia_visualizer::measure(text, typeset.badge, BADGE_FONT, f32::INFINITY);
+                let size = crate::typeface::measure(text, typeset.badge, BADGE_FONT, f32::INFINITY);
                 (text.clone(), Size::new(size.width + 16.0 * typeset.scale, typeset.badge_box.height))
             });
             let label = Label {
@@ -1387,10 +1393,10 @@ fn draw_badge(frame: &mut Frame, tile: &Drawn, place: Place, typeset: &Typeset, 
         position: place.point(tag.center()),
         color: faded(if tile.current { palette.accent } else { palette.ink }, alpha),
         size: place.size(typeset.badge).into(),
-        font: BADGE_FONT,
+        font: crate::typeface::adapt(BADGE_FONT),
         align_x: iced::widget::text::Alignment::Center,
         align_y: iced::alignment::Vertical::Center,
-        ..Text::default()
+        ..crate::typeface::canvas_defaults()
     });
 }
 
@@ -1407,9 +1413,9 @@ fn draw_copy(frame: &mut Frame, rect: Rectangle, place: Place, label: &Label, ty
             max_width: width,
             color: Color { a: 0.78 * ink.a, ..ink },
             size: place.size(typeset.artist).into(),
-            font: ARTIST_FONT,
+            font: crate::typeface::adapt(ARTIST_FONT),
             align_y: iced::alignment::Vertical::Bottom,
-            ..Text::default()
+            ..crate::typeface::canvas_defaults()
         });
         bottom -= typeset.artist * 1.2 + 5.0 * typeset.scale;
     }
@@ -1419,10 +1425,10 @@ fn draw_copy(frame: &mut Frame, rect: Rectangle, place: Place, label: &Label, ty
         max_width: width,
         color: ink,
         size: place.size(typeset.title).into(),
-        line_height: iced::widget::text::LineHeight::Relative(0.96),
-        font: TITLE_FONT,
+        line_height: crate::typeface::leading::EM_0_96,
+        font: crate::typeface::adapt(TITLE_FONT),
         align_y: iced::alignment::Vertical::Bottom,
-        ..Text::default()
+        ..crate::typeface::canvas_defaults()
     });
 }
 

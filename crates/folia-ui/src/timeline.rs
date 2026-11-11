@@ -1,6 +1,7 @@
 // The lyrics timeline window from `LyricsTimelineModal.tsx`: alternating lyric cards on a centre line, the current
 // line centred, and a click seeks to that line.
 
+use crate::typeface::text;
 use std::time::Instant;
 
 use folia_core::{Line, Lyrics, Theme};
@@ -8,9 +9,7 @@ use folia_i18n::I18n;
 use folia_render::Plate;
 use folia_visualizer::Ease;
 use iced::widget::scrollable::{Direction, Scrollbar, Viewport};
-use iced::widget::{
-    Id, button, column, container, mouse_area, opaque, pin, row, scrollable, shader, space, stack, text,
-};
+use iced::widget::{Id, button, column, container, mouse_area, opaque, pin, row, scrollable, shader, space, stack};
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Shadow, Size, Task, mouse};
 use lucide_static_svg::Icon;
 
@@ -388,9 +387,9 @@ impl Timeline {
         self.rows.clear();
         let mut y = LIST_PAD;
         for line in lines {
-            let primary = folia_visualizer::measure(&line.text, 16.0, primary_font(), text_w).height;
+            let primary = crate::typeface::measure(&line.text, 16.0, primary_font(), text_w).height;
             let translation = line.translation.as_deref().map_or(0.0, |translation| {
-                4.0 + folia_visualizer::measure(translation, 14.0, secondary_font(), text_w).height
+                4.0 + crate::typeface::measure(translation, 14.0, secondary_font(), text_w).height
             });
             let height = (2.0 * CARD_PAD + primary + translation + 2.0).max(12.0);
             self.rows.push(Row { y, height });
@@ -484,8 +483,8 @@ impl Timeline {
         let header_text = Color { a: 0.9 * shown, ..if daylight { zinc(0x27272a) } else { Color::WHITE } };
         let close_ink = Color { a: 0.7 * shown, ..if daylight { zinc(0x27272a) } else { Color::WHITE } };
         let title = text(i18n.t("timeline.title").to_owned())
-            .size(24)
-            .font(crate::typeface::font(iced::font::Weight::Bold))
+            .size(crate::typeface::size::LARGE_TITLE)
+            .font(crate::typeface::adapt(crate::typeface::BOLD))
             .color(header_text);
         // `p-2` around a 24px X: a 40px circle.
         let close = button(container(icon(Icon::X, 24.0, close_ink)).center(Length::Fill))
@@ -509,14 +508,16 @@ impl Timeline {
                 .padding(Padding { bottom: HEADER_GAP, ..Padding::ZERO });
         let list = match lyrics {
             Some(lyrics) if !self.rows.is_empty() => self.list(lyrics, daylight, accent, secondary, shown),
-            _ => container(text(i18n.t("timeline.noLyrics").to_owned()).size(14).color(Color {
-                a: (if daylight { 0.5 } else { 0.6 }) * shown,
-                ..if daylight { zinc(0x71717a) } else { Color::WHITE }
-            }))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center(Length::Fill)
-            .into(),
+            _ => {
+                container(text(i18n.t("timeline.noLyrics").to_owned()).size(crate::typeface::size::BODY).color(Color {
+                    a: (if daylight { 0.5 } else { 0.6 }) * shown,
+                    ..if daylight { zinc(0x71717a) } else { Color::WHITE }
+                }))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center(Length::Fill)
+                .into()
+            }
         };
         column![head, list].width(Length::Fill).height(Length::Fill).into()
     }
@@ -600,8 +601,8 @@ impl Timeline {
         let mut body: iced::widget::Column<'a, Message> = column![
             text(line.text.clone())
                 .size(if active { 16.0 } else { 14.0 })
-                .font(if active { primary_font() } else { regular_font() })
-                .line_height(iced::widget::text::LineHeight::Relative(1.22))
+                .font(crate::typeface::adapt(if active { primary_font() } else { regular_font() }))
+                .line_height(crate::typeface::leading::EM_1_22)
                 .color(Color { a: alpha, ..primary })
                 .align_x(align)
         ]
@@ -610,7 +611,7 @@ impl Timeline {
             body = body.push(
                 text(translation.clone())
                     .size(if active { 14.0 } else { 12.0 })
-                    .line_height(iced::widget::text::LineHeight::Relative(1.22))
+                    .line_height(crate::typeface::leading::EM_1_22)
                     .color(Color { a: alpha, ..secondary })
                     .align_x(align),
             );
@@ -695,7 +696,7 @@ impl Timeline {
 }
 
 fn primary_font() -> iced::Font {
-    crate::typeface::font(iced::font::Weight::Medium)
+    crate::typeface::MEDIUM
 }
 
 fn regular_font() -> iced::Font {

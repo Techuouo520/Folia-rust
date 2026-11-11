@@ -1,6 +1,8 @@
 // The lyric-style workbench opened by More settings: a preview with its three hotspots, the style shelf, and the
 // five settings tabs of the original `VisPlayground`: the style's tuning, backgrounds, fonts, subtitles and global.
 
+use crate::typeface::text;
+use crate::typeface::text_input;
 use std::time::{Duration, Instant};
 
 use folia_core::{Lyrics, Theme};
@@ -13,7 +15,7 @@ use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::widget::scrollable::Viewport;
 use iced::widget::{
     Id, button, canvas as canvas_widget, column, container, mouse_area, opaque, row, scrollable, slider, space, stack,
-    text, text_input, tooltip,
+    tooltip,
 };
 use iced::{
     Alignment, Background as IcedBackground, Border, Color, Element, Font, Length, Padding, Point, Rectangle, Renderer,
@@ -33,7 +35,7 @@ const HEADER: f32 = 64.0;
 /// The style shelf and the settings body keep their own offsets.
 const GRID: &str = "workbench-styles";
 const PAGE: &str = "workbench-page";
-const MEDIUM: Font = crate::typeface::font(iced::font::Weight::Medium);
+const MEDIUM: Font = crate::typeface::MEDIUM;
 const HOTSPOT_FADE: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -601,9 +603,12 @@ impl Workbench {
     fn header<'a>(&'a self, i18n: &'a I18n, tokens: Tokens) -> Element<'a, crate::Message> {
         // `StudioWindow` back: 32px, rounded 8, `--st-fill` and t1 on hover, with the back label.
         let back = kit::icon_button(tokens, Icon::ChevronLeft, 18.0, crate::Message::Workbench(Message::Close));
-        let back =
-            tooltip(back, text(i18n.t("ui.back")).size(12), tooltip::Position::Bottom).style(container::rounded_box);
-        let title = text(i18n.t("options.lyricsStyleSettings")).size(20).font(kit::SEMIBOLD).color(tokens.t1);
+        let back = tooltip(back, text(i18n.t("ui.back")).size(crate::typeface::size::HINT), tooltip::Position::Bottom)
+            .style(container::rounded_box);
+        let title = text(i18n.t("options.lyricsStyleSettings"))
+            .size(crate::typeface::size::PAGE_TITLE)
+            .font(crate::typeface::adapt(kit::SEMIBOLD))
+            .color(tokens.t1);
         container(row![back, title].spacing(8).align_y(Alignment::Center))
             .height(HEADER)
             .padding(Padding { left: 16.0, right: 20.0, ..Padding::ZERO })
@@ -646,7 +651,11 @@ impl Workbench {
                 }
             });
         let note = empty.then(|| -> Element<'a, crate::Message> {
-            container(text(i18n.t("options.previewSourceLiveEmpty")).size(13).color(Color::WHITE)).padding(8).into()
+            container(
+                text(i18n.t("options.previewSourceLiveEmpty")).size(crate::typeface::size::CONTROL).color(Color::WHITE),
+            )
+            .padding(8)
+            .into()
         });
         let bar = self.preview_bar(i18n, tokens);
         let hotspots = canvas_widget(Hotspots {
@@ -713,17 +722,24 @@ impl Workbench {
                 border: Border { radius: 16.0.into(), ..Border::default() },
                 ..button::Style::default()
             });
-        let pause = tooltip(pause, text(i18n.t(tip)).size(12), tooltip::Position::Bottom).style(container::rounded_box);
+        let pause = tooltip(pause, text(i18n.t(tip)).size(crate::typeface::size::HINT), tooltip::Position::Bottom)
+            .style(container::rounded_box);
         row![source, pause].spacing(16).align_y(Alignment::Center).into()
     }
 
     fn shelf<'a>(&'a self, look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
         let Look { i18n, theme, window, style: current, font_scale, audio, .. } = look;
         let columns: usize = if window.width >= 1024.0 { 7 } else { 4 };
-        let count = text(Style::ALL.len().to_string()).size(13).color(tokens.t3);
-        let heading = row![text(i18n.t("options.lyricStyles")).size(13).font(kit::SEMIBOLD).color(tokens.t2), count,]
-            .spacing(6)
-            .align_y(Alignment::Center);
+        let count = text(Style::ALL.len().to_string()).size(crate::typeface::size::CONTROL).color(tokens.t3);
+        let heading = row![
+            text(i18n.t("options.lyricStyles"))
+                .size(crate::typeface::size::CONTROL)
+                .font(crate::typeface::adapt(kit::SEMIBOLD))
+                .color(tokens.t2),
+            count,
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
         let lyrics = builtin();
         let mut grid = column![].spacing(12);
         for chunk in Style::ALL.chunks(columns) {
@@ -774,9 +790,13 @@ impl Workbench {
             .collect();
         let chosen = Tab::ALL.iter().position(|tab| *tab == self.tab);
         let reset_on = !matches!(self.tab, Tab::Global);
-        let reset = button(text(i18n.t("ui.default")).size(13).color(if reset_on { tokens.t1 } else { tokens.t3 }))
-            .padding(Padding { left: 8.0, right: 8.0, ..Padding::ZERO })
-            .style(|_, _| button::Style::default());
+        let reset = button(text(i18n.t("ui.default")).size(crate::typeface::size::CONTROL).color(if reset_on {
+            tokens.t1
+        } else {
+            tokens.t3
+        }))
+        .padding(Padding { left: 8.0, right: 8.0, ..Padding::ZERO })
+        .style(|_, _| button::Style::default());
         let reset = if reset_on { reset.on_press(crate::Message::Workbench(Message::Reset)) } else { reset };
         let tabs = row![kit::tabs(tokens, tabs, chosen, chosen.map(|index| index as f32), 8.0, 16.0), reset]
             .align_y(Alignment::Center);
@@ -790,7 +810,7 @@ impl Workbench {
         let page = smooth_scroll::smooth(page, |delta| crate::Message::Workbench(Message::PageWheel(delta)));
         let mut column = column![tabs];
         if let Some(key) = self.notice {
-            column = column.push(text(i18n.t(key)).size(12).color(tokens.t2));
+            column = column.push(text(i18n.t(key)).size(crate::typeface::size::HINT).color(tokens.t2));
         }
         column.push(page).into()
     }
@@ -829,15 +849,18 @@ impl Workbench {
         let close = kit::icon_button(tokens, Icon::X, 16.0, crate::Message::Workbench(Message::Picker(None)));
         let heading = row![
             column![
-                text(title).size(15).font(kit::SEMIBOLD).color(tokens.t1),
-                text(i18n.t("options.chooseSystemFontDesc")).size(12).color(tokens.t3)
+                text(title)
+                    .size(crate::typeface::size::ACTION)
+                    .font(crate::typeface::adapt(kit::SEMIBOLD))
+                    .color(tokens.t1),
+                text(i18n.t("options.chooseSystemFontDesc")).size(crate::typeface::size::HINT).color(tokens.t3)
             ]
             .width(Length::Fill),
             close
         ]
         .align_y(Alignment::Start);
         let search = text_input(i18n.t("options.searchSystemFont"), &picker.search)
-            .size(13)
+            .size(crate::typeface::size::CONTROL)
             .padding([8, 10])
             .on_input(|text| crate::Message::Workbench(Message::FontSearch(text)))
             .style(move |_, _| text_input::Style {
@@ -855,11 +878,11 @@ impl Workbench {
             FontStyle::Mono => i18n.t("options.fontMono").to_owned(),
         };
         let current = column![
-            text(i18n.t("options.currentFont")).size(12).color(tokens.t3),
-            text(current).size(14).color(tokens.t1)
+            text(i18n.t("options.currentFont")).size(crate::typeface::size::HINT).color(tokens.t3),
+            text(current).size(crate::typeface::size::BODY).color(tokens.t1)
         ];
         let fallback = text_input(i18n.t("options.fontFallbackFamiliesPlaceholder"), &picker.fallback)
-            .size(13)
+            .size(crate::typeface::size::CONTROL)
             .padding([8, 10])
             .on_input(|text| crate::Message::Workbench(Message::Fallback(text)))
             .on_submit(crate::Message::Workbench(Message::FallbackCommit))
@@ -871,7 +894,10 @@ impl Workbench {
                 value: tokens.t1,
                 selection: tokens.fill2,
             });
-        let fallback = column![text(i18n.t("options.fontFallbackFamilies")).size(12).color(tokens.t3), fallback];
+        let fallback = column![
+            text(i18n.t("options.fontFallbackFamilies")).size(crate::typeface::size::HINT).color(tokens.t3),
+            fallback
+        ];
         let wanted = picker.search.trim().to_lowercase();
         let mut list = column![].spacing(2);
         let mut shown = 0;
@@ -880,8 +906,11 @@ impl Workbench {
                 continue;
             }
             shown += 1;
-            let face = Font { family: iced::font::Family::Name(fonts::intern(family)), ..Font::DEFAULT };
-            let label = text(family.as_str()).size(15).font(face).color(tokens.t1);
+            let face = Font { family: iced::font::Family::Name(fonts::intern(family)), ..crate::typeface::SYSTEM };
+            let label = text(family.as_str())
+                .size(crate::typeface::size::ACTION)
+                .font(crate::typeface::adapt(face))
+                .color(tokens.t1);
             list = list.push(
                 button(label)
                     .width(Length::Fill)
@@ -895,15 +924,16 @@ impl Workbench {
             );
         }
         let body: Element<'a, crate::Message> = if shown == 0 {
-            text(i18n.t("options.systemFontNoResults")).size(13).color(tokens.t3).into()
+            text(i18n.t("options.systemFontNoResults")).size(crate::typeface::size::CONTROL).color(tokens.t3).into()
         } else {
             scrollable(list).height(Length::Fill).direction(kit::scrollbar()).style(kit::scroll_style(tokens)).into()
         };
         // "Back to the built-in font" clears the custom family.
-        let clear = button(text(i18n.t("options.clearSystemFont")).size(13).color(tokens.t1))
-            .padding([6, 10])
-            .on_press(crate::Message::Workbench(Message::ClearFont(picker.target)))
-            .style(|_, _| button::Style::default());
+        let clear =
+            button(text(i18n.t("options.clearSystemFont")).size(crate::typeface::size::CONTROL).color(tokens.t1))
+                .padding([6, 10])
+                .on_press(crate::Message::Workbench(Message::ClearFont(picker.target)))
+                .style(|_, _| button::Style::default());
         let dialog = container(
             column![heading, search, current, fallback, container(body).height(Length::Fill), clear]
                 .spacing(10)
@@ -946,8 +976,11 @@ fn disabled_modes<'a>(tokens: Tokens, modes: Vec<String>) -> Element<'a, crate::
     let mut row = row![].padding(2).spacing(0);
     for (index, label) in modes.into_iter().enumerate() {
         let on = index == 0;
-        let label =
-            text(label).size(13).color(if on { tokens.t3 } else { Color { a: tokens.t3.a * 0.7, ..tokens.t3 } });
+        let label = text(label).size(crate::typeface::size::CONTROL).color(if on {
+            tokens.t3
+        } else {
+            Color { a: tokens.t3.a * 0.7, ..tokens.t3 }
+        });
         row = row.push(container(label).padding(Padding { left: 10.0, right: 10.0, top: 6.0, bottom: 6.0 }));
     }
     container(row)
@@ -967,10 +1000,12 @@ fn style_page<'a>(
     values: &'a Values,
 ) -> Element<'a, crate::Message> {
     if manifest.groups.is_empty() {
-        return container(text(i18n.t("options.lyricStyleNoOptions")).size(13).color(tokens.t3))
-            .padding(56)
-            .center_x(Length::Fill)
-            .into();
+        return container(
+            text(i18n.t("options.lyricStyleNoOptions")).size(crate::typeface::size::CONTROL).color(tokens.t3),
+        )
+        .padding(56)
+        .center_x(Length::Fill)
+        .into();
     }
     let mut page = column![];
     for (index, group) in manifest.groups.iter().enumerate() {
@@ -987,7 +1022,7 @@ fn style_page<'a>(
             index == 0,
         ));
         if let Some(foot) = group.foot_key {
-            page = page.push(text(i18n.t(foot)).size(12).color(tokens.t3));
+            page = page.push(text(i18n.t(foot)).size(crate::typeface::size::HINT).color(tokens.t3));
         }
     }
     page.padding(Padding { left: 24.0, right: 12.0, bottom: 40.0, top: 0.0 }).into()
@@ -1031,7 +1066,11 @@ fn item_row<'a>(
         }
         Item::Button { key, path_key, .. } => {
             let enabled = path_key.is_some() || manifest.paths.iter().any(|path| values.path(path).is_some());
-            let label = text(i18n.t(item_label(item))).size(13).color(if enabled { tokens.t1 } else { tokens.t3 });
+            let label = text(i18n.t(item_label(item))).size(crate::typeface::size::CONTROL).color(if enabled {
+                tokens.t1
+            } else {
+                tokens.t3
+            });
             let button = button(label).padding([6, 10]).style(|_, _| button::Style::default());
             if enabled {
                 button.on_press(crate::Message::Workbench(Message::Button(key))).into()
@@ -1188,11 +1227,13 @@ fn font_page<'a>(
             hint: font.family.clone(),
             sub: true,
             below: None,
-            control: button(text(i18n.t("options.chooseSystemFont")).size(13).color(tokens.t1))
-                .padding([6, 10])
-                .on_press(crate::Message::Workbench(Message::Picker(Some(FontTarget::Lyrics))))
-                .style(|_, _| button::Style::default())
-                .into(),
+            control: button(
+                text(i18n.t("options.chooseSystemFont")).size(crate::typeface::size::CONTROL).color(tokens.t1),
+            )
+            .padding([6, 10])
+            .on_press(crate::Message::Workbench(Message::Picker(Some(FontTarget::Lyrics))))
+            .style(|_, _| button::Style::default())
+            .into(),
         });
     }
     rows.push(Row {
@@ -1248,7 +1289,7 @@ fn font_page<'a>(
         true,
     )];
     if let Some(key) = auto {
-        page = page.push(text(i18n.t(key)).size(12).color(tokens.t3));
+        page = page.push(text(i18n.t(key)).size(crate::typeface::size::HINT).color(tokens.t3));
     }
     page.padding(Padding { left: 24.0, right: 12.0, bottom: 40.0, top: 0.0 }).into()
 }
@@ -1485,11 +1526,13 @@ fn subtitle_page<'a>(
                 hint: font.family.clone(),
                 sub: true,
                 below: None,
-                control: button(text(i18n.t("options.chooseSystemFont")).size(13).color(tokens.t1))
-                    .padding([6, 10])
-                    .on_press(crate::Message::Workbench(Message::Picker(Some(FontTarget::Subtitle))))
-                    .style(|_, _| button::Style::default())
-                    .into(),
+                control: button(
+                    text(i18n.t("options.chooseSystemFont")).size(crate::typeface::size::CONTROL).color(tokens.t1),
+                )
+                .padding([6, 10])
+                .on_press(crate::Message::Workbench(Message::Picker(Some(FontTarget::Subtitle))))
+                .style(|_, _| button::Style::default())
+                .into(),
             });
         }
         font_rows.push(weight_auto_row(tokens, i18n, FontTarget::Subtitle, font));
@@ -1596,7 +1639,7 @@ fn global_page<'a>(i18n: &'a I18n, tokens: Tokens) -> Element<'a, crate::Message
         below: None,
         control: disabled_modes(tokens, modes.into_iter().map(|(_, label)| label).collect()),
     };
-    let locked = text(i18n.t("options.smartBeatUnavailable")).size(12).color(tokens.t3);
+    let locked = text(i18n.t("options.smartBeatUnavailable")).size(crate::typeface::size::HINT).color(tokens.t3);
     column![
         kit::group(
             tokens,
@@ -1658,8 +1701,12 @@ fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
         },
         ..container::Style::default()
     });
-    let name = text(i18n.t(style.label_key())).size(12).color(if chosen { tokens.t1 } else { tokens.t2 });
-    let name = if chosen { name.font(kit::SEMIBOLD) } else { name };
+    let name = text(i18n.t(style.label_key())).size(crate::typeface::size::HINT).color(if chosen {
+        tokens.t1
+    } else {
+        tokens.t2
+    });
+    let name = if chosen { name.font(crate::typeface::adapt(kit::SEMIBOLD)) } else { name };
     let body = column![frame.height(Length::Fixed(64.0)), container(name).center_x(Length::Fill)]
         .spacing(6)
         .width(Length::Fill);
@@ -1672,7 +1719,7 @@ fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
 }
 
 fn source_button<'a>(label: &'a str, on: bool, message: Message, ink: Color) -> Element<'a, crate::Message> {
-    let label = text(label).size(13).color(Color { a: if on { 1.0 } else { 0.72 }, ..ink });
+    let label = text(label).size(crate::typeface::size::CONTROL).color(Color { a: if on { 1.0 } else { 0.72 }, ..ink });
     let button = button(container(label).center_y(28).padding(Padding { left: 10.0, right: 10.0, ..Padding::ZERO }))
         .padding(0)
         .style(move |_, _| button::Style {
@@ -1751,8 +1798,8 @@ where
                 },
             );
             let caption = text(option.label.clone())
-                .size(12)
-                .font(if chosen { kit::SEMIBOLD } else { Font::DEFAULT })
+                .size(crate::typeface::size::HINT)
+                .font(crate::typeface::adapt(if chosen { kit::SEMIBOLD } else { crate::typeface::SYSTEM }))
                 .color(if chosen { tokens.t1 } else { tokens.t2 });
             let value = option.value;
             let press = on_pick.clone();
@@ -1812,8 +1859,8 @@ fn font_grid<'a>(tokens: Tokens, theme: &'a Theme, options: Vec<FontChoice>) -> 
         let mut line = row![].spacing(12);
         for option in chunk {
             let font = match option.family {
-                Some(family) => Font { family: iced::font::Family::Name(family), ..Font::DEFAULT },
-                None => Font { family: fonts::builtin(option.value), ..Font::DEFAULT },
+                Some(family) => Font { family: iced::font::Family::Name(family), ..crate::typeface::SYSTEM },
+                None => Font { family: fonts::builtin(option.value), ..crate::typeface::SYSTEM },
             };
             let chosen = option.active == option.value;
             let sample = canvas_widget(FontSample { theme, font }).width(Length::Fill).height(Length::Fill);
@@ -1829,8 +1876,8 @@ fn font_grid<'a>(tokens: Tokens, theme: &'a Theme, options: Vec<FontChoice>) -> 
                 }
             });
             let caption = text(option.label.clone())
-                .size(12)
-                .font(if chosen { kit::SEMIBOLD } else { Font::DEFAULT })
+                .size(crate::typeface::size::HINT)
+                .font(crate::typeface::adapt(if chosen { kit::SEMIBOLD } else { crate::typeface::SYSTEM }))
                 .color(if chosen { tokens.t1 } else { tokens.t2 });
             let value = option.value;
             let body = column![frame, container(caption).center_x(Length::Fill)].spacing(6).width(Length::Fill);
@@ -1871,11 +1918,11 @@ impl<Message> canvas::Program<Message> for FontSample<'_> {
             content: "永Aa".to_owned(),
             position: Point::new(bounds.width / 2.0, bounds.height / 2.0 - 9.0),
             color: folia_visualizer::color(self.theme.primary, 1.0),
-            size: 18.0.into(),
-            font: self.font,
+            size: crate::typeface::size::SUBHEADING.into(),
+            font: crate::typeface::adapt(self.font),
             align_x: iced::widget::text::Alignment::Center,
             align_y: iced::alignment::Vertical::Top,
-            ..Text::default()
+            ..crate::typeface::canvas_defaults()
         });
         vec![frame.into_geometry()]
     }
@@ -2031,7 +2078,7 @@ impl canvas::Program<crate::Message> for Hotspots<'_> {
                 Hotspot::Visualizer => self.labels.visualizer,
                 Hotspot::Subtitle => self.labels.subtitle,
             };
-            let width = folia_visualizer::measure(label_text, 12.0, MEDIUM, f32::INFINITY).width;
+            let width = crate::typeface::measure(label_text, 12.0, MEDIUM, f32::INFINITY).width;
             let (x, y) = match hotspot {
                 Hotspot::Background | Hotspot::Visualizer => (rect.x + 20.0, rect.y + 20.0),
                 Hotspot::Subtitle => {
@@ -2060,11 +2107,11 @@ impl canvas::Program<crate::Message> for Hotspots<'_> {
                 } else {
                     folia_visualizer::color(self.theme.secondary, alpha)
                 },
-                size: 12.0.into(),
+                size: crate::typeface::size::HINT.into(),
                 font: MEDIUM,
                 align_x: iced::widget::text::Alignment::Left,
                 align_y: iced::alignment::Vertical::Top,
-                ..Text::default()
+                ..crate::typeface::canvas_defaults()
             });
         }
         vec![frame.into_geometry()]

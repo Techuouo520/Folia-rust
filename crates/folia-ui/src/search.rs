@@ -1,5 +1,7 @@
 // Full-screen search from `SearchWorkspace`: a tinted page, one field, the platform in use, then the result rows.
 
+use crate::typeface::text;
+use crate::typeface::text_input;
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -10,7 +12,7 @@ use folia_omni::Omni;
 use folia_render::Plate;
 use folia_visualizer::Ease;
 use iced::widget::scrollable::Viewport;
-use iced::widget::{button, column, container, row, shader, space, stack, svg, text, text_input};
+use iced::widget::{button, column, container, row, shader, space, stack, svg};
 use iced::{Alignment, Background, Border, Color, Element, Length, Radians, Task, Theme, mouse};
 use lucide_static_svg::Icon;
 
@@ -370,7 +372,7 @@ impl SearchPage {
         let input = text_input(view.i18n.t("search.placeholder"), &self.query)
             .on_input(Message::Query)
             .on_submit(Message::Submit)
-            .size(14)
+            .size(crate::typeface::size::BODY)
             .padding(iced::Padding { top: 14.0, right: 16.0, bottom: 14.0, left: 44.0 })
             .style(move |_theme: &Theme, _status| text_input::Style {
                 background: Background::Color(fill),
@@ -398,7 +400,11 @@ impl SearchPage {
             return space().height(Length::Fill).into();
         }
         if self.results.is_empty() {
-            return center(text(view.i18n.t("home.noResults")).size(14).color(Color { a: 0.5 * ink.a, ..ink }));
+            return center(
+                text(view.i18n.t("home.noResults"))
+                    .size(crate::typeface::size::BODY)
+                    .color(Color { a: 0.5 * ink.a, ..ink }),
+            );
         }
         let look = search_results::Look {
             text: ink,
@@ -437,12 +443,13 @@ fn spinner<'a>(ink: Color, now: Instant, from: Instant) -> Element<'a, Message> 
 
 fn error_block<'a>(view: View<'a>, ink: Color, retry: Message) -> Element<'a, Message> {
     let mark = icon(Icon::CircleAlert, 32.0, Color { a: 0.65 * ink.a, ..ink });
-    let words = text(view.i18n.t("search.error")).size(14).color(Color { a: 0.65 * ink.a, ..ink });
+    let words =
+        text(view.i18n.t("search.error")).size(crate::typeface::size::BODY).color(Color { a: 0.65 * ink.a, ..ink });
     column![mark, words, retry_button(view, ink, retry)].spacing(12).align_x(Alignment::Center).into()
 }
 
 fn retry_button<'a>(view: View<'a>, ink: Color, message: Message) -> Element<'a, Message> {
-    button(text(view.i18n.t("search.retry")).size(14).color(ink))
+    button(text(view.i18n.t("search.retry")).size(crate::typeface::size::BODY).color(ink))
         .padding([8, 16])
         .on_press(message)
         .style(move |_, _| button::Style {
@@ -455,7 +462,8 @@ fn retry_button<'a>(view: View<'a>, ink: Color, message: Message) -> Element<'a,
 
 fn more_row<'a>(page: &'a SearchPage, view: View<'a>, ink: Color) -> Element<'a, Message> {
     if page.more_error {
-        let words = text(view.i18n.t("search.error")).size(14).color(Color { a: 0.6 * ink.a, ..ink });
+        let words =
+            text(view.i18n.t("search.error")).size(crate::typeface::size::BODY).color(Color { a: 0.6 * ink.a, ..ink });
         return container(
             row![words, retry_button(view, ink, Message::LoadMore)].spacing(12).align_y(Alignment::Center),
         )
@@ -471,7 +479,7 @@ fn more_row<'a>(page: &'a SearchPage, view: View<'a>, ink: Color) -> Element<'a,
     let fade = if loading { 0.5 } else { 1.0 };
     let label = if loading { "localMusic.searching" } else { "home.loadMore" };
     let label_ink = Color { a: ink.a * fade, ..ink };
-    let button = button(text(view.i18n.t(label)).size(14).color(label_ink))
+    let button = button(text(view.i18n.t(label)).size(crate::typeface::size::BODY).color(label_ink))
         .padding([8, 20])
         .on_press_maybe((!loading).then_some(Message::LoadMore))
         .style(move |_, status| {
@@ -502,7 +510,10 @@ pub struct View<'a> {
 }
 
 fn source_pill<'a>(view: View<'a>, shown: f32) -> Element<'a, Message> {
-    let label = text(view.source).size(12).font(medium()).color(view.background);
+    let label = text(view.source)
+        .size(crate::typeface::size::HINT)
+        .font(crate::typeface::adapt(medium()))
+        .color(view.background);
     button(label)
         .padding([8, 16])
         .style(move |_theme: &Theme, _status| button::Style {
@@ -534,5 +545,5 @@ fn close_button<'a>(ink: Color, daylight: bool, shown: f32) -> Element<'a, Messa
 }
 
 fn medium() -> iced::Font {
-    crate::typeface::font(iced::font::Weight::Medium)
+    crate::typeface::MEDIUM
 }

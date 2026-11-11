@@ -1,5 +1,6 @@
 // The queue list shared by the wall tools island and the player panel: virtual rows, scrolling and drag reorder.
 
+use crate::typeface::text;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -7,7 +8,7 @@ use folia_core::Track;
 use folia_i18n::I18n;
 use folia_visualizer::Ease;
 use iced::widget::scrollable::Viewport;
-use iced::widget::{Id, button, column, container, mouse_area, pin, row, scrollable, space, stack, text, tooltip};
+use iced::widget::{Id, button, column, container, mouse_area, pin, row, scrollable, space, stack, tooltip};
 use iced::{Alignment, Background, Border, Color, Element, Length, Point, Rectangle, Shadow, Task, Vector, mouse};
 use lucide_static_svg::Icon;
 
@@ -374,10 +375,10 @@ pub struct RowLook {
 }
 
 pub const ISLAND_ROW: RowLook = RowLook {
-    title: 12.5,
+    title: crate::typeface::size::QUEUE_TITLE,
     title_weight: iced::font::Weight::Semibold,
     active_weight: iced::font::Weight::Bold,
-    artist: 10.5,
+    artist: crate::typeface::size::QUEUE_ARTIST,
 };
 
 pub const PANEL_ROW: RowLook = RowLook {
@@ -428,13 +429,13 @@ fn queue_row<'a>(
     let weight = if active { look.row.active_weight } else { look.row.title_weight };
     let title = text(track.title.as_str())
         .size(look.row.title)
-        .line_height(iced::widget::text::LineHeight::Relative(1.25))
-        .font(crate::typeface::font(weight))
+        .line_height(crate::typeface::leading::EM_1_25)
+        .font(crate::typeface::adapt(crate::typeface::font(weight)))
         .color(ink)
         .wrapping(iced::widget::text::Wrapping::None);
     let artist = text(track.artist.as_deref().unwrap_or(""))
         .size(look.row.artist)
-        .line_height(iced::widget::text::LineHeight::Relative(1.25))
+        .line_height(crate::typeface::leading::EM_1_25)
         .color(Color { a: ink.a * 0.52, ..ink })
         .wrapping(iced::widget::text::Wrapping::None);
     let words = container(column![title, artist]).width(Length::Fill).clip(true);
@@ -521,7 +522,7 @@ fn action<'a>(
         }
     });
     let press = mouse_area(press).on_enter(Message::ActionHover(Some(key))).on_exit(Message::ActionHoverLeave(key));
-    tooltip(press, text(look.i18n.t(label).to_owned()).size(12), tooltip::Position::Top)
+    tooltip(press, text(look.i18n.t(label).to_owned()).size(crate::typeface::size::HINT), tooltip::Position::Top)
         .style(crate::settings_kit::faded_box(ink.a))
         .into()
 }
@@ -532,13 +533,13 @@ fn ghost<'a>(look: Look<'a>, track: &'a Track) -> Element<'a, Message> {
     let words = column![
         text(track.title.as_str())
             .size(look.row.title)
-            .line_height(iced::widget::text::LineHeight::Relative(1.25))
-            .font(crate::typeface::font(look.row.title_weight))
+            .line_height(crate::typeface::leading::EM_1_25)
+            .font(crate::typeface::adapt(crate::typeface::font(look.row.title_weight)))
             .color(ink)
             .wrapping(iced::widget::text::Wrapping::None),
         text(track.artist.as_deref().unwrap_or(""))
             .size(look.row.artist)
-            .line_height(iced::widget::text::LineHeight::Relative(1.25))
+            .line_height(crate::typeface::leading::EM_1_25)
             .color(Color { a: ink.a * 0.52, ..ink })
             .wrapping(iced::widget::text::Wrapping::None),
     ];

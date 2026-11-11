@@ -312,7 +312,7 @@ pub fn glow_ellipse(
     }
 }
 
-/// Width of one subtitle row. `text()` draws with `Font::DEFAULT`, normal weight, at `px`.
+/// Width of one subtitle row. `text()` draws with `crate::typeface::SYSTEM`, normal weight, at `px`.
 pub fn subtitle_line_width(text: &str, px: f32) -> f32 {
-    folia_visualizer::measure(text, px, iced::Font::DEFAULT, GLOW_MAX_TEXT).width
+    crate::typeface::measure(text, px, crate::typeface::SYSTEM, GLOW_MAX_TEXT).width
 }

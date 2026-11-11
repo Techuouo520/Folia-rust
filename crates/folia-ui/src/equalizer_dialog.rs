@@ -1,6 +1,7 @@
 // The audio effect window, from `AudioEqualizerDialog`, `EqualizerBandGrid`, `Fader`, `PresetChips` and
 // `AudioEffectGrid`.
 
+use crate::typeface::text;
 use folia_core::{EQUALIZER_FREQUENCIES, EQUALIZER_MAX_GAIN_DB, EQUALIZER_MIN_GAIN_DB, EqualizerSettings};
 use folia_i18n::I18n;
 use iced::advanced::mouse::{self, Cursor};
@@ -8,7 +9,7 @@ use iced::advanced::renderer::{self, Quad};
 use iced::advanced::widget::{self, Widget};
 use iced::advanced::{Clipboard, Layout, Shell, layout};
 use iced::widget::canvas::{self, Frame, Path, Stroke};
-use iced::widget::{button, column, container, mouse_area, opaque, row, slider, space, stack, text, tooltip};
+use iced::widget::{button, column, container, mouse_area, opaque, row, slider, space, stack, tooltip};
 use iced::{
     Alignment, Background, Border, Color, Element, Event, Font, Length, Padding, Point, Rectangle, Size, Theme, Vector,
 };
@@ -93,19 +94,19 @@ fn header<'a>(draft: &EqualizerSettings, look: &Look<'a>, tokens: Tokens) -> Ele
     let i18n = look.i18n;
     let title = column![
         text(i18n.t("ui.equalizerTitle"))
-            .size(16)
-            .font(settings_kit::SEMIBOLD)
+            .size(crate::typeface::size::DIALOG_TITLE)
+            .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
             .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(32.0)))
             .color(tokens.t1),
         text(i18n.t("ui.equalizerDescription"))
-            .size(12)
+            .size(crate::typeface::size::HINT)
             .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(18.0)))
             .color(tokens.t2),
     ]
     .spacing(0);
     let switch = row![
         text(i18n.t(if draft.enabled { "ui.equalizerEnabled" } else { "ui.equalizerDisabled" }))
-            .size(12)
+            .size(crate::typeface::size::HINT)
             .color(tokens.t2)
             .wrapping(iced::widget::text::Wrapping::None),
         toggle(tokens, draft.enabled),
@@ -124,8 +125,8 @@ fn header<'a>(draft: &EqualizerSettings, look: &Look<'a>, tokens: Tokens) -> Ele
                 ..button::Style::default()
             }
         });
-    let close =
-        tooltip(close, text(i18n.t("ui.close")).size(12), tooltip::Position::Top).style(settings_kit::faded_box(1.0));
+    let close = tooltip(close, text(i18n.t("ui.close")).size(crate::typeface::size::HINT), tooltip::Position::Top)
+        .style(settings_kit::faded_box(1.0));
     container(row![title, space().width(Length::Fill), switch, close].spacing(8).align_y(Alignment::Start))
         .width(Length::Fill)
         .height(Length::Fixed(HEADER_H))
@@ -193,8 +194,12 @@ fn preset_row<'a>(draft: &EqualizerSettings, look: &Look<'a>, tokens: Tokens) ->
                 ..button::Style::default()
             }
         });
-    let reset = tooltip(reset, text(look.i18n.t("ui.equalizerReset")).size(12), tooltip::Position::Top)
-        .style(settings_kit::faded_box(1.0));
+    let reset = tooltip(
+        reset,
+        text(look.i18n.t("ui.equalizerReset")).size(crate::typeface::size::HINT),
+        tooltip::Position::Top,
+    )
+    .style(settings_kit::faded_box(1.0));
     row![container(chips).width(Length::Fill), reset]
         .spacing(8)
         .align_y(Alignment::Start)
@@ -203,7 +208,7 @@ fn preset_row<'a>(draft: &EqualizerSettings, look: &Look<'a>, tokens: Tokens) ->
 }
 
 fn preset_chip<'a>(look: &Look<'a>, tokens: Tokens, id: &'a str, key: &'a str, chosen: bool) -> Element<'a, Message> {
-    button(container(text(look.i18n.t(key)).size(13)).center_y(Length::Fixed(28.0)))
+    button(container(text(look.i18n.t(key)).size(crate::typeface::size::CONTROL)).center_y(Length::Fixed(28.0)))
         .height(Length::Fixed(28.0))
         .padding(Padding { top: 0.0, right: 12.0, bottom: 0.0, left: 12.0 })
         .on_press(Message::EqualizerPreset(id.to_owned()))
@@ -227,13 +232,19 @@ fn preset_chip<'a>(look: &Look<'a>, tokens: Tokens, id: &'a str, key: &'a str, c
 }
 
 fn section_title<'a>(title: &'a str, hint: Option<&'a str>, tokens: Tokens) -> Element<'a, Message> {
-    let mut line = row![text(title).size(13).font(settings_kit::SEMIBOLD).color(tokens.t2)]
-        .spacing(12)
-        .align_y(Alignment::Center)
-        .padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 4.0 })
-        .height(Length::Fixed(24.0));
+    let mut line = row![
+        text(title)
+            .size(crate::typeface::size::CONTROL)
+            .font(crate::typeface::adapt(settings_kit::SEMIBOLD))
+            .color(tokens.t2)
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center)
+    .padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 4.0 })
+    .height(Length::Fixed(24.0));
     if let Some(hint) = hint {
-        line = line.push(space().width(Length::Fill)).push(text(hint).size(12).color(tokens.t3));
+        line =
+            line.push(space().width(Length::Fill)).push(text(hint).size(crate::typeface::size::HINT).color(tokens.t3));
     }
     column![container(line).padding(Padding { top: 20.0, right: 0.0, bottom: 8.0, left: 0.0 })]
         .height(Length::Fixed(52.0))
@@ -242,11 +253,17 @@ fn section_title<'a>(title: &'a str, hint: Option<&'a str>, tokens: Tokens) -> E
 
 fn band_card<'a>(draft: &EqualizerSettings, tokens: Tokens) -> Element<'a, Message> {
     let scale = column![
-        text("+12 dB").size(11).font(Font::MONOSPACE).color(tokens.t3),
+        text("+12 dB")
+            .size(crate::typeface::size::CAPTION)
+            .font(crate::typeface::adapt(Font::MONOSPACE))
+            .color(tokens.t3),
         space().height(Length::Fill),
-        text("0").size(11).font(Font::MONOSPACE).color(tokens.t3),
+        text("0").size(crate::typeface::size::CAPTION).font(crate::typeface::adapt(Font::MONOSPACE)).color(tokens.t3),
         space().height(Length::Fill),
-        text("−12 dB").size(11).font(Font::MONOSPACE).color(tokens.t3),
+        text("−12 dB")
+            .size(crate::typeface::size::CAPTION)
+            .font(crate::typeface::adapt(Font::MONOSPACE))
+            .color(tokens.t3),
     ]
     .align_x(Alignment::End)
     .height(Length::Fill)
@@ -261,11 +278,13 @@ fn band_card<'a>(draft: &EqualizerSettings, tokens: Tokens) -> Element<'a, Messa
         .width(Length::Fill)
         .height(Length::Fill);
     let grid = stack![curve, bands].width(Length::Fill).height(Length::Fill);
-    let hz = container(text("Hz").size(11).font(Font::MONOSPACE).color(tokens.t3))
-        .width(Length::Fixed(20.0))
-        .height(Length::Fill)
-        .align_y(Alignment::End)
-        .align_x(Alignment::Start);
+    let hz = container(
+        text("Hz").size(crate::typeface::size::CAPTION).font(crate::typeface::adapt(Font::MONOSPACE)).color(tokens.t3),
+    )
+    .width(Length::Fixed(20.0))
+    .height(Length::Fill)
+    .align_y(Alignment::End)
+    .align_x(Alignment::Start);
     container(row![scale, grid, hz].spacing(8).height(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -280,13 +299,23 @@ fn band_card<'a>(draft: &EqualizerSettings, tokens: Tokens) -> Element<'a, Messa
 
 fn band<'a>(gain: f32, index: usize, tokens: Tokens) -> Element<'a, Message> {
     column![
-        container(text(signed(gain)).size(11).font(Font::MONOSPACE).color(tokens.t2))
-            .height(Length::Fixed(16.0))
-            .align_x(Alignment::Center),
+        container(
+            text(signed(gain))
+                .size(crate::typeface::size::CAPTION)
+                .font(crate::typeface::adapt(Font::MONOSPACE))
+                .color(tokens.t2)
+        )
+        .height(Length::Fixed(16.0))
+        .align_x(Alignment::Center),
         Element::new(Fader { index, value: gain, tokens }),
-        container(text(band_label(index)).size(11).font(Font::MONOSPACE).color(tokens.t3))
-            .height(Length::Fixed(16.0))
-            .align_x(Alignment::Center),
+        container(
+            text(band_label(index))
+                .size(crate::typeface::size::CAPTION)
+                .font(crate::typeface::adapt(Font::MONOSPACE))
+                .color(tokens.t3)
+        )
+        .height(Length::Fixed(16.0))
+        .align_x(Alignment::Center),
     ]
     .spacing(6)
     .width(Length::Fill)
@@ -338,31 +367,42 @@ fn effect_cell<'a>(draft: &EqualizerSettings, look: &Look<'a>, tokens: Tokens, i
     let value = effect_value(draft, index);
     let name = look.i18n.t(control.key);
     let mut line = row![
-        text(name).size(13).line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(20.0))).color(tokens.t1),
+        text(name)
+            .size(crate::typeface::size::CONTROL)
+            .line_height(iced::widget::text::LineHeight::Absolute(iced::Pixels(20.0)))
+            .color(tokens.t1),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
     if control.noise {
         let neutral = (value - control.neutral).abs() < f32::EPSILON;
-        let badge = container(text(look.i18n.t("ui.equalizerEffectNoiseTag")).size(11).color(if neutral {
-            tokens.t2
-        } else {
-            tokens.on_accent
-        }))
-        .padding(Padding { top: 0.0, right: 5.0, bottom: 0.0, left: 5.0 })
-        .style(move |_theme: &Theme| container::Style {
-            background: Some(if neutral { tokens.fill2 } else { tokens.accent }.into()),
-            border: Border { radius: 4.0.into(), ..Border::default() },
-            ..container::Style::default()
-        });
+        let badge =
+            container(
+                text(look.i18n.t("ui.equalizerEffectNoiseTag"))
+                    .size(crate::typeface::size::CAPTION)
+                    .color(if neutral { tokens.t2 } else { tokens.on_accent }),
+            )
+            .padding(Padding { top: 0.0, right: 5.0, bottom: 0.0, left: 5.0 })
+            .style(move |_theme: &Theme| container::Style {
+                background: Some(if neutral { tokens.fill2 } else { tokens.accent }.into()),
+                border: Border { radius: 4.0.into(), ..Border::default() },
+                ..container::Style::default()
+            });
         line = line.push(
-            tooltip(badge, text(look.i18n.t("ui.equalizerEffectNoiseTagHint")).size(12), tooltip::Position::Top)
-                .style(settings_kit::faded_box(1.0)),
+            tooltip(
+                badge,
+                text(look.i18n.t("ui.equalizerEffectNoiseTagHint")).size(crate::typeface::size::HINT),
+                tooltip::Position::Top,
+            )
+            .style(settings_kit::faded_box(1.0)),
         );
     }
-    line = line
-        .push(space().width(Length::Fill))
-        .push(text(format_effect(&control, value)).size(12).font(Font::MONOSPACE).color(tokens.t2));
+    line = line.push(space().width(Length::Fill)).push(
+        text(format_effect(&control, value))
+            .size(crate::typeface::size::HINT)
+            .font(crate::typeface::adapt(Font::MONOSPACE))
+            .color(tokens.t2),
+    );
     let position = control.position(value);
     let slider = slider(0.0..=1000.0, position, move |place| Message::EqualizerEffect(index, control.value_at(place)))
         .step(1.0_f32)

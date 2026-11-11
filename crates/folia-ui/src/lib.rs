@@ -62,6 +62,10 @@ pub use equalizer_dialog::{Look as EqualizerLook, view as equalizer_view};
 pub use focus_card::{Direction as CardDirection, Key as CardKey};
 pub use home::title::seam_title_activates;
 pub use home::{HELP_LIST, HelpRow, WallKey, default_level_is_spine, seam_safe_bottom, wall_key_of};
+pub use home::{HomeChrome, Host as HomeHost, overlay as home_overlay};
+pub use login::{Login, Look as LoginLook, Message as LoginMessage};
+pub use online::Message as OnlineMessage;
+pub use online::{AccountState, Online};
 pub use overlay::{
     CAPSULE_COLLAPSE_MS, CAPSULE_EXPAND_MS, CAPSULE_FADE_MS, CAPSULE_LAYOUT_SPRING, CAPSULE_SETTLE_MS, CHROME_HOLD_MS,
     CHROME_LEAVE_MS, CapsuleHover, ChromeClock, ChromeSpring, GLOW_BLUR_PX, GlowEllipse, SUBTITLE_CLEARANCE,
@@ -69,7 +73,9 @@ pub use overlay::{
     glow_ellipse, row_gap, subtitle_at, subtitle_bottom, subtitle_line_width, translation_px, upcoming_look,
     upcoming_px,
 };
+pub use panel::Tab as PanelTab;
 pub use panel::{LikeLook, Message as PanelMessage, PlayerPanel, Room as PanelRoom, View as PanelView, like_look};
+pub use panel_sheets::{Look as SheetsLook, Sheets, view as sheets_view};
 pub use platform_highlight::ProviderHighlight;
 pub use platform_rows::{ProviderRowStatus, order_provider_rows};
 pub use playback::{AudioFailure, LoadPhase, Loading, Message as PlaybackMessage, Playback};
@@ -78,11 +84,19 @@ pub use playback_navigation::PlaybackNavigation;
 pub use player_bar::{CapsuleBox, Look as PlayerBarLook, PlayerBar, capsule_box};
 pub use playlist_dialog::{Dialog as PlaylistDialog, Look as PlaylistLook, Message as PlaylistMessage, PlaylistChoice};
 pub use reorder::drag_to_reorder;
+pub use search::{Message as SearchMessage, SearchPage, View as SearchView};
 pub use search_results::format_duration;
+pub use settings::{Message as SettingsMessage, Section as SettingsSection, Settings, Values as SettingsValues};
 pub use settings_kit::{Faded, Tokens, panel_glass, quick_tile_fill, tools_glass};
 pub use smooth_scroll::{LINE_PX, PROGRAM_EASE, PROGRAM_MS, Scroll, WHEEL_EASE, WHEEL_MS};
+pub use sources::Sources;
 pub use timeline::{Follow, Message as TimelineMessage, Timeline, USER_SCROLL_MS, active_line, seek_time};
+pub use typeface::SYSTEM as INTERFACE_FONT;
 pub use typeface::install as install_fonts;
+pub use typeface::interface_font_for;
+pub use typeface::text as interface_text;
+pub use typeface::{TextStyle, UI_TEXT_STYLES};
+pub use wall::{CoverSource as WallCover, Message as WallMessage, Shape as WallShape, Tile as WallTile, Wall};
 pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, seam_on_axis, wider_span};
 pub use wall_pan::{Glide as WallGlide, Inertia as WallInertia, Release as WallRelease};
 pub use wall_shift::{Kind as ShiftKind, Pose as ShiftPose, Shift as WallShift};
@@ -105,7 +119,6 @@ use lucide_static_svg::Icon;
 
 use crate::background::{blocking, save};
 use crate::library::LibraryPage;
-use crate::search::SearchPage;
 
 /// The window folia-app opens; the shell lays out before the first resize event arrives.
 pub const INITIAL_WINDOW: Size = Size::new(1200.0, 800.0);
@@ -340,6 +353,7 @@ pub struct Shell {
 
 impl Shell {
     pub fn new(init: Init) -> (Self, Task<Message>) {
+        typeface::language(init.i18n.language());
         let theme = theme_for(&init.theme, init.appearance.theme, init.appearance.animation_intensity);
         let omni = Omni::new(init.cache_dir, init.keyring_service)
             .inspect_err(|err| tracing::error!(error = err as &dyn std::error::Error, "online music unavailable"))
@@ -3281,6 +3295,7 @@ impl Shell {
             return Task::none();
         }
         self.general.language = preference;
+        typeface::language(language);
         tracing::info!(language = language.code(), ?preference, "language switched");
         save(&self.store, &self.general)
     }

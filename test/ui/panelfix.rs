@@ -14,7 +14,7 @@ use folia_ui::{
 use folia_visualizer::Style;
 use iced::advanced::renderer::Headless;
 use iced::widget::image::Handle;
-use iced::{Color, Element, Font, Pixels, Size, Theme as IcedTheme};
+use iced::{Color, Element, Pixels, Size, Theme as IcedTheme};
 use iced_runtime::user_interface::{Cache, UserInterface};
 
 #[test]
@@ -94,7 +94,8 @@ fn dialogs_are_written_at_1920_by_1080() {
     let i18n = I18n::new(Language::ZhCn).unwrap();
     let theme = Theme::MIDNIGHT;
     let tokens = Tokens::new(&theme, false);
-    let dir = std::env::temp_dir().join("folia-panelfix");
+    let output = tempfile::tempdir().unwrap();
+    let dir = output.path();
     std::fs::create_dir_all(&dir).unwrap();
 
     let choices = [
@@ -131,7 +132,7 @@ fn dialogs_are_written_at_1920_by_1080() {
     assert!(shot.iter().any(|byte| *byte != 8 && *byte != 10));
 }
 
-fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia_core::Track]) -> PanelView<'a> {
+pub(super) fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia_core::Track]) -> PanelView<'a> {
     PanelView {
         i18n,
         theme,
@@ -185,7 +186,7 @@ fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia_core::Trac
 fn paint<M>(root: Element<'_, M>, size: Size, clear: Color) -> Vec<u8> {
     folia_ui::install_fonts();
     let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), None)).unwrap();
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
     let mut ui = UserInterface::build(root, size, Cache::default(), &mut renderer);
     let style = iced::advanced::renderer::Style { text_color: Color::WHITE };
     ui.draw(&mut renderer, &IcedTheme::Dark, &style, iced::mouse::Cursor::Unavailable);

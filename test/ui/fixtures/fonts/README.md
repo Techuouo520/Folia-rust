@@ -1,0 +1,13 @@
+# Chromium font references
+
+Generated with Playwright and installed Chrome 156.0.8078.80 on Windows, Folia 0.7.25 reference sources. No font files are included. Microsoft YaHei UI resolves to `msyh.ttc` face 1 (400/500), `msyhbd.ttc` face 1 (600–900), and `msyhl.ttc` face 1 for lighter weights. CDP `CSS.getPlatformFontsForNode` verified the family and PostScript face in the real AppShell, including its Sheet portal layer. A standalone login probe inherits the different CSS body stack and is not a valid AppShell font-family baseline.
+
+`0.png`–`119.png`: neutral-color grayscale raster samples, 600×40 CSS pixels, 8px left inset, 40px line box. The first 84 cover seven sizes, six weights and both polarities at DPR 1. The remaining 36 cover DPR 1.25/1.5/2. `translateZ(0)` requests the composited grayscale path rather than platform LCD subpixel rendering. Colors are the settings kit's neutral fallbacks, isolating text coverage from gradients and transparency. Full application screenshots retain the actual Daylight/Midnight colors.
+
+`vertical-*.png`: 80×240 CSS pixels, 8px inset, actual `vertical-rl` shaping, 12/14px bold, 0.1/0.18em tracking and 1.15 line height, Chinese tabs and a mixed Latin/CJK/punctuation label. `vertical.json` records Chromium's measured line box.
+
+The tests compare normalized ink with a **15% maximum relative difference**, accounting for DirectWrite versus Swash grayscale rasterization. This is not a whole-page pixel identity assertion. Vertical geometry must match within 0.1px across the line and 1px along it; measured differences on the capture host were below 0.02px. Physical-origin tests separately cover DPR 1/1.25/1.5/1.75/2. Normal test output uses `tempfile`; `FOLIA_FONT_CAPTURE` explicitly opts into keeping review PNGs at a caller-specified directory.
+
+To regenerate intentionally, install the reference application's dependencies in a temporary copy, then run `node test/ui/capture_fonts.mjs --modules <temporary-reference-root> --out test/ui/fixtures/fonts --update`. Compare and review any change before committing; a failing test must not automatically replace these references. `capture_surfaces.mjs` captures real application views from a running temporary Vite reference server. It never starts the Rust app or controls OS input.
+
+The files under `surfaces/` are original full-page references, not golden images of the Rust implementation. Their scenario names record size and theme. Business content differs where the Rust migration has different capabilities; matching typography is checked by the isolated raster tests and the recorded CSS inventory in the untracked `docs/fonts.md`.

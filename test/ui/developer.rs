@@ -9,7 +9,7 @@ use folia_ui::developer::{self, Developer};
 use folia_ui::{Tokens, install_fonts};
 use iced::advanced::renderer::Headless;
 use iced::widget::container;
-use iced::{Alignment, Color, Element, Font, Pixels, Size, Theme as IcedTheme};
+use iced::{Alignment, Color, Element, Pixels, Size, Theme as IcedTheme};
 use iced_runtime::user_interface::{Cache, UserInterface};
 use tracing::Level;
 
@@ -17,7 +17,8 @@ use tracing::Level;
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn developer_page_and_overlays_are_painted_in_both_themes() {
     let i18n = I18n::new(Language::ZhCn).unwrap();
-    let dir = std::env::temp_dir().join("folia-developer");
+    let output = tempfile::tempdir().unwrap();
+    let dir = output.path();
     std::fs::create_dir_all(&dir).unwrap();
     let log_path = dir.join("runtime.log");
     let memory_path = dir.join("memory.log");
@@ -122,7 +123,7 @@ fn memory_samples(count: usize) -> Vec<MemorySample> {
 fn paint<M>(root: Element<'_, M>, size: Size, clear: Color) -> Vec<u8> {
     install_fonts();
     let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(Font::DEFAULT, Pixels(16.0), None)).unwrap();
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
     let mut ui = UserInterface::build(root, size, Cache::default(), &mut renderer);
     let style = iced::advanced::renderer::Style { text_color: Color::WHITE };
     ui.draw(&mut renderer, &IcedTheme::Dark, &style, iced::mouse::Cursor::Unavailable);

@@ -4,6 +4,8 @@
 
 mod chrome_motion;
 mod developer;
+mod font_surfaces;
+mod fonts;
 mod glass_tone;
 mod icon_dots;
 mod loading;
@@ -298,7 +300,8 @@ fn a_wheel_glide_closes_in_with_an_80ms_time_constant() {
 #[test]
 fn provider_rows_share_account_priority_and_registration_ties() {
     use folia_ui::{ProviderRowStatus as Status, order_provider_rows};
-    let omni = folia_omni::Omni::new(std::env::temp_dir(), "Folia-rust-order-test".into()).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let omni = folia_omni::Omni::new(temp.path().to_path_buf(), "Folia-rust-order-test".into()).unwrap();
     let rows = omni.platforms().into_iter().map(|platform| {
         let status = match platform.id {
             "kugou" | "spotify" => Status::SignedIn,

@@ -1,5 +1,6 @@
 // The bottom-right wall tools button and its panel, from `WallToolsButton`.
 
+use crate::typeface::text;
 use std::time::Instant;
 
 use folia_core::Track;
@@ -7,7 +8,7 @@ use folia_i18n::I18n;
 use folia_render::Plate;
 use iced::widget::slider::{Handle, HandleShape, Rail};
 use iced::widget::{
-    button, column, container, mouse_area, pin, row, scrollable, shader, space, stack, text, tooltip, tooltip::Position,
+    button, column, container, mouse_area, pin, row, scrollable, shader, space, stack, tooltip, tooltip::Position,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Rectangle, Size, Theme};
 use lucide_static_svg::Icon;
@@ -280,7 +281,7 @@ fn island_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: In
     let border = paint.wash(0.07, 0.08);
     let count = face.queue.len();
     let list: Element<'a, Message> = if count == 0 {
-        container(text(face.i18n.t("queue.empty").to_owned()).size(12).color(paint.ink(0.45)))
+        container(text(face.i18n.t("queue.empty").to_owned()).size(crate::typeface::size::HINT).color(paint.ink(0.45)))
             .width(Length::Fill)
             .height(Length::Fixed(geo.list_h))
             .align_x(Alignment::Center)
@@ -315,8 +316,8 @@ fn island_header<'a>(home: &HomeChrome, face: Face<'a>, count: usize) -> Element
     let count_text = count.to_string();
     let title = face.i18n.format("wallTools.queueCount", &[("count", count_text.as_str())]);
     let title = text(title)
-        .size(12)
-        .font(crate::typeface::font(iced::font::Weight::Bold))
+        .size(crate::typeface::size::HINT)
+        .font(crate::typeface::adapt(crate::typeface::BOLD))
         .color(face.paint.ink(0.72))
         .width(Length::Fill)
         .wrapping(iced::widget::text::Wrapping::None);
@@ -346,10 +347,16 @@ fn clear_button<'a>(home: &HomeChrome, face: Face<'a>) -> Element<'a, Message> {
         let accent = paint.tokens().accent;
         let glyph = icon(Icon::Trash, 15.0, on_accent);
         button(
-            row![glyph, text(label).size(11).font(crate::typeface::font(iced::font::Weight::Bold)).color(on_accent)]
-                .spacing(6)
-                .align_y(Alignment::Center)
-                .padding(Padding { top: 0.0, right: 7.0, bottom: 0.0, left: 7.0 }),
+            row![
+                glyph,
+                text(label)
+                    .size(crate::typeface::size::CAPTION)
+                    .font(crate::typeface::adapt(crate::typeface::BOLD))
+                    .color(on_accent)
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .padding(Padding { top: 0.0, right: 7.0, bottom: 0.0, left: 7.0 }),
         )
         .height(Length::Fixed(28.0))
         .padding(0)
@@ -465,8 +472,8 @@ fn heading<'a>(face: Face<'a>, key: &'static str) -> Element<'a, Message> {
         rule(face.paint.wash(0.09, 0.10)),
         container(
             text(face.i18n.t(key).to_owned())
-                .size(10)
-                .font(crate::typeface::font(iced::font::Weight::Bold))
+                .size(crate::typeface::size::SMALL_BADGE)
+                .font(crate::typeface::adapt(crate::typeface::BOLD))
                 .color(face.paint.ink(0.52)),
         )
         .width(Length::Fill)
@@ -509,10 +516,18 @@ fn action_row<'a>(
     let paint = face.paint.faded(if enabled { 1.0 } else { 0.35 });
     let ink = paint.text();
     let icon = icon(glyph, 17.0, ink);
-    let label = text(label.to_owned()).size(13).font(crate::typeface::font(iced::font::Weight::Normal)).color(ink);
+    let label = text(label.to_owned())
+        .size(crate::typeface::size::CONTROL)
+        .font(crate::typeface::adapt(crate::typeface::font(iced::font::Weight::Normal)))
+        .color(ink);
     let mut content = row![icon, label].spacing(11).align_y(Alignment::Center).width(Length::Fill);
     if let Some(value) = value {
-        content = content.push(text(value.to_owned()).size(12).font(semibold()).color(paint.ink(0.6)));
+        content = content.push(
+            text(value.to_owned())
+                .size(crate::typeface::size::HINT)
+                .font(crate::typeface::adapt(semibold()))
+                .color(paint.ink(0.6)),
+        );
     }
     if let Some(checked) = toggle {
         content = content.push(toggle_face(paint, checked));
@@ -579,15 +594,20 @@ fn lights_toggle<'a>(face: Face<'a>) -> Element<'a, Message> {
     let segment = |label: &str, active: bool| {
         let (fill, color) =
             if active { (Some(paint.tokens().accent), paint.tokens().on_accent) } else { (None, paint.ink(0.58)) };
-        container(text(label.to_owned()).size(10.5).font(crate::typeface::font(iced::font::Weight::Bold)).color(color))
-            .width(Length::Fixed(44.0))
-            .align_x(Alignment::Center)
-            .padding(Padding { top: 4.0, right: 9.0, bottom: 4.0, left: 9.0 })
-            .style(move |_theme: &Theme| container::Style {
-                background: fill.map(Background::Color),
-                border: Border { radius: 999.0.into(), ..Border::default() },
-                ..container::Style::default()
-            })
+        container(
+            text(label.to_owned())
+                .size(crate::typeface::size::QUEUE_ARTIST)
+                .font(crate::typeface::adapt(crate::typeface::BOLD))
+                .color(color),
+        )
+        .width(Length::Fixed(44.0))
+        .align_x(Alignment::Center)
+        .padding(Padding { top: 4.0, right: 9.0, bottom: 4.0, left: 9.0 })
+        .style(move |_theme: &Theme| container::Style {
+            background: fill.map(Background::Color),
+            border: Border { radius: 999.0.into(), ..Border::default() },
+            ..container::Style::default()
+        })
     };
     let face_row =
         row![segment(face.i18n.t("home.latticeLightsOn"), true), segment(face.i18n.t("home.latticeLightsOff"), false)]
@@ -618,7 +638,7 @@ fn help_trigger<'a>(face: Face<'a>) -> Element<'a, Message> {
                 ..button::Style::default()
             }
         });
-    tooltip(button, text(face.i18n.t("home.latticeHelp").to_owned()).size(12), Position::Top)
+    tooltip(button, text(face.i18n.t("home.latticeHelp").to_owned()).size(crate::typeface::size::HINT), Position::Top)
         .delay(TOOLTIP_DELAY)
         .style(paint.tip())
         .into()
@@ -672,14 +692,19 @@ fn help_row<'a>(i18n: &'a I18n, paint: Faded, key: &'static str, kbd: &str, bord
     let ink = paint.text();
     let ring = paint.ink(0.36);
     let content = row![
-        text(i18n.t(key).to_owned()).size(12).color(paint.ink(0.76)),
+        text(i18n.t(key).to_owned()).size(crate::typeface::size::HINT).color(paint.ink(0.76)),
         space().width(Length::Fill),
-        container(text(kbd.to_owned()).size(10).font(semibold()).color(ink))
-            .padding(Padding { top: 2.0, right: 6.0, bottom: 2.0, left: 6.0 })
-            .style(move |_theme: &Theme| container::Style {
-                border: Border { radius: 6.0.into(), width: 1.0, color: ring },
-                ..container::Style::default()
-            })
+        container(
+            text(kbd.to_owned())
+                .size(crate::typeface::size::SMALL_BADGE)
+                .font(crate::typeface::adapt(semibold()))
+                .color(ink)
+        )
+        .padding(Padding { top: 2.0, right: 6.0, bottom: 2.0, left: 6.0 })
+        .style(move |_theme: &Theme| container::Style {
+            border: Border { radius: 6.0.into(), width: 1.0, color: ring },
+            ..container::Style::default()
+        })
     ]
     .align_y(Alignment::Center)
     .width(Length::Fill);
@@ -742,7 +767,12 @@ fn volume_row<'a>(face: Face<'a>) -> Element<'a, Message> {
                 },
             }
         ),
-        text(label).size(12).color(paint.ink(0.66)).font(semibold()).width(Length::Fixed(38.0)).align_x(Alignment::End),
+        text(label)
+            .size(crate::typeface::size::HINT)
+            .color(paint.ink(0.66))
+            .font(crate::typeface::adapt(semibold()))
+            .width(Length::Fixed(38.0))
+            .align_x(Alignment::End),
     ]
     .spacing(8)
     .align_y(Alignment::Center)
@@ -787,7 +817,10 @@ fn quick<'a>(lucide: Icon, cell: f32, paint: Faded, on_press: Option<Message>, t
                 ..button::Style::default()
             }
         });
-    tooltip(button, text(tip).size(12), Position::Top).delay(TOOLTIP_DELAY).style(paint.tip()).into()
+    tooltip(button, text(tip).size(crate::typeface::size::HINT), Position::Top)
+        .delay(TOOLTIP_DELAY)
+        .style(paint.tip())
+        .into()
 }
 
 fn round_button<'a>(
@@ -822,5 +855,5 @@ fn round_button<'a>(
 }
 
 fn semibold() -> iced::Font {
-    crate::typeface::font(iced::font::Weight::Semibold)
+    crate::typeface::SEMIBOLD
 }

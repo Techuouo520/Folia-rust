@@ -7,6 +7,8 @@ pub mod glyphs;
 mod pipeline;
 mod plate;
 mod scene;
+pub mod text_run;
+pub mod typeface;
 mod wash;
 
 pub use backdrop::{

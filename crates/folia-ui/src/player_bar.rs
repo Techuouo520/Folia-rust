@@ -1,13 +1,14 @@
 // The now-playing control bar from `FloatingPlayerControls.tsx`: a pill with a thin progress bar that
 // opens on hover into the play button, the switchable title, the progress row and two slot buttons.
 
+use crate::typeface::text;
 use std::time::Instant;
 
 use folia_core::Repeat;
 use folia_i18n::I18n;
 use folia_render::Plate;
 use folia_visualizer::Ease;
-use iced::widget::{button, column, container, mouse_area, row, shader, slider, space, stack, text, tooltip};
+use iced::widget::{button, column, container, mouse_area, row, shader, slider, space, stack, tooltip};
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Point, Size, Vector};
 use lucide_static_svg::Icon;
 
@@ -44,7 +45,7 @@ const FADE_MS: f64 = 200.0;
 const TONE_MS: f64 = 300.0;
 /// Play button `transition-transform`, Tailwind's 150ms.
 const SCALE_MS: f64 = 150.0;
-const TITLE_FONT: Font = crate::typeface::font(iced::font::Weight::Bold);
+const TITLE_FONT: Font = crate::typeface::BOLD;
 const TIME_FONT: Font = crate::typeface::with(iced::Font::MONOSPACE, iced::font::Weight::Medium);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -624,8 +625,8 @@ fn elapsed_ms(at: Instant, now: Instant) -> f64 {
 /// One centred title line between the arrow zones, shifted `x` pixels.
 fn title_text<'a>(content: &'a str, ink: Color, opacity: f32, x: f32) -> Element<'a, Message> {
     let line = text(content)
-        .size(14)
-        .font(TITLE_FONT)
+        .size(crate::typeface::size::BODY)
+        .font(crate::typeface::adapt(TITLE_FONT))
         .color(Color { a: ink.a * opacity.clamp(0.0, 1.0), ..ink })
         .wrapping(iced::widget::text::Wrapping::None);
     let shift =
@@ -648,9 +649,9 @@ fn progress<'a>(playback: &Playback, look: &Look<'a>, shown: f32) -> Element<'a,
     let time = |seconds: f64, align: Alignment| {
         container(
             text(crate::background::format_time(seconds))
-                .size(10)
-                .font(TIME_FONT)
-                .line_height(iced::widget::text::LineHeight::Relative(1.5))
+                .size(crate::typeface::size::SMALL_BADGE)
+                .font(crate::typeface::adapt(TIME_FONT))
+                .line_height(crate::typeface::leading::EM_1_5)
                 .color(time_color),
         )
         .width(Length::Fixed(32.0))
@@ -787,7 +788,9 @@ fn slot_button<'a>(
         } else {
             iced::mouse::Interaction::Pointer
         });
-    tooltip(button, text(label.to_owned()).size(12), tooltip::Position::Top).style(container::rounded_box).into()
+    tooltip(button, text(label.to_owned()).size(crate::typeface::size::HINT), tooltip::Position::Top)
+        .style(container::rounded_box)
+        .into()
 }
 
 /// The capsule's fill and shadow, and how far the shadow reaches above the capsule.

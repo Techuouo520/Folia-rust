@@ -4,9 +4,17 @@ Upstream: cryoglyph 0.1.0 from crates.io (https://github.com/iced-rs/cryoglyph),
 the license files are kept beside this note. Wired in by `[patch.crates-io]` in the workspace `Cargo.toml`.
 `examples/`, `benches/` and `samples/` of the published crate are left out.
 
-Only change: `src/shader.wgsl`, `fs_main`, mask glyphs. With iced's default `web-colors` (`ColorMode::Web`)
-the coverage of a glyph's edge pixels is blended in gamma space, so dark text on a light background comes out
-about 16% heavier than Chrome on Windows (measured on 13px Microsoft YaHei UI Bold, #1f1f1f on #e6e6e6).
-Dark text now raises the coverage to a power: 1.7 at luminance 0.1 and below, easing to 1.0 (unchanged) at
-0.5 and above. `ColorMode::Accurate` is untouched. The vertex stage passes the color mode to the fragment stage
-as a flat varying.
+Only code change: `src/shader.wgsl`, `fs_main`, mask glyphs, plus the flat color-mode varying from the vertex stage.
+With iced's default `web-colors` (`ColorMode::Web`), coverage is calibrated against composited grayscale Chromium
+text on Windows. The exponent is 1.05 at luminance 0.1 and below, transitioning with smoothstep to 0.4 at
+luminance 0.9 and above. `ColorMode::Accurate` and color glyphs are untouched. Glyph size and advance are unchanged.
+
+The former 1.7-to-1.0 curve was fitted to one 13px bold Chinese line. A broader matrix exposed substantial loss
+of ink in small regular text and insufficient contrast for light text. `test/ui/fonts.rs` now exercises the real
+iced/cryoglyph path against 120 Playwright PNGs: seven sizes, six weights, two polarities, and DPR 1/1.25/1.5/2.
+The maximum allowed normalized ink error is 15%. Reference metadata and the explicit regeneration command are in
+`test/ui/fixtures/fonts/README.md`; references are never updated by tests.
+
+This is a grayscale approximation for the captured Windows font files and Chrome 156.0.8078.80, not a claim of
+pixel equality with every DirectWrite/Skia version or a simulation of LCD subpixel rendering. Recheck both
+polarities and the full matrix when updating iced, cosmic-text, Swash, Chromium, or the system fonts.

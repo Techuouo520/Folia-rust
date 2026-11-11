@@ -122,11 +122,10 @@ fn fs_main(in_frag: VertexOutput) -> @location(0) vec4<f32> {
         }
         case 1u: {
             var coverage = textureSampleLevel(mask_atlas_texture, atlas_sampler, in_frag.uv, 0.0).x;
-            // Folia patch (PATCH.md): in web color mode the edge coverage blends in gamma space, which makes dark
-            // text heavier than Chrome on Windows; dark text gets a coverage gamma up to 1.7, light text is left alone.
+            // Folia patch (PATCH.md): match Chromium grayscale contrast for both text polarities.
             if in_frag.srgb == 0u {
                 let luminance = dot(in_frag.color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-                coverage = pow(coverage, mix(1.7, 1.0, smoothstep(0.1, 0.5, luminance)));
+                coverage = pow(coverage, mix(1.05, 0.4, smoothstep(0.1, 0.9, luminance)));
             }
             return vec4<f32>(in_frag.color.rgb, in_frag.color.a * coverage);
         }

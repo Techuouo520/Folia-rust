@@ -1,9 +1,10 @@
 // Search results (`SearchResultsList` / `SearchResultRow`): a 76px virtual list, no index and no playing block.
 
+use crate::typeface::text;
 use folia_core::Track;
 use iced::widget::scrollable::Viewport;
 use iced::widget::{
-    Id, button, column, container, image, mouse_area, responsive, row, scrollable, space, stack, text, tooltip,
+    Id, button, column, container, image, mouse_area, responsive, row, scrollable, space, stack, tooltip,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Task, Theme, mouse};
 use lucide_static_svg::Icon;
@@ -224,8 +225,8 @@ fn titles<'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let title = button(
         text(&track.title)
-            .size(14)
-            .font(crate::typeface::font(iced::font::Weight::Semibold))
+            .size(crate::typeface::size::BODY)
+            .font(crate::typeface::adapt(crate::typeface::SEMIBOLD))
             .color(look.text)
             .wrapping(text::Wrapping::None),
     )
@@ -243,11 +244,12 @@ fn meta_line<'a, M: 'a>(track: &'a Track, look: Look<'a>) -> Element<'a, M> {
         return container(meta_text(artist, look.secondary)).width(Length::Fill).clip(true).into();
     };
     let line = responsive(move |space| {
-        let natural = |value: &str| folia_visualizer::measure(value, 12.0, iced::Font::DEFAULT, f32::INFINITY).width;
+        let natural = |value: &str| crate::typeface::measure(value, 12.0, crate::typeface::SYSTEM, f32::INFINITY).width;
         let dot_w = natural("•").ceil() + 8.0;
         let album_w = natural(album).ceil().min(space.width * 0.45);
         let artist_w = natural(artist).ceil().min((space.width - album_w - dot_w).max(0.0));
-        let dot = text("•").size(12).color(Color { a: look.secondary.a * 0.4, ..look.secondary });
+        let dot =
+            text("•").size(crate::typeface::size::HINT).color(Color { a: look.secondary.a * 0.4, ..look.secondary });
         row![
             container(meta_text(artist, look.secondary)).width(Length::Fixed(artist_w)).clip(true),
             dot,
@@ -261,13 +263,13 @@ fn meta_line<'a, M: 'a>(track: &'a Track, look: Look<'a>) -> Element<'a, M> {
 }
 
 fn meta_text<'a>(value: &'a str, color: Color) -> iced::widget::Text<'a> {
-    text(value).size(12).color(color).wrapping(text::Wrapping::None)
+    text(value).size(crate::typeface::size::HINT).color(color).wrapping(text::Wrapping::None)
 }
 
 fn duration_text<'a, M: 'a>(track: &Track, ink: Color) -> Element<'a, M> {
     text(format_duration(track.duration))
-        .size(12)
-        .font(iced::Font::MONOSPACE)
+        .size(crate::typeface::size::HINT)
+        .font(crate::typeface::adapt(iced::Font::MONOSPACE))
         .color(Color { a: ink.a * 0.35, ..ink })
         .into()
 }
@@ -299,7 +301,9 @@ fn queue_button<'a, M: Clone + 'a>(
     });
     let button = mouse_area(button).on_enter((bindings.plus)(Some(index))).on_exit((bindings.plus)(None));
     if shown {
-        tooltip(button, text(look.queue_tip).size(12), tooltip::Position::Top).style(container::rounded_box).into()
+        tooltip(button, text(look.queue_tip).size(crate::typeface::size::HINT), tooltip::Position::Top)
+            .style(container::rounded_box)
+            .into()
     } else {
         button.into()
     }
