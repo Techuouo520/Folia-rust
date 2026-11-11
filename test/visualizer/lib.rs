@@ -3,6 +3,8 @@
 #![cfg(test)]
 
 mod controls;
+mod nebbia_gpu;
+mod nebbia_legibility;
 mod nebbia_png;
 
 use folia_core::{AnimationIntensity, Line, Word};
@@ -84,33 +86,35 @@ fn nebbia_song() -> folia_core::Lyrics {
 #[test]
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn nebbia_vocal_energy_changes_the_frame() {
-    // SAFETY: no other test in this package reads or writes the environment.
-    unsafe { std::env::set_var("FOLIA_NEBBIA_STROKES", nebbia_strokes_path()) };
+    if nebbia_gpu::with_strokes_in_child("nebbia_vocal_energy_changes_the_frame") {
+        return;
+    }
+    let _guard = nebbia_gpu::GPU.lock().unwrap();
     let lyrics = nebbia_song();
     let theme = folia_core::Theme::MIDNIGHT;
     let (energy, _, _) = folia_visualizer::styles::nebbia::vocal_energy(0.0, 1.0, 200.0, 1.0 / 60.0);
     let quiet = nebbia_png::rgba(1200, 800, &lyrics, 6.0, &theme);
     let loud = nebbia_png::rgba_energy(1200, 800, &lyrics, 6.0, &theme, energy);
-    let dir = std::env::temp_dir().join("folia-bands");
-    std::fs::create_dir_all(&dir).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let dir = temporary.path();
     let quiet_path = dir.join("nebbia-power0.png");
     let loud_path = dir.join("nebbia-power200.png");
     image::RgbaImage::from_raw(1200, 800, quiet.clone()).unwrap().save(&quiet_path).unwrap();
     image::RgbaImage::from_raw(1200, 800, loud.clone()).unwrap().save(&loud_path).unwrap();
     assert_ne!(quiet, loud, "vocal energy 200 did not change the nebbia frame");
-    let _ = std::fs::remove_file(&quiet_path);
-    let _ = std::fs::remove_file(&loud_path);
 }
 
 #[test]
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn nebbia_offscreen_png() {
-    // SAFETY: no other test in this package reads or writes the environment.
-    unsafe { std::env::set_var("FOLIA_NEBBIA_STROKES", nebbia_strokes_path()) };
+    if nebbia_gpu::with_strokes_in_child("nebbia_offscreen_png") {
+        return;
+    }
+    let _guard = nebbia_gpu::GPU.lock().unwrap();
     let lyrics = nebbia_song();
     let theme = folia_core::Theme::MIDNIGHT;
-    let dir = std::path::PathBuf::from(std::env::var("TEMP").unwrap()).join("folia-nebbia-fix");
-    std::fs::create_dir_all(&dir).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let dir = temporary.path();
     for (name, time) in [("nebbia-06.0s.png", 6.0_f64), ("nebbia-10.5s.png", 10.5), ("nebbia-15.0s.png", 15.0)] {
         let pixels = nebbia_png::rgba(1920, 1080, &lyrics, time, &theme);
         let image = image::RgbaImage::from_raw(1920, 1080, pixels).unwrap();
@@ -353,6 +357,25 @@ fn claddagh_gap_borrows_time_and_the_front_glyph_is_the_large_one() {
     assert!(close(ring_angle(&lines, 0.4), 0.0, 1e-6));
     assert!(close(ring_angle(&lines, 1.0), 0.0, 1e-6));
     assert!(close(ring_angle(&lines, 8.0), std::f64::consts::PI, 1e-3));
+}
+
+#[test]
+fn claddagh_centers_single_glyph_and_keeps_the_last_gap() {
+    let one = line(0.0, 2.0, &[("回", 0.0, 2.0)]);
+    assert!(placed(&one, 72.0, 400.0, 1.0, 0.0)[0].nominal.abs() < 1e-6);
+    let three = line(0.0, 3.0, &[("回", 0.0, 1.0), ("回", 1.0, 2.0), ("回", 2.0, 3.0)]);
+    let p = placed(&three, 72.0, 400.0, 1.0, 0.0);
+    let first = p[1].nominal - p[0].nominal;
+    let last = p[2].nominal - p[1].nominal;
+    assert!(last > first * 0.85, "last glyphs are squeezed together: {first}, {last}");
+}
+
+#[test]
+fn claddagh_far_lines_do_not_overlay_the_front_line() {
+    let one = line(0.0, 2.0, &[("回", 0.0, 2.0)]);
+    let p = placed(&one, 72.0, 400.0, 1.0, 0.0);
+    let moment = RingMoment { line_index: 2, ..front_moment() };
+    assert_eq!(glyph(&p[0], 0, &moment).opacity, 0.0);
 }
 
 #[test]

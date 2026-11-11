@@ -8,7 +8,7 @@ mod tuning;
 use std::rc::Rc;
 
 use folia_core::{AnimationIntensity, Rgb};
-use iced::widget::canvas::{Frame, Text};
+use iced::widget::canvas::{Frame, Path, Text};
 use iced::{Point, Size, Vector};
 
 use crate::styles::claddagh::audio::{Spring, unit};
@@ -122,9 +122,8 @@ fn draw_axis(frame: &mut Frame, size: Size, scene: &Scene<'_>, tilt_deg: f32, ca
     frame.with_save(|frame| {
         frame.translate(Vector::new(size.width / 2.0, size.height / 2.0));
         frame.rotate(angle);
-        frame.fill_rectangle(
-            Point::new(-150.0 * scale_x, -2.0 * scale_y),
-            Size::new(300.0 * scale_x, 4.0 * scale_y),
+        frame.fill(
+            &Path::rectangle(Point::new(-150.0 * scale_x, -2.0 * scale_y), Size::new(300.0 * scale_x, 4.0 * scale_y)),
             color(mixed, alpha),
         );
     });
@@ -133,11 +132,12 @@ fn draw_axis(frame: &mut Frame, size: Size, scene: &Scene<'_>, tilt_deg: f32, ca
 fn draw_line(ctx: &DrawCtx<'_>, cache: &mut Cache, frame: &mut Frame, index: usize) {
     let DrawCtx { scene, size, center, rx, base_rx, font_px, ring, focus, tilt_deg, letter, power, salt } = *ctx;
     let line = &scene.lyrics.lines[index];
+    let spacing = f64::from((1.0 + focus) / (1.0 + crate::Values::default().number(manifest(), "focusScaleRatio")));
     let layout = cache.layout.get_or_insert(line, size, scene.font_scale, salt, || {
-        Rc::new(LineLayout { placed: layout::placed(line, font_px, base_rx, 1.0, letter) })
+        Rc::new(LineLayout { placed: layout::placed(line, font_px, base_rx, spacing, letter) })
     });
     let active = cache.layout.get_or_insert(&scene.lyrics.lines[center], size, scene.font_scale, salt, || {
-        Rc::new(LineLayout { placed: layout::placed(&scene.lyrics.lines[center], font_px, base_rx, 1.0, letter) })
+        Rc::new(LineLayout { placed: layout::placed(&scene.lyrics.lines[center], font_px, base_rx, spacing, letter) })
     });
     let end = layout::render_end(&scene.lyrics.lines, center);
     let own_end = layout::render_end(&scene.lyrics.lines, index);
@@ -145,7 +145,7 @@ fn draw_line(ctx: &DrawCtx<'_>, cache: &mut Cache, frame: &mut Frame, index: usi
     let own_offset = layout::sung_offset(&layout.placed, scene.time, own_end);
     let progress = layout::playback_progress(&active.placed, scene.time, end);
     let shift = layout::word_shift(index, center, own_offset, active_offset, progress, ring);
-    let line_diff = (ring - center as f64 * std::f64::consts::PI).abs() / std::f64::consts::PI;
+    let line_diff = (ring - index as f64 * std::f64::consts::PI).abs() / std::f64::consts::PI;
     let (fade, length_scale) = layout::length_factors(&scene.lyrics.lines, index, center, line_diff);
     let upcoming = layout::entry_progress(line, scene.time, index > center);
     let origin = Point::new(size.width / 2.0, size.height / 2.0);

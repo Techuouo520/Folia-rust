@@ -7,8 +7,8 @@ use std::sync::Mutex;
 use super::scene::{Char, Drip, Hit, Line, Scene, Wipe};
 use super::{Rng, smooth};
 
-/// The wipe mask is this fraction of the CSS pixel size (the original `MASK_SCALE`).
-pub const MASK_SCALE: f32 = 0.5;
+/// Keep a CSS pixel per mask texel so small handwritten counters survive interpolation.
+pub const MASK_SCALE: f32 = 1.0;
 /// Beads outlast the wipe they sit on by this many seconds (`NEBBIA_FIXED.beadHold`).
 const BEAD_HOLD: f64 = 4.0;
 /// Characters smaller than this many pixels get no end bead (`NEBBIA_FIXED.endBeadMin`).
@@ -222,7 +222,9 @@ impl Glass<'_, '_> {
         ];
         self.pen.transform(char_m);
         let thin = (9.0 / g.strokes.len() as f32).sqrt().clamp(0.55, 1.0);
-        let width = (self.knobs.stroke_width * thin).max(8.0 * thin / c.s);
+        // Small handwriting needs thinner strokes to keep its enclosed spaces open after mask filtering.
+        let small = (c.s / 96.0).clamp(0.5, 1.0);
+        let width = (self.knobs.stroke_width * thin * small).max(1.0 / c.s);
         let alive = |x: f32, y: f32| match swept {
             Some((wipe, ue)) if wipe.swept(ue, x, y) => 0.0,
             _ => 1.0,

@@ -45,13 +45,12 @@ pub fn place_marks(marks: &[Mark], font_px: f32, radius: f32, spacing_scale: f64
         return Vec::new();
     }
     let font = iced::Font { weight: iced::font::Weight::Bold, ..iced::Font::DEFAULT };
-    let mut offsets = Vec::with_capacity(marks.len());
+    let mut offsets = Vec::with_capacity(marks.len() + 1);
+    offsets.push(0.0);
     let mut prefix = String::new();
     let mut fallback = 0.0_f32;
     for (index, mark) in marks.iter().enumerate() {
-        if index > 0 {
-            fallback += fallback_width(&marks[index - 1].text, font_px);
-        }
+        fallback += fallback_width(&mark.text, font_px);
         prefix.push_str(&mark.text);
         let measured = measure(&prefix, font_px, font, 10_000.0).width;
         let natural = if measured > 0.0 { measured } else { fallback };
@@ -164,7 +163,7 @@ pub fn word_shift(line_index: usize, center: usize, own: f64, active: f64, activ
     if line_index < center {
         return own;
     }
-    let line_diff = (ring - center as f64 * std::f64::consts::PI).abs() / std::f64::consts::PI;
+    let line_diff = (ring - line_index as f64 * std::f64::consts::PI).abs() / std::f64::consts::PI;
     let follow = if line_index > center { 1.0 } else { timeline::clamp(line_diff, 0.0, 1.0) };
     let orbit = std::f64::consts::PI * BACK_ORBIT * (1.0 - (1.0 - active_progress).powf(1.35));
     own + (active * BACK_FOLLOW + orbit) * follow
@@ -204,7 +203,7 @@ pub fn glyph(item: &Placed, index: usize, moment: &RingMoment) -> Glyph {
         upcoming,
         font_px,
     } = *moment;
-    let line_diff = (ring - center as f64 * std::f64::consts::PI).abs() / std::f64::consts::PI;
+    let line_diff = (ring - line_index as f64 * std::f64::consts::PI).abs() / std::f64::consts::PI;
     let theta = line_index as f64 * std::f64::consts::PI + item.nominal;
     let psi = theta - ring - word_offset;
     let delta = psi * f64::from(rx);

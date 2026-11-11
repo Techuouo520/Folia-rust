@@ -6589,6 +6589,7 @@ dependencies = [
  "iced_wgpu",
  "image",
  "pollster",
+ "tempfile",
  "wgpu",
 ]
 

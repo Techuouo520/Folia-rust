@@ -1,13 +1,15 @@
-// The nebbia passes, as the original nebbiaGl.ts: wiped segments into a half-size R8 mask (max blend),
-// drop sprites into two drop textures, then the fullscreen window shader that composites them.
+// Nebbia glass, ring-cached buildings, static noise, quarter/eighth-size fog and the window composite.
 // Pipelines live as long as the renderer; textures change with the size, instance buffers only grow.
 
 use bytemuck::{Pod, Zeroable};
 use iced::widget::shader::{self, Primitive as ShaderPrimitive};
 use iced::{Rectangle, Size};
+use std::sync::Weak;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use folia_core::Theme;
 
+use super::cache::Buildings;
 use super::palette::palette;
 use super::place::{self, Knobs, MASK_SCALE};
 
@@ -139,18 +141,30 @@ impl Instances {
 
 struct Targets {
     css: [u32; 2],
+    canvas: [u32; 2],
     mask: wgpu::TextureView,
     drops: wgpu::TextureView,
     field: wgpu::TextureView,
     bind: wgpu::BindGroup,
+    buildings: Buildings,
+    fog: [wgpu::TextureView; 2],
+    fog_bind: wgpu::BindGroup,
+    noise: wgpu::TextureView,
+    noise_dirty: AtomicBool,
 }
 
 /// Every nebbia pass for one target format. The app draws through it; anything with a wgpu device can too.
 pub struct Renderer {
     window: wgpu::RenderPipeline,
+    fill: wgpu::RenderPipeline,
+    fog: [wgpu::RenderPipeline; 2],
+    noise: wgpu::RenderPipeline,
+    noise_bind: wgpu::BindGroup,
     mask: wgpu::RenderPipeline,
     drop: wgpu::RenderPipeline,
     window_layout: wgpu::BindGroupLayout,
+    fog_layout: wgpu::BindGroupLayout,
+    ring_sampler: wgpu::Sampler,
     sampler: wgpu::Sampler,
     uniform: wgpu::Buffer,
     glass_bind: wgpu::BindGroup,
@@ -170,8 +184,27 @@ impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let window_module = shader_module(device, include_str!("../../../shaders/nebbia/window.wgsl"));
         let glass_module = shader_module(device, include_str!("../../../shaders/nebbia/glass.wgsl"));
-        let window_layout =
-            layout(device, &[uniform_entry(0), texture_entry(1), sampler_entry(2), texture_entry(3), texture_entry(4)]);
+        let mut window_entries = vec![
+            uniform_entry(0),
+            texture_entry(1),
+            sampler_entry(2),
+            texture_entry(3),
+            texture_entry(4),
+            uniform_entry(5),
+        ];
+        window_entries.extend((6..12).map(texture_entry));
+        window_entries.extend([sampler_entry(12), texture_entry(13), texture_entry(14), texture_entry(15)]);
+        let window_layout = layout(device, &window_entries);
+        let mut fog_entries = vec![uniform_entry(0), uniform_entry(5), sampler_entry(12)];
+        fog_entries.extend((6..12).map(texture_entry));
+        let fog_layout = layout(device, &fog_entries);
+        let fill_layout = layout(device, &[uniform_entry(0), uniform_entry(16)]);
+        let noise_layout = layout(device, &[]);
+        let noise_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("folia-nebbia-noise"),
+            layout: &noise_layout,
+            entries: &[],
+        });
         let glass_layout = layout(device, &[uniform_entry(0), texture_entry(1), sampler_entry(2)]);
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("folia-nebbia-uniforms"),
@@ -187,6 +220,13 @@ impl Renderer {
             ..wgpu::SamplerDescriptor::default()
         });
         let sprite = sprite_view(device, queue);
+        let ring_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("folia-nebbia-ring"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let glass_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("folia-nebbia-glass"),
             layout: &glass_layout,
@@ -219,6 +259,32 @@ impl Renderer {
         };
         let glass = Stage { device, layout: &glass_layout, module: &glass_module };
         Self {
+            fill: Stage { device, layout: &fill_layout, module: &window_module }.pipeline(
+                "vs",
+                "fs_fill",
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::BlendState::REPLACE,
+                false,
+            ),
+            fog: ["fs_fog_blur", "fs_fog_glow"].map(|entry| {
+                Stage { device, layout: &fog_layout, module: &window_module }.pipeline(
+                    "vs",
+                    entry,
+                    wgpu::TextureFormat::Rgba16Float,
+                    wgpu::BlendState::REPLACE,
+                    false,
+                )
+            }),
+            noise: Stage { device, layout: &noise_layout, module: &window_module }.pipeline(
+                "vs",
+                "fs_noise",
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::BlendState::REPLACE,
+                false,
+            ),
+            noise_bind,
+            fog_layout,
+            ring_sampler,
             window: Stage { device, layout: &window_layout, module: &window_module }.pipeline(
                 "vs",
                 "fs",
@@ -252,8 +318,12 @@ impl Renderer {
         self.bounds = bounds;
         let [width, height] = uniforms.resolution;
         let css = [width.round().max(1.0) as u32, height.round().max(1.0) as u32];
-        if self.targets.as_ref().is_none_or(|targets| targets.css != css) {
-            self.targets = Some(self.targets_for(device, css, mask_size(width, height)));
+        let canvas = [(width * scale).round().max(1.0) as u32, (height * scale).round().max(1.0) as u32];
+        if self.targets.as_ref().is_none_or(|targets| targets.css != css || targets.canvas != canvas) {
+            self.targets = Some(self.targets_for(device, css, canvas, mask_size(width, height)));
+        }
+        if let Some(targets) = &mut self.targets {
+            targets.buildings.prepare(queue, &uniforms);
         }
         place::with_paint(|paint| {
             self.segments.write(device, queue, &paint.segments);
@@ -269,6 +339,13 @@ impl Renderer {
         self.instanced(encoder, &targets.mask, &self.mask, &self.segments);
         self.instanced(encoder, &targets.drops, &self.drop, &self.drops);
         self.instanced(encoder, &targets.field, &self.drop, &self.field);
+        targets.buildings.render(encoder, &self.fill);
+        if targets.noise_dirty.swap(false, Ordering::Relaxed) {
+            fullscreen(encoder, &targets.noise, &self.noise, &self.noise_bind);
+        }
+        for (view, pipeline) in targets.fog.iter().zip(&self.fog) {
+            fullscreen(encoder, view, pipeline, &targets.fog_bind);
+        }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("folia-nebbia-window"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -349,23 +426,74 @@ impl Renderer {
         pass.draw(0..4, 0..items.count);
     }
 
-    fn targets_for(&self, device: &wgpu::Device, css: [u32; 2], mask: [u32; 2]) -> Targets {
+    fn targets_for(&self, device: &wgpu::Device, css: [u32; 2], canvas: [u32; 2], mask: [u32; 2]) -> Targets {
         let mask = target_view(device, mask, wgpu::TextureFormat::R8Unorm);
         let drops = target_view(device, css, wgpu::TextureFormat::Rgba8Unorm);
         let field = target_view(device, css, wgpu::TextureFormat::Rgba8Unorm);
+        let buildings = Buildings::new(device, &self.uniform, canvas);
+        let fog =
+            [4, 8].map(|div| target_view(device, canvas.map(|v| v.div_ceil(div)), wgpu::TextureFormat::Rgba16Float));
+        let noise = target_view(device, canvas, wgpu::TextureFormat::Rgba8Unorm);
+        let mut fog_entries = vec![
+            wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::Sampler(&self.ring_sampler) },
+        ];
+        fog_entries.extend(buildings.entries());
+        let fog_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("folia-nebbia-fog"),
+            layout: &self.fog_layout,
+            entries: &fog_entries,
+        });
+        let mut entries = fog_entries;
+        entries.extend([
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&mask) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&drops) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&field) },
+            wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(&fog[0]) },
+            wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(&fog[1]) },
+            wgpu::BindGroupEntry { binding: 15, resource: wgpu::BindingResource::TextureView(&noise) },
+        ]);
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("folia-nebbia-window"),
             layout: &self.window_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&mask) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&drops) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&field) },
-            ],
+            entries: &entries,
         });
-        Targets { css, mask, drops, field, bind }
+        Targets {
+            css,
+            canvas,
+            mask,
+            drops,
+            field,
+            bind,
+            buildings,
+            fog,
+            fog_bind,
+            noise,
+            noise_dirty: AtomicBool::new(true),
+        }
     }
+}
+
+fn fullscreen(
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind: &wgpu::BindGroup,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("folia-nebbia-prepass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+        })],
+        ..Default::default()
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, bind, &[]);
+    pass.draw(0..3, 0..1);
 }
 
 struct Stage<'a> {
@@ -436,11 +564,11 @@ fn shader_module(device: &wgpu::Device, source: &str) -> wgpu::ShaderModule {
     })
 }
 
-fn layout(device: &wgpu::Device, entries: &[wgpu::BindGroupLayoutEntry]) -> wgpu::BindGroupLayout {
+pub(super) fn layout(device: &wgpu::Device, entries: &[wgpu::BindGroupLayoutEntry]) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("folia-nebbia"), entries })
 }
 
-fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+pub(super) fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
@@ -484,7 +612,7 @@ fn instance_buffer(device: &wgpu::Device, capacity: u64) -> wgpu::Buffer {
     })
 }
 
-fn target_view(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::TextureView {
+pub(super) fn target_view(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("folia-nebbia-glass"),
@@ -530,7 +658,13 @@ fn sprite_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView 
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-impl ShaderPrimitive for Pass {
+#[derive(Debug)]
+pub struct LivePass {
+    pub(super) frame: Pass,
+    pub(super) owner: Weak<()>,
+}
+
+impl ShaderPrimitive for LivePass {
     type Pipeline = NebbiaGpu;
 
     fn prepare(
@@ -543,7 +677,9 @@ impl ShaderPrimitive for Pass {
     ) {
         let scale = viewport.scale_factor();
         let physical = [bounds.x * scale, bounds.y * scale, bounds.width * scale, bounds.height * scale];
-        pipeline.0.prepare(device, queue, self, physical, scale);
+        pipeline.owner = self.owner.clone();
+        let renderer = pipeline.renderer.get_or_insert_with(|| Renderer::new(device, queue, pipeline.format));
+        renderer.prepare(device, queue, &self.frame, physical, scale);
     }
 
     fn render(
@@ -553,16 +689,28 @@ impl ShaderPrimitive for Pass {
         target: &wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
     ) {
-        pipeline.0.render(encoder, target, [clip_bounds.x, clip_bounds.y, clip_bounds.width, clip_bounds.height]);
-        let window = [self.uniforms.resolution[0], self.uniforms.resolution[1]];
-        pipeline.0.paint_blur(encoder, self.uniforms.time, window);
+        let Some(renderer) = &pipeline.renderer else { return };
+        renderer.render(encoder, target, [clip_bounds.x, clip_bounds.y, clip_bounds.width, clip_bounds.height]);
+        let window = self.frame.uniforms.resolution;
+        renderer.paint_blur(encoder, self.frame.uniforms.time, window);
     }
 }
 
-pub struct NebbiaGpu(Renderer);
+pub struct NebbiaGpu {
+    renderer: Option<Renderer>,
+    format: wgpu::TextureFormat,
+    owner: Weak<()>,
+}
 
 impl shader::Pipeline for NebbiaGpu {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        Self(Renderer::new(device, queue, format))
+    fn new(_device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        Self { renderer: None, format, owner: Weak::new() }
+    }
+
+    fn trim(&mut self) {
+        // The widget owns the lifetime, so another window's present cannot evict an active style.
+        if self.owner.strong_count() == 0 {
+            self.renderer = None;
+        }
     }
 }

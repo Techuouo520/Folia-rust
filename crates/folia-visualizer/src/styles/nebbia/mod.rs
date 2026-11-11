@@ -1,6 +1,7 @@
 // Nebbia (雾笺): a rainy night street behind glass, lyrics wiped into the fog.
 // Small rain follows the vocal band. Drum hits are not analysed, so the bus keeps its idle sway.
 
+mod cache;
 mod drops;
 mod gpu;
 mod ink;
@@ -62,6 +63,7 @@ pub use tuning::manifest;
 
 use std::cell::Cell;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use iced::widget::canvas::{Frame, Text};
 use iced::widget::shader;
@@ -81,12 +83,12 @@ pub fn view<'a, Message>(scene: Scene<'a>) -> View<'a, Message> {
 }
 
 impl<Message> shader::Program<Message> for View<'_, Message> {
-    type State = RainEnergy;
-    type Primitive = gpu::Pass;
+    type State = ViewState;
+    type Primitive = gpu::LivePass;
 
     fn draw(&self, state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
-        let energy = state.step(self.scene.audio.vocal);
-        frame(
+        let energy = state.energy.step(self.scene.audio.vocal);
+        let frame = frame(
             self.scene.lyrics,
             self.scene.time,
             bounds.size(),
@@ -94,8 +96,16 @@ impl<Message> shader::Program<Message> for View<'_, Message> {
             self.scene.font_scale,
             &self.scene.tuning,
             energy,
-        )
+        );
+        gpu::LivePass { frame, owner: Arc::downgrade(&state.owner) }
     }
+}
+
+/// The live widget owns the GPU resources' lifetime, independently of other windows' redraws.
+#[derive(Default)]
+pub struct ViewState {
+    energy: RainEnergy,
+    owner: Arc<()>,
 }
 
 /// Shelf thumbnails have no street shader, so they draw the letters. The playing view leaves this clear.

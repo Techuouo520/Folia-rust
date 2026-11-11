@@ -1,5 +1,5 @@
 // Night bus window from nebbiaSceneGlsl.ts, with the fog, breath and raindrop composite from nebbiaShaders.ts.
-// Buildings are evaluated per pixel: the original cache is a pre-render of this same building().
+// Building fills, static noise and reduced-resolution fog share the original scene equations.
 // Colors are computed as the original's 8-bit canvas values; an sRGB target gets them decoded first.
 
 struct VsOut {
@@ -34,6 +34,21 @@ struct Uniforms {
 @group(0) @binding(2) var samp: sampler;
 @group(0) @binding(3) var drop_tex: texture_2d<f32>;
 @group(0) @binding(4) var field_tex: texture_2d<f32>;
+
+struct Buildings { geo: array<vec4<f32>, 3>, }
+struct Fill { geo: vec4<f32>, params: vec4<f32>, }
+@group(0) @binding(5) var<uniform> buildings: Buildings;
+@group(0) @binding(6) var bld0: texture_2d<f32>;
+@group(0) @binding(7) var bld1: texture_2d<f32>;
+@group(0) @binding(8) var bld2: texture_2d<f32>;
+@group(0) @binding(9) var bld3: texture_2d<f32>;
+@group(0) @binding(10) var bld4: texture_2d<f32>;
+@group(0) @binding(11) var bld5: texture_2d<f32>;
+@group(0) @binding(12) var ring_samp: sampler;
+@group(0) @binding(13) var fog_blur: texture_2d<f32>;
+@group(0) @binding(14) var fog_glow: texture_2d<f32>;
+@group(0) @binding(15) var noise_tex: texture_2d<f32>;
+@group(0) @binding(16) var<uniform> fill: Fill;
 
 const HZ: f32 = 0.6;
 const ROAD: f32 = 0.7;
@@ -239,14 +254,39 @@ fn spot_beam(q: vec2<f32>, b: f32) -> f32 {
     return beam_from(vec2<f32>(u.spot_src.x, 0.595), q, b) + beam_from(vec2<f32>(u.spot_src.y, 0.595), q, b);
 }
 
+fn bld_at(tex: texture_2d<f32>, q: vec2<f32>, t: f32, speed: f32, geo: vec4<f32>) -> vec4<f32> {
+    return textureSampleLevel(tex, ring_samp, vec2<f32>((q.x + t * speed) / geo.z, (q.y - geo.x) / (geo.y - geo.x)), 0.0);
+}
+
+fn buildings_over(col: vec3<f32>, q: vec2<f32>, b: f32, t: f32) -> vec3<f32> {
+    let level = select(select(0u, 1u, b > 0.02), 2u, b > 0.05);
+    let geo = buildings.geo[level];
+    // As in nebbiaSceneGlsl.ts, the 0.006 lens can refract beyond the cached world interval.
+    if geo.w < 0.5 || (b >= 0.002 && b <= 0.02) {
+        let far = building(q, b, t, 0.0);
+        let near = building(q, b, t, 1.0);
+        return mix(mix(col, far.xyz, far.w), near.xyz, near.w);
+    }
+    var far: vec4<f32>;
+    var near: vec4<f32>;
+    if level == 2u {
+        far = bld_at(bld4, q, t, 0.02, geo);
+        near = bld_at(bld5, q, t, 0.035, geo);
+    } else if level == 1u {
+        far = bld_at(bld2, q, t, 0.02, geo);
+        near = bld_at(bld3, q, t, 0.035, geo);
+    } else {
+        far = bld_at(bld0, q, t, 0.02, geo);
+        near = bld_at(bld1, q, t, 0.035, geo);
+    }
+    return (col * (1.0 - far.a) + far.rgb) * (1.0 - near.a) + near.rgb;
+}
+
 fn scene(q: vec2<f32>, b: f32) -> vec3<f32> {
     let t = u.time * u.bus;
     var col = mix(u.sky0.xyz, u.sky1.xyz, smoothstep(0.0, HZ, q.y));
     col = col + mix(u.la.xyz, SODIUM, 0.4) * 0.14 * exp(-abs(q.y - HZ + 0.12) * 6.0);
-    let far = building(q, b, t, 0.0);
-    col = mix(col, far.xyz, far.w);
-    let near = building(q, b, t, 1.0);
-    col = mix(col, near.xyz, near.w);
+    col = buildings_over(col, q, b, t);
     col = col + (neon(q, b, t) + u.la.xyz * 0.12 * exp(-abs(q.y - HZ + 0.1) * 5.0)) * u.neon;
     col = col + lamps(q, b, t);
     let aa = max(b, 0.0015);
@@ -301,24 +341,56 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.04045, 0.04045, 0.04045));
 }
 
-@fragment
-fn fs(in: VsOut) -> @location(0) vec4<f32> {
+fn scene_q(input_uv: vec2<f32>) -> vec2<f32> {
     let aspect = u.resolution.x / max(u.resolution.y, 1.0);
     // `sky0.w` is the bump slider. Without drum analysis the bus uses this idle sway, scaled by it.
     let sway = sin(u.time * 1.7) * 0.008 * u.sky0.w;
-    var uv = in.uv;
+    var uv = input_uv;
     let res = u.sky1.w;
     if res < 0.99 || res > 1.01 {
         let cells = max(u.resolution * max(res, 0.5), vec2<f32>(1.0, 1.0));
-        uv = (floor(in.uv * cells) + vec2<f32>(0.5, 0.5)) / cells;
+        uv = (floor(input_uv * cells) + vec2<f32>(0.5, 0.5)) / cells;
     }
-    let q = vec2<f32>(uv.x * aspect, uv.y + sway);
+    return vec2<f32>(uv.x * aspect, uv.y + sway);
+}
+
+@fragment
+fn fs_fill(in: VsOut) -> @location(0) vec4<f32> {
+    let span = fill.geo.z;
+    let x0 = fill.params.x;
+    let x = x0 + fract((in.pos.x / fill.params.z * span - x0) / span) * span;
+    let y = mix(fill.geo.x, fill.geo.y, in.pos.y / fill.params.w);
+    let b = building(vec2<f32>(x, y), fill.geo.w, 0.0, fill.params.y);
+    return vec4<f32>(b.rgb * b.a, b.a);
+}
+
+@fragment
+fn fs_noise(in: VsOut) -> @location(0) vec4<f32> {
+    let px = in.pos.xy;
+    return vec4<f32>(vnoise(px / 6.0) * 0.6 + vnoise(px / 2.2) * 0.4, vnoise(px / 55.0 + vec2<f32>(3.1)), vnoise(px / 1.6), 1.0);
+}
+
+@fragment
+fn fs_fog_blur(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(scene(scene_q(in.uv), 0.03), 1.0);
+}
+
+@fragment
+fn fs_fog_glow(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(scene(scene_q(in.uv), 0.09), 1.0);
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    let aspect = u.resolution.x / max(u.resolution.y, 1.0);
+    let q = scene_q(in.uv);
     // Noise runs in canvas pixels as the original; breath lobes are placed in CSS pixels.
     let px = in.uv * u.resolution * u.scale;
     let css = in.uv * u.resolution;
     let m = textureSample(mask_tex, samp, in.uv).r;
-    let fine = vnoise(px / 6.0) * 0.6 + vnoise(px / 2.2) * 0.4;
-    let blotch = vnoise(px / 55.0 + vec2<f32>(3.1, 3.1));
+    let nz = textureSample(noise_tex, samp, in.uv).rgb;
+    let fine = nz.r;
+    let blotch = nz.g;
     let th = 0.3 + (fine - 0.5) * 0.22 * 0.6 + (blotch - 0.5) * 0.12;
     var clear = smoothstep(th - 0.05, th + 0.06, m);
     var breath = 0.0;
@@ -337,13 +409,13 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     }
     let dens = u.mist * (0.82 + 0.3 * vnoise(px / 380.0 + vec2<f32>(u.time * 0.015, u.time * 0.015))) * (0.9 + 0.2 * in.uv.y) + breath * 0.9;
     let haze = vec3<f32>(0.70, 0.74, 0.78);
-    let blur = scene(q, 0.03);
-    let glow = scene(q, 0.09);
+    let blur = textureSample(fog_blur, samp, in.uv).rgb;
+    let glow = textureSample(fog_glow, samp, in.uv).rgb;
     var fog = blur * max(0.08, 1.0 - 0.45 * dens - 0.25 * breath) + glow * 0.9 * dens + haze * (0.2 * dens + 0.25 * breath);
     fog = fog + vec3<f32>(hash(px) - 0.5) * 0.025;
     let sd = q - u.spot_tgt;
     fog = fog + u.la.xyz * u.spot_i * exp(-dot(sd, sd) / (u.spot_r * u.spot_r * 2.2)) * (0.18 + 0.4 * dens);
-    fog = fog + vec3<f32>(smoothstep(0.78, 0.98, vnoise(px / 1.6)) * 0.05 * dens);
+    fog = fog + vec3<f32>(smoothstep(0.78, 0.98, nz.b) * 0.05 * dens);
     // Drops at wipe edges and raindrops clear a ring of fog; drops condensed on the fog sit only on the fog.
     let rd = textureSample(drop_tex, samp, in.uv);
     let fd = textureSample(field_tex, samp, in.uv) * (1.0 - clear);

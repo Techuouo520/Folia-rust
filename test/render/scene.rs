@@ -402,6 +402,108 @@ fn scene_frame_time() {
 
 #[test]
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn lyric_styles_render_small_cjk_and_mixed_text() {
+    let _guard = guarded();
+    folia_ui::install_fonts();
+    let lines = ["虽然我不想轻易逃跑", "还是怕分别", "心跳 Heartbeat 134 雾霞鬱"]
+        .into_iter()
+        .enumerate()
+        .map(|(line, text)| {
+            let start = line as f64 * 6.0;
+            let step = 5.5 / text.chars().count() as f64;
+            Line {
+                text: text.into(),
+                start,
+                end: start + 5.5,
+                words: text
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| Word {
+                        text: c.to_string(),
+                        start: start + i as f64 * step,
+                        end: start + (i + 1) as f64 * step,
+                    })
+                    .collect(),
+                ..Line::default()
+            }
+        })
+        .collect();
+    let lyrics = Lyrics { lines, word_timed: true, ..Lyrics::default() };
+    let temporary = tempfile::tempdir().unwrap();
+    let dir = std::env::var_os("FOLIA_VISUAL_AUDIT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| temporary.path().to_owned());
+    // Font rasterization and stroke data finish before the first visual audit frame.
+    folia_visualizer::styles::nebbia::frame(
+        &lyrics,
+        3.0,
+        Size::new(1920.0, 1080.0),
+        &Theme::MIDNIGHT,
+        1.0,
+        &Values::default(),
+        0.0,
+    );
+    let start = std::time::Instant::now();
+    while !folia_visualizer::styles::nebbia::glyphs_settled(&lyrics) {
+        assert!(start.elapsed().as_secs() < 60);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    for (w, h) in [(1200, 800), (1920, 1080)] {
+        for (theme_name, theme) in [("dark", Theme::MIDNIGHT), ("light", Theme::DAYLIGHT)] {
+            let mut contact = image::RgbaImage::new(1920, 1080);
+            let mut mixed_contact = image::RgbaImage::new(1920, 1080);
+            for (index, style) in Style::ALL.into_iter().enumerate() {
+                folia_render::release_backdrop();
+                let mut picture = Picture::with_size(w, h);
+                let mut cache = Cache::default();
+                for (sample, time, scale) in [("small", 3.0, 0.75), ("mixed", 15.0, 1.0)] {
+                    for _ in 0..6 {
+                        let scene = Scene { time, font_scale: scale, ..scene(&lyrics, &theme, style) };
+                        cache = picture.frame(lyric_view::<Msg>(scene), cache);
+                    }
+                    let pixels = picture.screenshot();
+                    let bright = pixels.chunks_exact(4).filter(|p| p[0].max(p[1]).max(p[2]) > 30).count();
+                    assert!(bright > 100, "{} {sample} is blank", style.id());
+                    let shot = image::RgbaImage::from_raw(w, h, pixels).unwrap();
+                    let thumb = image::imageops::resize(&shot, 640, 360, image::imageops::FilterType::Triangle);
+                    let sheet = if sample == "small" { &mut contact } else { &mut mixed_contact };
+                    image::imageops::overlay(sheet, &thumb, (index % 3 * 640) as i64, (index / 3 * 360) as i64);
+                    shot.save(dir.join(format!("{theme_name}-{w}-{}-{sample}.png", style.id()))).unwrap();
+                }
+            }
+            contact.save(dir.join(format!("contact-{theme_name}-{w}.png"))).unwrap();
+            mixed_contact.save(dir.join(format!("contact-mixed-{theme_name}-{w}.png"))).unwrap();
+        }
+    }
+    folia_render::release_backdrop();
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn claddagh_rotated_axis_stays_a_thin_line() {
+    let _guard = guarded();
+    folia_ui::install_fonts();
+    folia_render::release_backdrop();
+    let lyrics = lyrics();
+    let theme = Theme::MIDNIGHT;
+    let mut picture = Picture::new();
+    let mut cache = Cache::default();
+    let mut shots = Vec::new();
+    for enabled in [false, true] {
+        let mut scene = scene(&lyrics, &theme, Style::Claddagh);
+        scene.tuning.set_flag(Style::Claddagh.manifest(), "showAxisLine", enabled);
+        for _ in 0..2 {
+            cache = picture.frame(lyric_view::<Msg>(scene.clone()), cache);
+        }
+        shots.push(picture.screenshot());
+    }
+    let changed = shots[0].chunks_exact(4).zip(shots[1].chunks_exact(4)).filter(|(a, b)| a != b).count();
+    assert!((300..3000).contains(&changed), "rotated 300x4 axis covers {changed} pixels");
+    folia_render::release_backdrop();
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn screen_pixels_match_the_plain_canvas() {
     let _guard = guarded();
     folia_ui::install_fonts();
