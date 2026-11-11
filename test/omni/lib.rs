@@ -1,5 +1,7 @@
 // Offline checks for the QR pictures platforms hand out, and live platform checks behind `--ignored`.
 
+#![cfg(test)]
+
 use folia_core::AudioQuality;
 use folia_omni::{LoginQr, Omni, OmniError, cover_cache_key};
 
@@ -307,3 +309,5 @@ async fn netease_and_kugou_chorus_ranges() {
         assert!(marked > 0, "{provider}: no chorus lines");
     }
 }
+#[cfg(test)]
+mod lx;

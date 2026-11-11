@@ -525,7 +525,7 @@ impl Playback {
             move |(lyrics, kept)| Message::LyricsLoaded(request, id, lyrics, kept),
         );
         let quality = self.settings.audio_quality;
-        let audio = Task::perform(async move { omni.fetch_audio(&online, quality).await }, move |result| {
+        let audio = Task::perform(async move { omni.fetch_track_audio(&track, quality).await }, move |result| {
             Message::AudioReady(
                 request,
                 id,

@@ -1,5 +1,7 @@
 // Checks settings files: defaults, round trips, file layout and schema version checks.
 
+#![cfg(test)]
+
 use std::fs;
 
 use folia_core::{AudioQuality, Language, LanguagePreference};

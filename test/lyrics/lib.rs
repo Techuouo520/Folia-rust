@@ -1,5 +1,7 @@
 // Checks format detection and every lyric parser against small hand-written samples.
 
+#![cfg(test)]
+
 mod chorus;
 mod paragraphs;
 

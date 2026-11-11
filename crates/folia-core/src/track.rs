@@ -5,6 +5,15 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Optional platform metadata retained for external address resolvers; never contains account credentials.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OnlineTrackInfo {
+    pub album_id: String,
+    pub audio_id: String,
+    pub quality_hashes: std::collections::BTreeMap<crate::AudioQuality, String>,
+}
+
 /// Where an online track lives: a platform id such as `netease` and the platform's song id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OnlineId {
@@ -50,6 +59,8 @@ pub struct Track {
     pub duration: f64,
     #[serde(default)]
     pub online: Option<OnlineId>,
+    #[serde(default)]
+    pub online_info: Option<OnlineTrackInfo>,
     /// Cover image address from an online search, when the platform sent one.
     #[serde(default)]
     pub cover_url: Option<String>,

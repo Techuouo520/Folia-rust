@@ -51,7 +51,9 @@ qrcode = { version = "=0.14.1", default-features = false }
 quick-xml = "0.42.0"
 rayon = "1.12.0"
 realfft = "3.5.1"
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "form", "gzip", "deflate"] }
+rquickjs = "=0.14.0"
+rsa = "=0.9.10"
 rfd = "0.17.2"
 ring = "=0.17.14"
 rtrb = "0.4.1"
@@ -63,7 +65,7 @@ symphonia = { version = "0.6.1", features = ["all"] }
 sys-locale = "0.3.2"
 sysinfo = { version = "=0.36.1", default-features = false, features = ["system"] }
 thiserror = "2.0.21"
-tokio = { version = "1.54.1", default-features = false, features = ["sync"] }
+tokio = { version = "1.54.1", default-features = false, features = ["sync", "rt", "time", "net"] }
 toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

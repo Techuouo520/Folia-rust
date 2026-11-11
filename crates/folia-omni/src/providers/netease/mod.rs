@@ -58,6 +58,7 @@ struct Named {
 
 #[derive(Deserialize)]
 struct Album {
+    id: Option<u64>,
     name: Option<String>,
     #[serde(rename = "picUrl")]
     pic_url: Option<String>,
@@ -119,6 +120,15 @@ impl Provider for Netease {
 
     fn display_name(&self) -> &'static str {
         "网易云音乐"
+    }
+
+    fn lx_music_info(&self, track: &Track) -> Option<crate::lx::MusicInfo> {
+        let mut info = crate::lx::MusicInfo::track("wy", track);
+        info.data["songmid"] = json!(track.online.as_ref()?.id.parse::<u64>().ok()?);
+        if let Some(album) = track.online_info.as_ref().and_then(|i| i.album_id.parse::<u64>().ok()) {
+            info.data["albumId"] = json!(album);
+        }
+        Some(info)
     }
 
     fn search_songs<'a>(
@@ -347,6 +357,10 @@ fn track(song: Song) -> Track {
         title: song.name,
         artist: (!artists.is_empty()).then(|| artists.join(" / ")),
         album: album.as_ref().and_then(|album| album.name.clone()),
+        online_info: Some(folia_core::OnlineTrackInfo {
+            album_id: album.as_ref().and_then(|a| a.id).map(|id| id.to_string()).unwrap_or_default(),
+            ..Default::default()
+        }),
         cover_url: album.and_then(|album| album.pic_url).map(https),
         duration: song.dt as f64 / 1000.0,
         online: Some(online),

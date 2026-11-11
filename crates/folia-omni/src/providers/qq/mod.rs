@@ -6,7 +6,7 @@ mod musicu;
 mod qrc;
 
 use folia_core::{AudioQuality, OnlineId, Track};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     Account, AudioSource, BoxFuture, Capabilities, Collection, CollectionDetail, CollectionKind, ExploreSection,
@@ -45,6 +45,16 @@ impl Provider for Qq {
 
     fn display_name(&self) -> &'static str {
         "QQ音乐"
+    }
+
+    fn lx_music_info(&self, track: &Track) -> Option<crate::lx::MusicInfo> {
+        let mut info = crate::lx::MusicInfo::track("tx", track);
+        let mut ids = track.online.as_ref()?.id.splitn(3, '-');
+        info.data["songmid"] = json!(ids.next()?);
+        info.data["songId"] = ids.next().and_then(|id| id.parse::<u64>().ok()).map_or(Value::Null, |id| json!(id));
+        info.data["strMediaMid"] = json!(ids.next().unwrap_or_default());
+        info.data["albumMid"] = info.data["albumId"].clone();
+        Some(info)
     }
 
     fn search_songs<'a>(
@@ -263,6 +273,7 @@ fn track(raw: &Value) -> Option<Track> {
         artist: (!artists.is_empty()).then(|| artists.join(" / ")),
         album: text(album, &["name", "title", "albumname"]).or_else(|| text(raw, &["albumname", "albumName"])),
         cover_url: cover,
+        online_info: Some(folia_core::OnlineTrackInfo { album_id: album_mid, ..Default::default() }),
         duration: pick(raw, &["interval", "duration"]).and_then(Value::as_f64).unwrap_or(0.0),
         online: Some(online),
         ..Track::default()

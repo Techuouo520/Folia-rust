@@ -1,5 +1,7 @@
 // Checks locale-tag mapping, language preference storage and play queue navigation.
 
+#![cfg(test)]
+
 use folia_core::{Language, LanguagePreference, Origin, Queue, Repeat};
 
 #[test]

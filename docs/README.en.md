@@ -32,6 +32,7 @@ The Android client is [Folia-rust-android](https://github.com/Techuouo520/Folia-
 
 ## Features
 
+- **LX Music custom sources**: paste download links or import script files, independently enable multiple sources and set their priority for NetEase, KuGou and QQ Music. Sources run in isolation and fall back in order, with quality downgrade and native API fallback if all fail.
 - **Cover wall home**: an endless wall of covers with inertial dragging, and a spine-style side seam that opens and closes.
 - **Lyric visualization**: lyric styles ported one by one from the original, moving with the music in real time.
 - **Lyric style workbench**: live preview and per-style tuning.

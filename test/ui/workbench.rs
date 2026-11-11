@@ -38,7 +38,6 @@ fn workbench_tabs_render() {
     let i18n = I18n::new(Language::En).unwrap();
     let theme = Theme::MIDNIGHT;
     let appearance = sample_appearance();
-    let lyrics = folia_visualizer::preview_lyrics();
     let mut workbench = Workbench::open();
     // Let the sample clock leave Monet's intro (the first 0.65s fades the rail in).
     std::thread::sleep(std::time::Duration::from_millis(2200));

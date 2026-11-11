@@ -1,5 +1,7 @@
 // Checks folder scanning, incremental rescans, folder removal, lyric lookup and cover cropping on temporary files.
 
+#![cfg(test)]
+
 use std::fs;
 use std::path::Path;
 

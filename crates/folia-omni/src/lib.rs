@@ -1,5 +1,6 @@
 // Online music: one facade (`Omni`) over every platform provider; only providers talk to platform APIs.
 
+pub mod lx;
 mod paging;
 mod providers;
 mod qr;
@@ -262,6 +263,10 @@ pub struct Capabilities {
 pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
+    /// Only the provider interprets its identifiers and maps them to an LX platform.
+    fn lx_music_info(&self, _track: &Track) -> Option<lx::MusicInfo> {
+        None
+    }
     fn search_songs<'a>(
         &'a self,
         query: &'a str,
@@ -358,6 +363,7 @@ pub struct Omni {
     cache_dir: PathBuf,
     keyring_service: String,
     covers: Arc<tokio::sync::Semaphore>,
+    sources: Arc<lx::Sources>,
 }
 
 impl Omni {
@@ -367,7 +373,165 @@ impl Omni {
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
             .build()?;
         let covers = Arc::new(tokio::sync::Semaphore::new(COVER_DOWNLOADS));
-        Ok(Self { providers: Arc::new(providers::all(&http)), http, cache_dir, keyring_service, covers })
+        Ok(Self {
+            providers: Arc::new(providers::all(&http)),
+            http,
+            cache_dir,
+            keyring_service,
+            covers,
+            sources: Arc::default(),
+        })
+    }
+
+    /// Uses an explicit provider registry, for embedders supplying their own native platforms.
+    pub fn with_providers(
+        cache_dir: PathBuf,
+        keyring_service: String,
+        providers: Vec<Box<dyn Provider>>,
+    ) -> Result<Self, OmniError> {
+        let mut omni = Self::new(cache_dir, keyring_service)?;
+        omni.providers = Arc::new(providers);
+        Ok(omni)
+    }
+
+    /// Loads and migrates the source domain, then starts every enabled script independently on background workers.
+    pub fn restore_sources(
+        &self,
+        store: folia_store::Store,
+        data_dir: PathBuf,
+    ) -> Result<lx::SourceSettings, lx::SourceError> {
+        self.sources.restore(store, data_dir, self.http.clone())
+    }
+
+    pub fn custom_sources(&self) -> lx::SourceSettings {
+        self.sources.list()
+    }
+
+    pub fn import_source(&self, path: &Path) -> Result<lx::SourceSettings, lx::SourceError> {
+        self.sources.import(path, self.http.clone())
+    }
+
+    /// Downloads an HTTP(S) script and imports it through the same bounded validation as a file.
+    pub async fn import_source_url(&self, url: &str) -> Result<lx::SourceSettings, lx::SourceError> {
+        let url = url.trim();
+        if url.len() > 8192 || url.chars().any(char::is_whitespace) {
+            return Err(lx::SourceError::Url);
+        }
+        let url = reqwest::Url::parse(url).map_err(|_| lx::SourceError::Url)?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(lx::SourceError::Url);
+        }
+        let download_error = |err: reqwest::Error| {
+            if err.is_timeout() { lx::SourceError::Timeout } else { lx::SourceError::Http(err.without_url()) }
+        };
+        let mut response = self
+            .http
+            .get(url)
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(download_error)?;
+        if response.content_length().is_some_and(|n| n > lx::SCRIPT_BYTES as u64) {
+            return Err(lx::SourceError::Limit);
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(download_error)? {
+            if bytes.len() + chunk.len() > lx::SCRIPT_BYTES {
+                return Err(lx::SourceError::Limit);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let code = String::from_utf8(bytes).map_err(|_| lx::SourceError::Header)?;
+        let (sources, http) = (self.sources.clone(), self.http.clone());
+        tokio::task::spawn_blocking(move || sources.import_text(code, http))
+            .await
+            .map_err(|_| lx::SourceError::Stopped)?
+    }
+
+    pub fn enable_source(&self, id: &str, enabled: bool) -> Result<lx::SourceSettings, lx::SourceError> {
+        self.sources.enable(id, enabled, self.http.clone())
+    }
+
+    /// Changes the source's position in the playback fallback order without restarting any script.
+    pub fn move_source(&self, id: &str, index: usize) -> Result<lx::SourceSettings, lx::SourceError> {
+        self.sources.move_to(id, index)
+    }
+
+    pub fn remove_source(&self, id: &str) -> Result<lx::SourceSettings, lx::SourceError> {
+        self.sources.remove(id)
+    }
+
+    pub fn source_update_alerts(&self) -> Vec<(String, lx::UpdateAlert)> {
+        self.sources.take_alerts()
+    }
+
+    /// Tries enabled scripts in list order, lowering quality within each before moving to the next source.
+    pub async fn resolve_audio_source(
+        &self,
+        track: &Track,
+        preference: AudioQuality,
+    ) -> Result<AudioSource, OmniError> {
+        let song = track.online.as_ref().ok_or(OmniError::Unavailable)?;
+        let provider = self.provider(&song.provider)?;
+        if let Some(info) = provider.lx_music_info(track) {
+            for (id, script) in self.sources.active(info.source) {
+                if let Some(source) = Self::custom_audio_source(&id, &script, &info, preference).await {
+                    return Ok(source);
+                }
+            }
+        }
+        tracing::info!(provider = song.provider, "resolving audio through native platform");
+        provider.audio_source(song, resolve_quality(provider.audio_quality_levels(), preference)).await
+    }
+
+    async fn custom_audio_source(
+        id: &str,
+        script: &lx::Script,
+        info: &lx::MusicInfo,
+        preference: AudioQuality,
+    ) -> Option<AudioSource> {
+        let capability = script.sources().get(info.source)?;
+        for quality in folia_core::UNLISTED_AUDIO_QUALITY_LEVELS.into_iter().rev().filter(|q| *q <= preference) {
+            let name = lx::quality_name(quality);
+            if !capability.qualitys.iter().any(|q| q == name) {
+                continue;
+            }
+            match script.music_url(info.source, name, info.data.clone()).await {
+                Ok(url) => {
+                    tracing::info!(
+                        source = id,
+                        provider = info.source,
+                        quality = name,
+                        "audio resolved through custom source"
+                    );
+                    return Some(AudioSource {
+                        url,
+                        extension: if quality >= AudioQuality::Lossless { "flac" } else { "mp3" }.into(),
+                        preview: false,
+                        level: quality,
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        source = id,
+                        provider = info.source,
+                        quality = name,
+                        error = &err as &dyn std::error::Error,
+                        "custom source failed; lowering quality or trying the next source"
+                    );
+                    if matches!(err, lx::SourceError::Timeout | lx::SourceError::Memory | lx::SourceError::Stopped) {
+                        break;
+                    }
+                }
+            }
+        }
+        tracing::info!(
+            source = id,
+            provider = info.source,
+            "custom source quality chain exhausted; trying the next source"
+        );
+        None
     }
 
     /// `(id, display name)` of each provider, in registration order.
@@ -582,10 +746,45 @@ impl Omni {
     /// kept under the level asked for, so a platform that falls back to a lower one is found again next time; a file
     /// from before levels were recorded plays for any preference, and a preview is never reused.
     pub async fn fetch_audio(&self, song: &OnlineId, preference: AudioQuality) -> Result<PathBuf, OmniError> {
+        self.fetch_track_audio(&Track { online: Some(song.clone()), ..Track::default() }, preference).await
+    }
+
+    /// Keeps the song metadata available to custom sources, then uses the shared download cache.
+    pub async fn fetch_track_audio(&self, track: &Track, preference: AudioQuality) -> Result<PathBuf, OmniError> {
+        let song = track.online.as_ref().ok_or(OmniError::Unavailable)?;
         let provider = self.provider(&song.provider)?;
         let level = resolve_quality(provider.audio_quality_levels(), preference);
         let dir = self.cache_dir.join("audio");
         let stem = format!("{}-{}", song.provider, song.id);
+        if let Some(info) = provider.lx_music_info(track) {
+            for (id, script) in self.sources.active(info.source) {
+                let custom_stem = format!("{stem}-lx-{id}-{}", preference.id());
+                if let Some(cached) = cached_file(&dir, &custom_stem) {
+                    return Ok(cached);
+                }
+                if let Some(source) = Self::custom_audio_source(&id, &script, &info, preference).await {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        self.cache_audio_source(&dir, &custom_stem, source),
+                    )
+                    .await
+                    {
+                        Ok(Ok(path)) => return Ok(path),
+                        Ok(Err(err)) => tracing::warn!(
+                            source = id,
+                            provider = song.provider,
+                            error = &err as &dyn std::error::Error,
+                            "custom source download failed; trying the next source"
+                        ),
+                        Err(err) => tracing::warn!(
+                            source = id,
+                            error = &err as &dyn std::error::Error,
+                            "custom source download timed out; trying the next source"
+                        ),
+                    }
+                }
+            }
+        }
         let cache_stem = format!("{stem}-{}", level.id());
         if let Some(cached) = cached_file(&dir, &cache_stem) {
             return Ok(cached);
@@ -607,12 +806,28 @@ impl Omni {
             return Ok(path);
         }
         let source = provider.audio_source(song, level).await?;
+        tracing::info!(provider = song.provider, "audio resolved through native platform");
+        self.cache_audio_source(&dir, &cache_stem, source).await
+    }
+
+    async fn cache_audio_source(
+        &self,
+        dir: &Path,
+        cache_stem: &str,
+        source: AudioSource,
+    ) -> Result<PathBuf, OmniError> {
         // A preview would stand in for the whole song once the account may play it, so it gets a name never looked up.
-        let name = if source.preview { format!("{cache_stem}-preview") } else { cache_stem };
+        let name = if source.preview { format!("{cache_stem}-preview") } else { cache_stem.to_owned() };
         let path = dir.join(format!("{name}.{}", source.extension));
         let io_err = |source| OmniError::Io { path: path.clone(), source };
-        std::fs::create_dir_all(&dir).map_err(io_err)?;
-        let mut response = self.http.get(&source.url).send().await?.error_for_status()?;
+        std::fs::create_dir_all(dir).map_err(io_err)?;
+        let mut response = self
+            .http
+            .get(&source.url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|err| OmniError::Http(err.without_url()))?;
         let partial = path.with_extension("part");
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
@@ -621,7 +836,7 @@ impl Omni {
         std::fs::write(&partial, &bytes).map_err(io_err)?;
         std::fs::rename(&partial, &path).map_err(io_err)?;
         tracing::info!(
-            song = %stem,
+            song = cache_stem,
             level = source.level.id(),
             bytes = bytes.len(),
             preview = source.preview,

@@ -1,5 +1,7 @@
 // Checks animation curves, render hints and the classic style's layout and word poses.
 
+#![cfg(test)]
+
 mod controls;
 mod nebbia_png;
 

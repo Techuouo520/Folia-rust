@@ -15,13 +15,13 @@ const H: u32 = 600;
 
 #[derive(Debug, Clone)]
 enum Msg {
-    Monet(MonetEvent),
-    Timeline(folia_ui::TimelineMessage),
+    Monet,
+    Timeline,
 }
 
 impl From<MonetEvent> for Msg {
-    fn from(event: MonetEvent) -> Self {
-        Self::Monet(event)
+    fn from(_: MonetEvent) -> Self {
+        Self::Monet
     }
 }
 
@@ -325,7 +325,7 @@ fn timeline_card_blurs_the_lyrics_behind_it() {
     let mut cache = Cache::default();
     for _ in 0..2 {
         let card =
-            timeline.view(&i18n, &theme, false, window, Some(&lyrics), later).expect("timeline").map(Msg::Timeline);
+            timeline.view(&i18n, &theme, false, window, Some(&lyrics), later).expect("timeline").map(|_| Msg::Timeline);
         let element: Element<'_, Msg> = stack![lyric_view::<Msg>(scene(&lyrics, &theme, Style::Classic)), card].into();
         cache = picture.frame(element, cache);
     }

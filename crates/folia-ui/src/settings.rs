@@ -38,6 +38,7 @@ pub enum Section {
     General,
     Graphics,
     Developer,
+    Sources,
 }
 
 impl Section {
@@ -48,6 +49,7 @@ impl Section {
             Section::General => "options.settingsPageGeneral",
             Section::Graphics => "options.settingsPageGraphics",
             Section::Developer => "options.settingsPageDeveloper",
+            Section::Sources => "options.customSources",
         }
     }
 
@@ -58,6 +60,7 @@ impl Section {
             Section::General => Icon::SlidersHorizontal,
             Section::Graphics => Icon::Gauge,
             Section::Developer => Icon::Terminal,
+            Section::Sources => Icon::ListMusic,
         }
     }
 }
@@ -65,7 +68,7 @@ impl Section {
 /// The side list's groups, `SETTINGS_NAV_GROUP_SPECS` without the categories Folia-rust has nothing on yet.
 const NAV: [(&str, &[Section]); 3] = [
     ("options.settingsGroupInterface", &[Section::Appearance, Section::Player]),
-    ("options.settingsGroupApp", &[Section::General, Section::Graphics]),
+    ("options.settingsGroupApp", &[Section::General, Section::Graphics, Section::Sources]),
     ("options.settingsGroupAdvanced", &[Section::Developer]),
 ];
 
@@ -84,9 +87,12 @@ const BAR: GroupDef = GroupDef { id: "bottomUiSettings", title: "options.setting
 const PERFORMANCE: GroupDef =
     GroupDef { id: "graphicsPerformance", title: "options.labPerformanceSection", bare: false };
 const DEVELOPER: GroupDef = GroupDef { id: "developerTools", title: "options.developerTools", bare: true };
+const SOURCES: GroupDef = GroupDef { id: "customSources", title: "options.customSources", bare: true };
 
 /// Every option the pages draw, in page order: what the search finds.
-const OPTIONS: [(Section, GroupDef, &str); 11] = [
+const OPTIONS: [(Section, GroupDef, &str); 13] = [
+    (Section::Sources, SOURCES, "options.sourceImportUrl"),
+    (Section::Sources, SOURCES, "options.sourceImport"),
     (Section::Appearance, LYRICS, "options.lyricsAnimationAdjust"),
     (Section::Appearance, THEME, "options.daylightMode"),
     (Section::Player, BAR, "options.playerBottomBarOffset"),
@@ -133,6 +139,7 @@ struct Motion {
 
 /// What the pages show and change; the shell owns the values.
 pub struct Values<'a> {
+    pub sources: &'a crate::sources::Sources,
     pub language: LanguagePreference,
     pub resolved: Language,
     pub appearance: &'a AppearanceSettings,
@@ -530,7 +537,14 @@ impl Settings {
         let rise = 6.0 * (1.0 - page_in);
         let body: Element<'a, crate::Message> = if self.query.is_empty() {
             let groups = self.page(i18n, tokens, values, now);
-            column(groups.into_iter().enumerate().map(|(index, group)| kit::group(tokens, group, index == 0))).into()
+            column(groups.into_iter().enumerate().map(|(index, group)| {
+                if self.section == Section::Sources {
+                    values.sources.group(tokens, group, index == 0)
+                } else {
+                    kit::group(tokens, group, index == 0)
+                }
+            }))
+            .into()
         } else {
             search_results(i18n, tokens, &self.query)
         };
@@ -682,6 +696,7 @@ impl Settings {
                 }
                 vec![group(PERFORMANCE, rows)]
             }
+            Section::Sources => values.sources.groups(i18n, tokens),
             Section::Developer => crate::developer::settings_groups(
                 i18n,
                 tokens,

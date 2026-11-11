@@ -1,5 +1,7 @@
 // Checks that every locale parses, carries the same keys as zh-CN, falls back correctly and fills placeholders.
 
+#![cfg(test)]
+
 use std::collections::BTreeSet;
 
 use folia_core::Language;
@@ -62,5 +64,20 @@ fn subscription_failure_names_the_provider_in_every_language() {
         let message = i18n.format("status.songSubscriptionRequired", &[("provider", "Spotify")]);
         assert!(message.contains("Spotify"));
         assert!(!message.contains("{{"));
+    }
+}
+#[test]
+fn source_metadata_and_update_labels_substitute_their_values() {
+    for language in Language::ALL {
+        let i18n = I18n::new(language).unwrap();
+        let details = i18n.format(
+            "options.sourceDetails",
+            &[("version", "1.2.3"), ("author", "Fixture Author"), ("platforms", "wy, kg")],
+        );
+        for value in ["1.2.3", "Fixture Author", "wy, kg"] {
+            assert!(details.contains(value), "{language:?}: {details}");
+        }
+        assert!(!details.contains('{'));
+        assert!(i18n.format("options.sourceUpdate", &[("name", "Fixture source")]).contains("Fixture source"));
     }
 }

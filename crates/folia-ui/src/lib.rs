@@ -38,12 +38,14 @@ mod poster;
 mod poster_motion;
 mod quality_select;
 mod queue_island;
+mod reorder;
 mod scrollbar;
 mod search;
 pub mod search_results;
 mod settings;
 mod settings_kit;
 mod smooth_scroll;
+mod sources;
 mod splash;
 mod status_toast;
 mod timeline;
@@ -73,6 +75,7 @@ pub use playback_navigation::PlaybackNavigation;
 /// The floating capsule. `shown` is its 0.26s ease-out hide, shared by opacity, offset and scale.
 pub use player_bar::{CapsuleBox, PlayerBar, capsule_box};
 pub use playlist_dialog::{Dialog as PlaylistDialog, Look as PlaylistLook, Message as PlaylistMessage, PlaylistChoice};
+pub use reorder::drag_to_reorder;
 pub use search_results::format_duration;
 pub use settings_kit::{Faded, Tokens, panel_glass, quick_tile_fill, tools_glass};
 pub use smooth_scroll::{LINE_PX, PROGRAM_EASE, PROGRAM_MS, Scroll, WHEEL_EASE, WHEEL_MS};
@@ -153,6 +156,7 @@ pub enum Message {
     Navigate(Page),
     OpenSettings,
     Settings(settings::Message),
+    Sources(sources::Message),
     /// The developer page, its log panel and the two overlays.
     Developer(developer::Message),
     Workbench(workbench::Message),
@@ -261,6 +265,7 @@ pub struct Shell {
     iced_theme: iced::Theme,
     page: Page,
     settings: Option<settings::Settings>,
+    sources: sources::Sources,
     workbench: Option<workbench::Workbench>,
     visualizer: VisualizerSettings,
     developer: developer::Developer,
@@ -375,6 +380,7 @@ impl Shell {
             next_page: None,
             seam_flip: None,
             settings: None,
+            sources: sources::Sources::default(),
             workbench: None,
             visualizer: init.visualizer,
             developer,
@@ -442,7 +448,8 @@ impl Shell {
         let fonts = Task::perform(crate::background::blocking(fonts::installed_families), |fonts| {
             Message::FontsLoaded(fonts.unwrap_or_default())
         });
-        (shell, Task::batch([load.map(Message::Library), open, window, portrait, playlists, fonts]))
+        let sources = shell.sources.restore(shell.omni.clone(), shell.store.clone(), shell.data_dir.clone());
+        (shell, Task::batch([load.map(Message::Library), open, window, portrait, playlists, fonts, sources]))
     }
 
     fn portrait_handle(&self, id: Option<i64>) -> Option<&iced::widget::image::Handle> {
@@ -694,7 +701,11 @@ impl Shell {
                 Task::none()
             }
             Message::Workbench(message) => self.workbench(message),
+            Message::Sources(message) => self.sources.update(message, self.omni.clone()),
             Message::Settings(message) => {
+                if self.sources.has_alert() && matches!(message, settings::Message::Escape) {
+                    return self.sources.update(sources::Message::DismissUpdates, self.omni.clone());
+                }
                 let Some(window) = self.settings.as_mut() else { return Task::none() };
                 let task = window.update(message).map(Message::Settings);
                 if window.finished() {
@@ -1658,6 +1669,7 @@ impl Shell {
         }
         if let Some(window) = &self.settings {
             let values = settings::Values {
+                sources: &self.sources,
                 language: self.general.language,
                 resolved: self.i18n.language(),
                 appearance: &self.appearance,
@@ -1743,6 +1755,9 @@ impl Shell {
         }
         // `DraggableDebugWindow` is z-300: above the dialogs, below the title bar.
         let dev_tokens = settings_kit::Tokens::new(&self.theme, daylight);
+        if let Some(alert) = self.sources.alert(&self.i18n, dev_tokens) {
+            frame = frame.push(alert);
+        }
         if let Some(layer) =
             developer::log_overlay(&self.i18n, dev_tokens, &self.developer, &self.developer_settings, self.window_size)
         {
@@ -1802,7 +1817,8 @@ impl Shell {
 
     /// Settings, the lyric workbench, the sign-in window or the lyrics timeline.
     fn modal_open(&self) -> bool {
-        self.settings.is_some()
+        self.sources.has_alert()
+            || self.settings.is_some()
             || self.workbench.is_some()
             || self.login.is_open()
             || self.sheets.any_open()
@@ -1859,6 +1875,14 @@ impl Shell {
             iced::event::listen_with(chrome_pointer),
             iced::event::listen_with(developer_key),
         ];
+        if self.sources.polls() {
+            parts.push(
+                iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::Sources(sources::Message::Poll)),
+            );
+        }
+        if self.sources.has_alert() && self.settings.is_none() {
+            parts.push(iced::event::listen_with(settings_key));
+        }
         if self.developer.log_open || self.settings.as_ref().is_some_and(settings::Settings::shows_developer) {
             parts.push(
                 iced::time::every(std::time::Duration::from_millis(400))

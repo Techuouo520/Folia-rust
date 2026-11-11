@@ -10,6 +10,8 @@ path = "lib.rs"
 [dependencies]
 folia-core.workspace = true
 folia-omni.workspace = true
+folia-store.workspace = true
+serde_json.workspace = true
 image.workspace = true
 rqrr.workspace = true
 tempfile.workspace = true

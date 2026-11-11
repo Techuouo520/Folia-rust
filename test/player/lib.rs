@@ -1,5 +1,7 @@
 // Checks channel mapping and real playback of a silent WAV on the default device.
 
+#![cfg(test)]
+
 use std::fs;
 use std::path::Path;
 use std::thread::sleep;

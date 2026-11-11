@@ -6,7 +6,7 @@ mod library;
 mod lyrics;
 
 use folia_core::{AudioQuality, ChorusRange, OnlineId, Track};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     Account, AudioSource, BoxFuture, Collection, CollectionDetail, CollectionKind, ExploreSection, LoginCode,
@@ -42,6 +42,25 @@ impl Provider for Kugou {
 
     fn display_name(&self) -> &'static str {
         "酷狗音乐"
+    }
+
+    fn lx_music_info(&self, track: &Track) -> Option<crate::lx::MusicInfo> {
+        let key = SongKey::parse(&track.online.as_ref()?.id);
+        let mut info = crate::lx::MusicInfo::track("kg", track);
+        info.data["hash"] = json!(key.hash);
+        info.data["albumId"] = json!(key.album_id);
+        info.data["albumAudioId"] = json!(key.album_audio_id);
+        info.data["songmid"] = json!(track.online_info.as_ref().map(|i| i.audio_id.as_str()).unwrap_or(""));
+        let mut hashes = track.online_info.as_ref().map(|i| i.quality_hashes.clone()).unwrap_or_default();
+        hashes.entry(AudioQuality::Standard).or_insert(key.hash);
+        for (quality, hash) in hashes {
+            let name = crate::lx::quality_name(quality);
+            info.data["_types"][name] = json!({"hash":hash,"size":null});
+            if let Some(types) = info.data["types"].as_array_mut() {
+                types.push(json!({"type":name,"hash":hash,"size":null}));
+            }
+        }
+        Some(info)
     }
 
     fn search_songs<'a>(
@@ -415,6 +434,30 @@ fn track(raw: &Value) -> Option<Track> {
         artist: (!artists.is_empty()).then(|| artists.join(" / ")),
         album: album_name,
         cover_url: cover_of(raw),
+        online_info: Some(folia_core::OnlineTrackInfo {
+            album_id,
+            audio_id: text_of(audio, &["audio_id"])
+                .or_else(|| text_of(raw, &["Audioid", "AudioID", "audio_id"]))
+                .unwrap_or_default(),
+            quality_hashes: [
+                (AudioQuality::Standard, Some(hash)),
+                (
+                    AudioQuality::High,
+                    text_of(audio, &["hash_320"]).or_else(|| text_of(raw, &["HQFileHash", "hash_320"])),
+                ),
+                (
+                    AudioQuality::Lossless,
+                    text_of(audio, &["hash_flac"]).or_else(|| text_of(raw, &["SQFileHash", "hash_flac"])),
+                ),
+                (
+                    AudioQuality::Hires,
+                    text_of(audio, &["hash_high"]).or_else(|| text_of(raw, &["ResFileHash", "hash_high"])),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(quality, hash)| hash.filter(|h| !h.is_empty()).map(|h| (quality, h.to_uppercase())))
+            .collect(),
+        }),
         duration: seconds,
         online: Some(online),
         ..Track::default()

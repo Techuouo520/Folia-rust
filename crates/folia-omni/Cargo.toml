@@ -9,29 +9,32 @@ license.workspace = true
 [features]
 default = ["netease", "kugou", "qq", "bodian", "qishui", "spotify"]
 netease = []
-kugou = ["dep:flate2", "dep:num-bigint"]
-qq = ["dep:flate2", "dep:num-bigint"]
+kugou = []
+qq = []
 bodian = []
-qishui = ["dep:ring"]
-spotify = ["dep:ring", "dep:librespot-audio", "dep:librespot-core", "dep:librespot-metadata"]
+qishui = []
+spotify = ["dep:librespot-audio", "dep:librespot-core", "dep:librespot-metadata"]
 ytm = []
 
 [dependencies]
 folia-core.workspace = true
 folia-lyrics.workspace = true
+folia-store.workspace = true
 aes.workspace = true
 base64.workspace = true
-flate2 = { workspace = true, optional = true }
+flate2.workspace = true
 image.workspace = true
 keyring.workspace = true
 librespot-audio = { workspace = true, optional = true }
 librespot-core = { workspace = true, optional = true }
 librespot-metadata = { workspace = true, optional = true }
 md-5.workspace = true
-num-bigint = { workspace = true, optional = true }
+num-bigint.workspace = true
 qrcode.workspace = true
 reqwest.workspace = true
-ring = { workspace = true, optional = true }
+ring.workspace = true
+rquickjs.workspace = true
+rsa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

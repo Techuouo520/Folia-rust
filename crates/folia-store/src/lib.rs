@@ -10,6 +10,7 @@ mod memory;
 mod playback;
 mod player;
 mod runtime_log;
+mod sources;
 mod theme;
 mod visualizer;
 
@@ -26,6 +27,7 @@ pub use memory::{MEMORY_HISTORY, MemoryHistory, MemoryMonitor, MemorySample};
 pub use playback::PlaybackSettings;
 pub use player::{BOTTOM_BAR_BASE, PlayerSettings, bottom_bar_max_offset, clamp_bottom_bar_offset};
 pub use runtime_log::{LogLine, RuntimeLog, clock, iso};
+pub use sources::{CustomSource, SourceMetadata, SourcePlatform, SourceSettings};
 pub use theme::{DualTheme, StoredTheme, ThemeSettings, ThemeSource};
 pub use visualizer::VisualizerSettings;
 

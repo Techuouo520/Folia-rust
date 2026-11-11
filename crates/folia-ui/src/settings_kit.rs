@@ -269,16 +269,26 @@ pub struct Group<'a, M> {
 }
 
 pub fn group<'a, M: 'a>(tokens: Tokens, group: Group<'a, M>, first: bool) -> Element<'a, M> {
+    group_with_rows(tokens, group, first, |rows| column(rows).into())
+}
+
+pub(crate) fn group_with_rows<'a, M: 'a>(
+    tokens: Tokens,
+    group: Group<'a, M>,
+    first: bool,
+    list: impl FnOnce(Vec<Element<'a, M>>) -> Element<'a, M>,
+) -> Element<'a, M> {
     let Group { title, bare, rows, foot } = group;
-    let mut card = column![];
+    let mut entries = Vec::with_capacity(rows.len());
     for (index, entry) in rows.into_iter().enumerate() {
+        let mut row = column![];
         if index > 0 {
             let inset = if entry.sub { 40.0 } else { 16.0 };
-            card = card.push(container(fill_box(tokens.line).height(1)).padding(Padding::ZERO.left(inset)));
+            row = row.push(container(fill_box(tokens.line).height(1)).padding(Padding::ZERO.left(inset)));
         }
-        card = card.push(row_view(tokens, entry));
+        entries.push(row.push(row_view(tokens, entry)).into());
     }
-    let card = container(card).width(Length::Fill).style(move |_| container::Style {
+    let card = container(list(entries)).width(Length::Fill).style(move |_| container::Style {
         background: Some(tokens.card.into()),
         border: Border { color: tokens.line, width: 1.0, radius: 12.0.into() },
         ..container::Style::default()

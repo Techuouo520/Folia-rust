@@ -1,5 +1,7 @@
 // Chrome deadline, capsule hover and subtitle rows.
 
+#![cfg(test)]
+
 mod chrome_motion;
 mod developer;
 mod glass_tone;
@@ -9,6 +11,7 @@ mod monet;
 mod panelfix;
 mod player_bar;
 mod polish;
+mod reorder;
 mod scroll_timeline;
 mod seam_title;
 #[cfg(test)]
