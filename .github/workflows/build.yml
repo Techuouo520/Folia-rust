@@ -54,6 +54,7 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then cp "target/${{ matrix.target }}/release/folia.exe" "$stage/"; else cp "target/${{ matrix.target }}/release/folia" "$stage/"; fi
           # Everything else is compiled into the binary; only the Arphic-licensed stroke data stays a separate file.
           mkdir -p "$stage/assets/nebbia" && cp assets/nebbia/nebbia-strokes.bin.gz assets/nebbia/NOTICE.txt assets/nebbia/COPYING.txt assets/nebbia/ARPHICPL.TXT "$stage/assets/nebbia/" && cp LICENSE README.md "$stage/"
+          mkdir -p "$stage/assets/paper-shaders" && cp assets/paper-shaders/LICENSE assets/paper-shaders/NOTICE "$stage/assets/paper-shaders/"
           if [ "${{ runner.os }}" = "Windows" ]; then 7z a -tzip "$stage.zip" "$stage" > /dev/null; echo "file=$stage.zip" >> "$GITHUB_OUTPUT"; else tar -czf "$stage.tar.gz" "$stage"; echo "file=$stage.tar.gz" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/upload-artifact@v4
         with:

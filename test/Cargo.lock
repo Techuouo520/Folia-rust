@@ -1616,14 +1616,14 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "folia-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "folia-i18n"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "folia-core",
  "thiserror 2.0.21",
@@ -1633,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "folia-library"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "encoding_rs",
  "folia-core",
@@ -1649,7 +1649,7 @@ dependencies = [
 
 [[package]]
 name = "folia-lyrics"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.23.1",
  "folia-core",
@@ -1662,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "folia-omni"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aes 0.8.4",
  "base64 0.23.1",
@@ -1692,7 +1692,7 @@ dependencies = [
 
 [[package]]
 name = "folia-player"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "cpal",
  "folia-core",
@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "folia-render"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bytemuck",
  "iced",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "folia-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "directories",
  "folia-core",
@@ -1735,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "folia-ui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "device_query",
  "folia-core",
@@ -1760,7 +1760,7 @@ dependencies = [
 
 [[package]]
 name = "folia-visualizer"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bytemuck",
  "flate2",
