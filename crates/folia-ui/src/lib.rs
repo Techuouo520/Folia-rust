@@ -100,7 +100,10 @@ pub use typeface::install as install_fonts;
 pub use typeface::interface_font_for;
 pub use typeface::text as interface_text;
 pub use typeface::{TextStyle, UI_TEXT_STYLES};
-pub use wall::{CoverSource as WallCover, Message as WallMessage, Shape as WallShape, Tile as WallTile, Wall};
+pub use wall::{
+    CoverLayers as WallCoverLayers, CoverSource as WallCover, Message as WallMessage, Shape as WallShape,
+    Tile as WallTile, Wall,
+};
 pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, seam_on_axis, wider_span};
 pub use wall_pan::{Glide as WallGlide, Inertia as WallInertia, Release as WallRelease};
 pub use wall_shift::{Kind as ShiftKind, Pose as ShiftPose, Shift as WallShift};

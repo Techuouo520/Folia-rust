@@ -32,6 +32,7 @@ const RANK_AREA_WEIGHT: f32 = 0.35;
 const COVER_BYTES: usize = 48 * 1024 * 1024;
 const THUMBNAIL_BYTES: usize = 32 * 1024 * 1024;
 const THUMBNAIL_SIDE: u32 = 64;
+const COVER_FADE_SECONDS: f32 = 0.22;
 const COVER_JOBS: usize = 6;
 /// `COVER_SIZE_STEPS`: covers are asked for and decoded at the smallest step that covers the tile.
 const COVER_STEPS: [u32; 3] = [256, 512, 1024];
@@ -219,7 +220,16 @@ pub enum Message {
         ticket: u64,
         source: CoverSource,
         px: u32,
+        opaque: bool,
         cover: Option<Cover>,
+    },
+    CoverAllocated {
+        id: i64,
+        ticket: u64,
+        source: CoverSource,
+        bytes: usize,
+        opaque: bool,
+        result: Result<iced_runtime::image::Allocation, iced_runtime::image::Error>,
     },
     RetryCovers(u64),
 }
@@ -228,6 +238,33 @@ struct CoverRequest {
     ticket: u64,
     px: u32,
     _handle: iced::task::Handle,
+}
+
+struct CoverFade {
+    thumbnail: Handle,
+    started: Instant,
+}
+
+fn cover_progress(started: Instant, now: Instant) -> f32 {
+    let t = (now.saturating_duration_since(started).as_secs_f32() / COVER_FADE_SECONDS).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn opaque_handle(image: &Handle) -> bool {
+    matches!(image, Handle::Rgba { pixels, .. } if pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255))
+}
+
+// Loader futures compute opacity before delivering decoded pixels to the UI thread.
+fn loaded_cover(id: i64, ticket: u64, source: CoverSource, px: u32, cover: Option<Cover>) -> Message {
+    let opaque = cover.as_ref().is_some_and(|cover| cover.rgba.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255));
+    Message::CoverLoaded { id, ticket, source, px, opaque, cover }
+}
+
+/// Images and blend progress for presenting a cached cover without a blank replacement frame.
+pub struct CoverLayers<'a> {
+    pub image: Option<&'a Handle>,
+    pub previous: Option<&'a Handle>,
+    pub opacity: f32,
 }
 
 pub struct Wall {
@@ -241,6 +278,8 @@ pub struct Wall {
     pan: Vector,
     covers: CoverCache<i64, Handle>,
     thumbnails: CoverCache<i64, Handle>,
+    cover_allocations: HashMap<i64, iced_runtime::image::Allocation>,
+    cover_fades: HashMap<i64, CoverFade>,
     cover_sources: HashMap<i64, CoverSource>,
     cover_failures: HashMap<i64, (Instant, u32)>,
     cover_retry: Option<(u64, Instant, iced::task::Handle)>,
@@ -321,6 +360,9 @@ struct Ghost {
     index: usize,
     id: i64,
     cover: Option<Handle>,
+    previous_cover: Option<Handle>,
+    cover_opacity: f32,
+    _allocation: Option<iced_runtime::image::Allocation>,
     fallback: bool,
     label: Option<Label>,
     heading: bool,
@@ -345,6 +387,8 @@ impl Wall {
             pan: Vector::ZERO,
             covers: CoverCache::new(COVER_BYTES),
             thumbnails: CoverCache::new(THUMBNAIL_BYTES),
+            cover_allocations: HashMap::new(),
+            cover_fades: HashMap::new(),
             cover_sources: HashMap::new(),
             cover_failures: HashMap::new(),
             cover_retry: None,
@@ -434,10 +478,12 @@ impl Wall {
         self.labels.clear();
         self.pending.clear();
         self.cover_retry = None;
+        self.cover_fades.clear();
         for tile in tiles {
             if self.cover_sources.get(&tile.id).is_some_and(|source| source != &tile.cover) {
                 self.covers.remove(&tile.id);
                 self.thumbnails.remove(&tile.id);
+                self.cover_allocations.remove(&tile.id);
                 self.cover_failures.remove(&tile.id);
             }
             self.cover_sources.insert(tile.id, tile.cover.clone());
@@ -481,11 +527,15 @@ impl Wall {
             }
             let Some(tile) = tiles.get(placement.track) else { continue };
             let loaded = self.cover_ref(tile.id);
+            let layers = self.cover_layers_at(tile.id, now);
             ghosts.push(Ghost {
                 rect,
                 index: placement.track,
                 id: tile.id,
                 cover: loaded.and_then(Option::as_ref).cloned(),
+                previous_cover: layers.previous.cloned(),
+                cover_opacity: layers.opacity,
+                _allocation: self.cover_allocations.get(&tile.id).cloned(),
                 fallback: shows_fallback(tile, loaded),
                 label: self.labels.get(&(placement.track, placement.rect.width as u32)).cloned(),
                 heading: tile.heading,
@@ -597,7 +647,7 @@ impl Wall {
                 self.pressed = at;
                 (Task::none(), Some(hit))
             }
-            Message::CoverLoaded { id, ticket, source, px, cover } => {
+            Message::CoverLoaded { id, ticket, source, px, opaque, cover } => {
                 if self.cover_sources.get(&id) != Some(&source) {
                     return (Task::none(), None);
                 }
@@ -616,9 +666,24 @@ impl Wall {
                         );
                     }
                     Some(cover) if current => {
-                        self.cover_failures.remove(&id);
                         let bytes = cover.rgba.len();
-                        self.covers.insert(id, Some(Handle::from_rgba(cover.width, cover.height, cover.rgba)), bytes);
+                        let handle = Handle::from_rgba(cover.width, cover.height, cover.rgba);
+                        // iced uploads images of at least 2 MiB asynchronously; wait for its public readiness signal.
+                        if bytes >= 2 * 1024 * 1024 {
+                            let (task, upload) = iced_runtime::image::allocate(handle)
+                                .map(move |result| Message::CoverAllocated {
+                                    id,
+                                    ticket,
+                                    source: source.clone(),
+                                    bytes,
+                                    opaque,
+                                    result,
+                                })
+                                .abortable();
+                            self.pending.insert(id, CoverRequest { ticket, px, _handle: upload.abort_on_drop() });
+                            return (task, None);
+                        }
+                        self.present_cover(id, handle, bytes, opaque, None);
                     }
                     None if current && matches!(source, CoverSource::Remote(_)) => {
                         let attempts = self.cover_failures.get(&id).map_or(0, |(_, attempts)| *attempts);
@@ -630,6 +695,24 @@ impl Wall {
                     }
                     None if current => self.covers.insert(id, None, 0),
                     _ => {}
+                }
+                (self.load_visible(tiles, omni), None)
+            }
+            Message::CoverAllocated { id, ticket, source, bytes, opaque, result } => {
+                if self.cover_sources.get(&id) != Some(&source)
+                    || self.pending.get(&id).is_none_or(|request| request.ticket != ticket)
+                {
+                    return (Task::none(), None);
+                }
+                self.pending.remove(&id);
+                match result {
+                    Ok(allocation) => {
+                        self.present_cover(id, allocation.handle().clone(), bytes, opaque, Some(allocation))
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = &err as &dyn std::error::Error, "cover GPU upload failed");
+                        self.cover_failures.insert(id, (Instant::now() + std::time::Duration::from_secs(5), 1));
+                    }
                 }
                 (self.load_visible(tiles, omni), None)
             }
@@ -732,6 +815,9 @@ impl Wall {
         }
         wanted.sort_by(|a, b| (a.3 != THUMBNAIL_SIDE).cmp(&(b.3 != THUMBNAIL_SIDE)).then_with(|| a.0.total_cmp(&b.0)));
         self.covers.end_pass();
+        self.cover_allocations.retain(|id, allocation| {
+            self.covers.peek(id).and_then(Option::as_ref).is_some_and(|handle| handle.id() == allocation.handle().id())
+        });
         let mut tasks = Vec::new();
         for (_, id, cover, px) in wanted {
             if self.pending.len() >= COVER_JOBS {
@@ -740,26 +826,25 @@ impl Wall {
             self.next_cover_ticket = self.next_cover_ticket.wrapping_add(1);
             let ticket = self.next_cover_ticket;
             let source = cover.clone();
-            let task =
-                match cover {
-                    CoverSource::Local(path) => Task::perform(
-                        async move { blocking(move || folia_library::cover_for(&path, px, px)).await.flatten() },
-                        move |cover| Message::CoverLoaded { id, ticket, source: source.clone(), px, cover },
-                    ),
-                    CoverSource::Remote(url) => {
-                        let Some(omni) = omni.cloned() else {
-                            self.covers.insert(id, None, 0);
-                            continue;
-                        };
-                        Task::perform(crate::background::online_cover(omni, url, px), move |cover| {
-                            Message::CoverLoaded { id, ticket, source: source.clone(), px, cover }
-                        })
-                    }
-                    CoverSource::None => {
+            let task = match cover {
+                CoverSource::Local(path) => Task::perform(
+                    async move { blocking(move || folia_library::cover_for(&path, px, px)).await.flatten() },
+                    move |cover| loaded_cover(id, ticket, source.clone(), px, cover),
+                ),
+                CoverSource::Remote(url) => {
+                    let Some(omni) = omni.cloned() else {
                         self.covers.insert(id, None, 0);
                         continue;
-                    }
-                };
+                    };
+                    Task::perform(crate::background::online_cover(omni, url, px), move |cover| {
+                        loaded_cover(id, ticket, source.clone(), px, cover)
+                    })
+                }
+                CoverSource::None => {
+                    self.covers.insert(id, None, 0);
+                    continue;
+                }
+            };
             let (task, handle) = task.abortable();
             self.pending.insert(id, CoverRequest { ticket, px, _handle: handle.abort_on_drop() });
             tasks.push(task);
@@ -914,11 +999,15 @@ impl Wall {
 
     /// Whether the camera or the tiles move on their own: inertia, a wheel glide or a shift.
     pub fn coasting(&self) -> bool {
-        self.inertia.is_some() || self.glide.is_some() || self.shift.is_some()
+        self.inertia.is_some()
+            || self.glide.is_some()
+            || self.shift.is_some()
+            || self.cover_fades.values().any(|fade| cover_progress(fade.started, Instant::now()) < 1.0)
     }
 
     /// Steps the inertia, the wheel glide and the shift for this frame.
     pub fn tick_coast(&mut self, now: Instant, tiles: &[Tile], omni: Option<&Omni>) -> Task<Message> {
+        self.cover_fades.retain(|_, fade| cover_progress(fade.started, now) < 1.0);
         if let Some(inertia) = self.inertia {
             let (pan, moving) = inertia.at(now);
             self.pan = pan;
@@ -1162,10 +1251,13 @@ impl canvas::Program<Message> for WallProgram<'_> {
                 self.wall.art(placement, item, rect, Some(placement.slot) == keyboard || self.playing == Some(item.id))
             };
             let loaded = self.wall.cover_ref(item.id);
+            let layers = self.wall.cover_layers_at(item.id, now);
             let tile = Drawn {
                 rect,
                 index: placement.track,
                 cover: loaded.and_then(Option::as_ref),
+                previous_cover: layers.previous,
+                cover_opacity: layers.opacity,
                 fallback: shows_fallback(item, loaded),
                 art,
                 label: if grown { None } else { label },
@@ -1214,6 +1306,8 @@ impl WallProgram<'_> {
                 rect: ghost.rect,
                 index: ghost.index,
                 cover: ghost.cover.as_ref(),
+                previous_cover: ghost.previous_cover.as_ref(),
+                cover_opacity: ghost.cover_opacity,
                 fallback: ghost.fallback,
                 art: Art::None,
                 label: ghost.label.as_ref(),
@@ -1336,6 +1430,8 @@ struct Drawn<'a> {
     rect: Rectangle,
     index: usize,
     cover: Option<&'a Handle>,
+    previous_cover: Option<&'a Handle>,
+    cover_opacity: f32,
     /// The hue gradient under an item without a cover.
     fallback: bool,
     art: Art<'a>,
@@ -1459,7 +1555,16 @@ fn draw_art(frame: &mut Frame, tile: &Drawn, place: Place) {
             let side = width.max(height);
             let square =
                 Rectangle { x: x + (width - side) / 2.0, y: y + (height - side) / 2.0, width: side, height: side };
-            frame.with_clip(place.rect(tile.rect), |clipped| clipped.draw_image(place.rect(square), image(handle)));
+            frame.with_clip(place.rect(tile.rect), |clipped| {
+                let front = place.pose.alpha * tile.cover_opacity;
+                if let Some(previous) = tile.previous_cover {
+                    // Source-over weights preserve the parent's opacity throughout an opaque-image crossfade.
+                    let back =
+                        if front < 1.0 { place.pose.alpha * (1.0 - tile.cover_opacity) / (1.0 - front) } else { 0.0 };
+                    clipped.draw_image(place.rect(square), canvas::Image::new(previous.clone()).opacity(back));
+                }
+                clipped.draw_image(place.rect(square), image(handle).opacity(front));
+            });
         }
     }
 }
@@ -1913,6 +2018,42 @@ impl Wall {
         self.covers.peek(&id).filter(|cover| cover.is_some()).or_else(|| self.thumbnails.peek(&id))
     }
 
+    fn present_cover(
+        &mut self,
+        id: i64,
+        image: Handle,
+        bytes: usize,
+        opaque: bool,
+        allocation: Option<iced_runtime::image::Allocation>,
+    ) {
+        self.cover_failures.remove(&id);
+        self.cover_fades.remove(&id);
+        if opaque
+            && let Some(Some(thumbnail)) = self.thumbnails.peek(&id)
+            && opaque_handle(thumbnail)
+        {
+            self.cover_fades.insert(id, CoverFade { thumbnail: thumbnail.clone(), started: Instant::now() });
+        }
+        self.cover_allocations.remove(&id);
+        if let Some(allocation) = allocation {
+            self.cover_allocations.insert(id, allocation);
+        }
+        self.covers.insert(id, Some(image), bytes);
+    }
+
+    /// Presentation layers sampled at one frame time, shared by painting, transitions and glass capture.
+    pub fn cover_layers_at(&self, id: i64, now: Instant) -> CoverLayers<'_> {
+        let image = self.cover_ref(id).and_then(Option::as_ref);
+        let fade = self.cover_fades.get(&id).filter(|fade| {
+            cover_progress(fade.started, now) < 1.0 && image.is_some_and(|image| image.id() != fade.thumbnail.id())
+        });
+        CoverLayers {
+            image,
+            previous: fade.map(|fade| &fade.thumbnail),
+            opacity: fade.map_or(1.0, |fade| cover_progress(fade.started, now)),
+        }
+    }
+
     /// CPU-side decoded cover bytes, for the wall's memory budget diagnostics.
     pub fn cover_memory(&self) -> usize {
         self.covers.used_bytes() + self.thumbnails.used_bytes()
@@ -1967,6 +2108,24 @@ impl Wall {
             let loaded = self.cover_ref(item.id);
             let (image, uv, shade_kind) = glass_art(&art, loaded.and_then(Option::as_ref), rect, item.heading);
             let index = image.map(|handle| push_cover(&mut images, handle)).unwrap_or(u32::MAX);
+            let layers = self.cover_layers_at(item.id, now);
+            let opacity = if matches!(art, Art::None) {
+                if let Some(previous) = layers.previous {
+                    let preview = push_cover(&mut images, previous);
+                    quads.push(folia_render::CoverQuad {
+                        rect: [rect.x, rect.y, rect.width, rect.height],
+                        uv,
+                        image: preview,
+                        color0: poster,
+                        color1: poster,
+                        shade: shade_kind,
+                        alpha: 1.0,
+                    });
+                }
+                layers.opacity
+            } else {
+                1.0
+            };
             let (color0, color1) = if index == u32::MAX && shows_fallback(item, loaded) {
                 let hue = item.hue;
                 (color_of(hsl(hue, 0.68, 0.58)), color_of(hsl((hue + 52.0) % 360.0, 0.62, 0.18)))
@@ -1980,8 +2139,9 @@ impl Wall {
                 color0,
                 color1,
                 shade: shade_kind,
-                alpha: 1.0,
+                alpha: opacity,
             });
+            stamp = stamp.wrapping_mul(0x0000_0100_0000_01b3).wrapping_add(u64::from(opacity.to_bits()));
             stamp = stamp.wrapping_mul(0x0000_0100_0000_01b3).wrapping_add((rect.x * 2.0).round() as i32 as u64);
             stamp = stamp.wrapping_add((rect.y * 2.0).round() as i32 as u64);
         }

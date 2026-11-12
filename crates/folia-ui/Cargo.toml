@@ -17,6 +17,7 @@ folia-store.workspace = true
 folia-render.workspace = true
 folia-visualizer.workspace = true
 iced.workspace = true
+iced_runtime.workspace = true
 image.workspace = true
 lucide-static-svg.workspace = true
 open.workspace = true

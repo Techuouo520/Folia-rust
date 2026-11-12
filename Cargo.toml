@@ -41,6 +41,7 @@ lyon_path = "1.0.19"
 svgtypes = "0.16.2"
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "image-without-codecs", "linux-theme-detection", "svg", "thread-pool", "tokio", "wayland", "web-colors", "wgpu", "x11"] }
 iced_wgpu = "=0.14.0"
+iced_runtime = "0.14.0"
 keyring = "=4.2.0"
 librespot-audio = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
 librespot-core = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
