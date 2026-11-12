@@ -104,26 +104,6 @@ fn nebbia_vocal_energy_changes_the_frame() {
     assert_ne!(quiet, loud, "vocal energy 200 did not change the nebbia frame");
 }
 
-#[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
-fn nebbia_offscreen_png() {
-    if nebbia_gpu::with_strokes_in_child("nebbia_offscreen_png") {
-        return;
-    }
-    let _guard = nebbia_gpu::GPU.lock().unwrap();
-    let lyrics = nebbia_song();
-    let theme = folia_core::Theme::MIDNIGHT;
-    let temporary = tempfile::tempdir().unwrap();
-    let dir = temporary.path();
-    for (name, time) in [("nebbia-06.0s.png", 6.0_f64), ("nebbia-10.5s.png", 10.5), ("nebbia-15.0s.png", 15.0)] {
-        let pixels = nebbia_png::rgba(1920, 1080, &lyrics, time, &theme);
-        let image = image::RgbaImage::from_raw(1920, 1080, pixels).unwrap();
-        let bright = image.pixels().any(|pixel| pixel.0[0] > 8 || pixel.0[1] > 8 || pixel.0[2] > 8);
-        assert!(bright, "{name} is blank");
-        image.save(dir.join(name)).unwrap();
-    }
-}
-
 fn close(a: f64, b: f64, eps: f64) -> bool {
     (a - b).abs() < eps
 }

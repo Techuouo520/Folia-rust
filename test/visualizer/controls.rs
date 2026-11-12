@@ -149,7 +149,10 @@ fn a_background_mode_resolves_only_when_this_build_can_draw_it() {
     assert_eq!(Background::resolve(Some("common")), Background::Common);
     assert_eq!(Background::resolve(Some("latent")), Background::Latent);
     assert_eq!(Background::resolve(Some("nonsense")), Background::Latent);
-    assert_eq!(Background::ALL.len(), 2);
+    assert_eq!(Background::ALL.map(Background::id), ["common", "monet", "nomand", "latent", "sora"]);
+    for mode in Background::ALL {
+        assert_eq!(Background::resolve(Some(mode.id())), mode);
+    }
     assert_eq!(Background::Common.id(), "common");
     assert_eq!(Background::Common.label_key(), "options.visualizerBackgroundModeCommon");
 }

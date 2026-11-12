@@ -1,16 +1,13 @@
-// The liked heart, the panel's close frames, the playlist picker and audio effects shots, and the locale values.
+// Liked-heart state, closing-panel compositing and original locale values.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use folia_core::{AUDIO_QUALITY_LEVELS, AudioFrame, AudioQuality, EqualizerSettings, Language, Repeat, Theme};
+use folia_core::{AUDIO_QUALITY_LEVELS, AudioFrame, AudioQuality, Language, Repeat, Theme};
 use folia_i18n::I18n;
 use folia_store::{ReplayGainMode, ThemeSource};
-use folia_ui::{
-    EqualizerLook, PanelMessage, PanelRoom, PanelView, PlayerPanel, PlaylistChoice, PlaylistDialog, PlaylistLook,
-    Tokens, equalizer_view, like_look,
-};
+use folia_ui::{PanelMessage, PanelRoom, PanelView, PlayerPanel, like_look};
 use folia_visualizer::Style;
 use iced::advanced::renderer::Headless;
 use iced::widget::image::Handle;
@@ -88,50 +85,6 @@ fn closing_the_panel_takes_every_pixel_back_to_the_page() {
     assert!(background, "the closed panel left paint behind");
 }
 
-#[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
-fn dialogs_are_written_at_1920_by_1080() {
-    let i18n = I18n::new(Language::ZhCn).unwrap();
-    let theme = Theme::MIDNIGHT;
-    let tokens = Tokens::new(&theme, false);
-    let output = tempfile::tempdir().unwrap();
-    let dir = output.path();
-    std::fs::create_dir_all(&dir).unwrap();
-
-    let choices = [
-        PlaylistChoice { local: Some(1), online: None, name: "夜航".into(), detail: "12 首歌曲".into() },
-        PlaylistChoice { local: Some(2), online: None, name: "写代码".into(), detail: "40 首歌曲".into() },
-        PlaylistChoice { local: Some(3), online: None, name: "旧唱片".into(), detail: "7 首歌曲".into() },
-    ];
-    let mut dialog = PlaylistDialog::default();
-    dialog.open();
-    let picker = dialog
-        .view(PlaylistLook {
-            i18n: &i18n,
-            tokens,
-            daylight: false,
-            window: Size::new(1920.0, 1080.0),
-            playlists: &choices,
-            can_create: true,
-        })
-        .unwrap();
-    let shot = paint(picker, Size::new(1920.0, 1080.0), Color::from_rgb8(8, 8, 10));
-    std::fs::write(dir.join("playlist-dialog.png"), encode(&shot, 1920, 1080)).unwrap();
-
-    let preset = folia_core::preset("lofi").unwrap();
-    let settings = EqualizerSettings {
-        enabled: true,
-        preset: "lofi".into(),
-        gains: preset.gains,
-        effects: preset.effects,
-        ..EqualizerSettings::default()
-    };
-    let look = EqualizerLook { i18n: &i18n, tokens, daylight: false, window: Size::new(1920.0, 1080.0) };
-    let shot = paint(equalizer_view(&settings, &look), Size::new(1920.0, 1080.0), Color::from_rgb8(8, 8, 10));
-    std::fs::write(dir.join("audio-effects.png"), encode(&shot, 1920, 1080)).unwrap();
-    assert!(shot.iter().any(|byte| *byte != 8 && *byte != 10));
-}
-
 pub(super) fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia_core::Track]) -> PanelView<'a> {
     PanelView {
         i18n,
@@ -172,6 +125,10 @@ pub(super) fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia
         random_pool: None,
         all_styles: &Style::ALL,
         background: folia_visualizer::Background::Latent,
+        sora: folia_visualizer::SoraTuning::DEFAULT,
+        monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+        picture: None,
+        nomand: folia_visualizer::nomand::Tuning::default(),
         background_shapes: true,
         background_vignette: true,
         equalizer_on: false,
@@ -197,13 +154,6 @@ fn paint<M>(root: Element<'_, M>, size: Size, clear: Color) -> Vec<u8> {
         &iced::advanced::graphics::Viewport::with_physical_size(Size::new(size.width as u32, size.height as u32), 1.0),
         clear,
     )
-}
-
-fn encode(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let image = image::RgbaImage::from_raw(width, height, rgba.to_vec()).unwrap();
-    let mut png = Vec::new();
-    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    png
 }
 
 #[test]

@@ -217,3 +217,23 @@ fn cover_cache_keeps_covers_in_use_this_pass_past_its_budget() {
     assert_eq!(cache.used_bytes(), 120);
     assert!([2, 3, 4].iter().all(|key| cache.peek(key).is_some()), "what the view uses stays");
 }
+
+#[test]
+fn disk_thumbnail_is_reused_and_repaired_if_corrupt() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("cached-image");
+    image::RgbaImage::from_pixel(512, 512, image::Rgba([20, 80, 120, 255]))
+        .save_with_format(&source, image::ImageFormat::Png)
+        .unwrap();
+    let first = folia_library::cached_cover_thumbnail(&source, 64).unwrap();
+    assert_eq!((first.width, first.height), (64, 64));
+    let stored = source.with_extension("thumb-64-v1.png");
+    assert!(stored.is_file());
+    let original = std::fs::read(&source).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    assert_eq!(folia_library::cached_cover_thumbnail(&source, 64).unwrap().rgba, first.rgba);
+    std::fs::write(&source, original).unwrap();
+    std::fs::write(&stored, b"broken cache").unwrap();
+    assert_eq!(folia_library::cached_cover_thumbnail(&source, 64).unwrap().rgba, first.rgba);
+    assert!(image::open(stored).is_ok());
+}

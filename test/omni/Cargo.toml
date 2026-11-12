@@ -19,3 +19,7 @@ rqrr.workspace = true
 tempfile.workspace = true
 reqwest.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+
+[features]
+# Explicit real-service checks, excluded from the default test binary.
+live = []

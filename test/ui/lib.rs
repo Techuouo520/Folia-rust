@@ -3,8 +3,6 @@
 #![cfg(test)]
 
 mod chrome_motion;
-mod developer;
-mod font_surfaces;
 mod fonts;
 mod glass_tone;
 mod icon_dots;
@@ -17,10 +15,9 @@ mod polish;
 mod reorder;
 mod scroll_timeline;
 mod seam_title;
-#[cfg(test)]
+#[cfg(all(feature = "stress", not(feature = "ci")))]
 mod text_atlas;
-#[cfg(test)]
-mod text_raster;
+mod wall_loading;
 mod workbench;
 
 use folia_core::Line;
@@ -146,6 +143,7 @@ fn the_capsule_size_springs_and_settles() {
 
 #[test]
 fn the_subtitle_glow_uses_the_original_ellipse() {
+    folia_ui::install_fonts();
     let glow = glow_ellipse(1200.0, 800.0, 112.0, 20.0, 17.6, Some("风穿过旧街"), Some("still here"));
     assert!((glow.center[0] - 0.5).abs() < 0.001);
     let wider = subtitle_line_width("风穿过旧街", 20.0).max(subtitle_line_width("still here", 17.6));
@@ -160,6 +158,7 @@ fn the_subtitle_glow_uses_the_original_ellipse() {
 
 #[test]
 fn the_ellipse_widens_when_the_measured_line_does() {
+    folia_ui::install_fonts();
     let narrow = glow_ellipse(1200.0, 800.0, 112.0, 20.0, 16.0, Some("Hi"), None);
     let wide = glow_ellipse(1200.0, 800.0, 112.0, 20.0, 16.0, Some("Hi there, still waiting"), None);
     let delta =

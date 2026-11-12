@@ -4,84 +4,6 @@ use iced::advanced::graphics::text::{cosmic_text as cosmic, font_system, to_attr
 use iced::{Font, font};
 
 #[test]
-#[ignore = "temporary coverage diagnostics"]
-fn coverage_histograms() {
-    folia_ui::install_fonts();
-    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/fonts");
-    let data: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fixtures.join("samples.json")).unwrap()).unwrap();
-    let mut shared = font_system().write().unwrap();
-    let system = shared.raw();
-    let mut cache = cosmic::SwashCache::new();
-    let mut rows = Vec::new();
-    for (i, s) in data["samples"].as_array().unwrap().iter().enumerate() {
-        let size = s["size"].as_f64().unwrap() as f32;
-        let scale = s["scale"].as_f64().unwrap_or(1.0) as f32;
-        let tracking = s["tracking"].as_f64().unwrap_or(0.0) as f32;
-        let mut features = cosmic::FontFeatures::new();
-        if tracking != 0.0 {
-            features.disable(cosmic::FeatureTag::STANDARD_LIGATURES);
-            features.disable(cosmic::FeatureTag::CONTEXTUAL_LIGATURES);
-        }
-        let attrs = cosmic::Attrs::new()
-            .family(cosmic::Family::Name("Folia CSS system"))
-            .weight(cosmic::Weight(s["weight"].as_u64().unwrap() as u16))
-            .letter_spacing(tracking / size)
-            .font_features(features);
-        let mut buffer = cosmic::Buffer::new(system, cosmic::Metrics::new(size, 40.0));
-        buffer.set_text(system, s["text"].as_str().unwrap(), &attrs, cosmic::Shaping::Advanced, None);
-        buffer.shape_until_scroll(system, false);
-        let smooth = |a: f64, b: f64, x: f64| {
-            let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
-            t * t * (3.0 - 2.0 * t)
-        };
-        let mut basis = vec![[0.0f64; 3]; 21];
-        let mut histogram = vec![0u64; 256];
-        for run in buffer.layout_runs() {
-            for g in run.glyphs {
-                let key = g.physical((8.0 * scale, 0.0), scale).cache_key;
-                let im = cache.get_image(system, key).as_ref().unwrap();
-                let w = im.placement.width as i32;
-                let h = im.placement.height as i32;
-                let at = |x: i32, y: i32| {
-                    if x < 0 || y < 0 || x >= w || y >= h {
-                        0.0
-                    } else {
-                        f64::from(im.data[(y * w + x) as usize]) / 255.0
-                    }
-                };
-                for y in 0..h {
-                    for x in 0..w {
-                        histogram[im.data[(y * w + x) as usize] as usize] += 1;
-                        let a = at(x, y);
-                        let support = (at(x - 1, y) + at(x + 1, y)).min(at(x, y - 1) + at(x, y + 1));
-                        let edge = smooth(0.4, 0.9, support)
-                            * (1.0 - smooth(1.4, 1.9, support))
-                            * smooth(0.65, 0.95, a)
-                            * (1.0 - smooth(18.0, 26.0, f64::from(w.max(h))));
-                        for (k, b) in basis.iter_mut().enumerate() {
-                            let a = (a - k as f64 * 0.01 * edge).max(0.0);
-                            let q = 1.0 - a;
-                            b[0] += 3.0 * a * q * q;
-                            b[1] += 3.0 * a * a * q;
-                            b[2] += a * a * a;
-                        }
-                    }
-                }
-            }
-        }
-        let dark = s["dark"].as_bool().unwrap();
-        let bg = if dark { 26.0 } else { 243.0 };
-        let delta = if dark { 218.0 } else { 219.0 };
-        let img = image::open(fixtures.join(format!("{i}.png"))).unwrap().to_rgba8();
-        let target = img.pixels().map(|p| (f64::from(p[0]) - bg).abs() / delta).sum::<f64>();
-        rows.push(serde_json::json!({"index":i,"basis":basis,"histogram":histogram,"target":target,"dark":dark}));
-    }
-    std::fs::write(std::env::temp_dir().join("folia-fonts/histograms.json"), serde_json::to_vec(&rows).unwrap())
-        .unwrap();
-}
-
-#[test]
 fn css_weights_stay_in_the_family() {
     use folia_render::typeface::css_weight;
     for (requested, actual) in
@@ -265,9 +187,6 @@ fn chromium_ink_matrix() {
         serde_json::from_slice(&std::fs::read(fixtures.join("samples.json")).unwrap()).unwrap();
     let mut renderer =
         pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
-    let output = tempfile::tempdir().unwrap();
-    let dir = output.path();
-    std::fs::create_dir_all(&dir).unwrap();
     for (index, sample) in data["samples"].as_array().unwrap().iter().enumerate() {
         let dark = sample["dark"].as_bool().unwrap();
         let size = sample["size"].as_f64().unwrap() as f32;
@@ -318,12 +237,11 @@ fn chromium_ink_matrix() {
         let pixels =
             renderer.screenshot(&iced::advanced::graphics::Viewport::with_physical_size(Size::new(w, h), scale), bg);
         let actual = image::RgbaImage::from_raw(w, h, pixels).unwrap();
-        let reference = image::open(fixtures.join(format!("{index}.png"))).unwrap().to_rgba8();
+        let reference = image::open(fixtures.join(sample["reference"].as_str().unwrap())).unwrap().to_rgba8();
         let ink =
             |im: &image::RgbaImage| im.pixels().map(|p| (f64::from(p[0]) - f64::from(bg.r) * 255.0).abs()).sum::<f64>();
         let ratio = ink(&actual) / ink(&reference);
         println!("ink {index} {size}px {weight:?} dark={dark}: {ratio:.4}");
-        actual.save(dir.join(format!("rust-{index}.png"))).unwrap();
         if let Some(path) = std::env::var_os("FOLIA_FONT_CAPTURE") {
             std::fs::create_dir_all(&path).unwrap();
             actual.save(std::path::PathBuf::from(path).join(format!("raster-{index}.png"))).unwrap();

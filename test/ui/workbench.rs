@@ -1,14 +1,12 @@
-// One offscreen frame of each workbench tab, the Monet one with its picture options, plus the hotspot hit test.
+// Workbench interaction, persistence, subtitle selection and upload-control alignment.
 
-use std::collections::BTreeMap;
-
-use folia_core::{Language, Lyrics, Theme};
+use folia_core::{Language, Theme};
 use folia_i18n::I18n;
-use folia_store::{AppearanceSettings, FontStyle, RowSource, Store, SubtitleContentMode, VisualizerSettings};
+use folia_store::{AppearanceSettings, Store, VisualizerSettings};
 use folia_ui::{
     Hotspot, Workbench, WorkbenchEffect, WorkbenchLook, WorkbenchMessage, WorkbenchTab, hotspot_at, scheduled_saves,
 };
-use folia_visualizer::{Background, Item, Style};
+use folia_visualizer::{Background, Style};
 use iced::advanced::renderer::{Headless, Style as DrawStyle};
 use iced::{Color, Element, Pixels, Point, Size, Theme as IcedTheme};
 use iced_runtime::user_interface::{Cache, UserInterface};
@@ -33,126 +31,94 @@ fn hotspot_hit_test_follows_the_original_boxes() {
 }
 
 #[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
-fn workbench_tabs_render() {
-    let output = tempfile::tempdir().unwrap();
-    let dir = output.path();
-    std::fs::create_dir_all(&dir).unwrap();
-    let i18n = I18n::new(Language::En).unwrap();
-    let theme = Theme::MIDNIGHT;
-    let appearance = sample_appearance();
-    let mut workbench = Workbench::open();
-    // Let the sample clock leave Monet's intro (the first 0.65s fades the rail in).
-    std::thread::sleep(std::time::Duration::from_millis(2200));
-    for (tab, name, style) in [
-        (WorkbenchTab::Lyrics, "1-lyrics", Style::Monet),
-        (WorkbenchTab::Background, "2-background", Style::Monet),
-        (WorkbenchTab::Font, "3-font", Style::Monet),
-        (WorkbenchTab::Subtitle, "4-subtitle", Style::Monet),
-        (WorkbenchTab::Global, "5-global", Style::Monet),
-    ] {
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn background_upload_controls_render() {
+    let i18n = I18n::new(Language::ZhCn).unwrap();
+    let theme = Theme::DAYLIGHT;
+    for mode in [Background::Monet, Background::Nomand] {
+        let mut appearance = AppearanceSettings::default();
+        appearance.set_background_mode(Some(mode.id()));
+        let mut workbench = Workbench::open();
         let _ = workbench.update(
-            WorkbenchMessage::Tab(tab),
-            style.manifest(),
+            WorkbenchMessage::Tab(WorkbenchTab::Background),
+            Style::Classic.manifest(),
             &appearance,
             folia_visualizer::LatentTuning::DEFAULT,
         );
-        if tab == WorkbenchTab::Lyrics {
-            workbench.values = Style::Monet.load(&BTreeMap::new());
+        let capture = |has_background_upload| {
+            paint_upload(
+                workbench.view(WorkbenchLook {
+                    i18n: &i18n,
+                    theme: &theme,
+                    daylight: true,
+                    window: Size::new(W as f32, H as f32),
+                    style: Style::Classic,
+                    font_scale: 1.0,
+                    live: None,
+                    audio: &folia_core::AudioFrame::SILENT,
+                    appearance: &appearance,
+                    fonts: &[],
+                    dpi: 1.0,
+                    cover: &[],
+                    latent: folia_visualizer::LatentTuning::DEFAULT,
+                    sora: folia_visualizer::SoraTuning::DEFAULT,
+                    monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+                    nomand: folia_visualizer::nomand::Tuning::default(),
+                    picture: None,
+                    has_background_upload,
+                }),
+                Color::WHITE,
+            )
+        };
+        let disabled = capture(false);
+        let enabled = capture(true);
+        let changed = disabled
+            .chunks_exact(4)
+            .zip(enabled.chunks_exact(4))
+            .enumerate()
+            .filter(|(index, (a, b))| index % W as usize > 820 && a != b)
+            .count();
+        assert!(changed > 20, "clear control did not show its disabled state");
+        if let Some(path) = std::env::var_os("FOLIA_PANEL_CAPTURE") {
+            std::fs::create_dir_all(&path).unwrap();
+            image::RgbaImage::from_raw(W, H, disabled)
+                .unwrap()
+                .save(std::path::PathBuf::from(path).join(format!("{}-upload.png", mode.id())))
+                .unwrap();
         }
-        let look = WorkbenchLook {
-            i18n: &i18n,
-            theme: &theme,
-            daylight: false,
-            window: Size::new(W as f32, H as f32),
-            style,
-            font_scale: 1.0,
-            live: None,
-            audio: &folia_core::AudioFrame::SILENT,
-            appearance: &appearance,
-            fonts: &[],
-            cover: &[],
-            latent: folia_visualizer::LatentTuning::DEFAULT,
-        };
-        let rgba = if tab == WorkbenchTab::Lyrics {
-            // Scrolled to the spectrum group, so the shot holds Monet's bars/line pictures too.
-            paint_scrolled(workbench.view(look), Color::from_rgb8(8, 8, 10), 760.0)
-        } else {
-            paint(workbench.view(look), Color::from_rgb8(8, 8, 10))
-        };
-        std::fs::write(dir.join(format!("{name}.png")), encode(&rgba, W, H)).unwrap();
-        assert!(rgba.iter().any(|byte| *byte != 8 && *byte != 10), "{name} is blank");
     }
 }
 
-fn sample_appearance() -> AppearanceSettings {
-    let mut appearance = AppearanceSettings::default();
-    appearance.lyrics_font.style = FontStyle::Custom;
-    appearance.lyrics_font.family = Some("Segoe UI".to_owned());
-    appearance.lyrics_font.fallback = vec!["Noto Sans CJK SC".to_owned()];
-    appearance.lyrics_font.weight = Some(600);
-    appearance.subtitle.layout = folia_store::SubtitleLayout::parse("current+translation").unwrap();
-    appearance.subtitle.content_mode = SubtitleContentMode::Both;
-    appearance.subtitle.opacity = 0.8;
-    appearance.subtitle.font_inherits_lyrics = false;
-    appearance.subtitle.font.style = FontStyle::Serif;
-    appearance.set_background_mode(Some(Background::Common.id()));
-    appearance
-}
-
-fn paint<M>(root: Element<'_, M>, clear: Color) -> Vec<u8> {
+fn paint_upload<M>(root: Element<'_, M>, clear: Color) -> Vec<u8> {
     folia_ui::install_fonts();
     let mut renderer =
         pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
     let mut ui = UserInterface::build(root, Size::new(W as f32, H as f32), Cache::default(), &mut renderer);
+    let mut alignment = UploadAlignment::default();
+    ui.operate(&renderer, &mut alignment);
+    assert_eq!(alignment.0.len(), 2, "upload row label and button text must both be measurable");
+    assert!(
+        (alignment.0[0].center_y() - alignment.0[1].center_y()).abs() <= 1.0,
+        "upload button text must align with its row label: {:?}",
+        alignment.0
+    );
     let style = DrawStyle { text_color: Color::WHITE };
     ui.draw(&mut renderer, &IcedTheme::Dark, &style, iced::mouse::Cursor::Unavailable);
     renderer.screenshot(&iced::advanced::graphics::Viewport::with_physical_size(Size::new(W, H), 1.0), clear)
 }
 
-/// The same frame, with the settings body scrolled down by `distance` pixels.
-fn paint_scrolled<M: Clone>(root: Element<'_, M>, clear: Color, distance: f32) -> Vec<u8> {
-    folia_ui::install_fonts();
-    let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
-    let mut ui = UserInterface::build(root, Size::new(W as f32, H as f32), Cache::default(), &mut renderer);
-    let cursor = iced::mouse::Cursor::Available(Point::new(1000.0, 500.0));
-    let events = [
-        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: Point::new(1000.0, 500.0) }),
-        iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
-            delta: iced::mouse::ScrollDelta::Pixels { x: 0.0, y: -distance },
-        }),
-    ];
-    let mut clipboard = iced::advanced::clipboard::Null;
-    let mut messages = Vec::new();
-    let _ = ui.update(&events, cursor, &mut renderer, &mut clipboard, &mut messages);
-    let style = DrawStyle { text_color: Color::WHITE };
-    ui.draw(&mut renderer, &IcedTheme::Dark, &style, cursor);
-    renderer.screenshot(&iced::advanced::graphics::Viewport::with_physical_size(Size::new(W, H), 1.0), clear)
-}
+#[derive(Default)]
+struct UploadAlignment(Vec<iced::Rectangle>);
 
-fn encode(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
-    let image = image::RgbaImage::from_raw(width, height, rgba.to_vec()).unwrap();
-    let mut png = Vec::new();
-    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    png
-}
-
-// The assertions below keep the sample data honest: it is what the shots show.
-#[allow(dead_code)]
-fn sample_choices_are_drawn() {
-    let monet = Style::Monet.manifest();
-    let pictures: Vec<&str> = monet
-        .items()
-        .filter_map(|item| match item {
-            Item::Picture { key, .. } => Some(key),
-            _ => None,
-        })
-        .collect();
-    assert!(pictures.contains(&"audioStyle"));
-    assert!(pictures.contains(&"portraitStyle"));
-    assert!(Style::Tilt.manifest().items().any(|item| matches!(item, Item::Picture { key: "colorScheme", .. })));
-    let _ = (RowSource::Next, Lyrics::default());
+impl iced::advanced::widget::Operation for UploadAlignment {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn iced::advanced::widget::Operation)) {
+        operate(self);
+    }
+    fn text(&mut self, _id: Option<&iced::widget::Id>, bounds: iced::Rectangle, text: &str) {
+        if text == "上传背景图" && bounds.x > 820.0 {
+            self.0.push(bounds);
+        }
+    }
 }
 
 fn writes(effect: &WorkbenchEffect, appearance_changed: bool, flush_visualizer: bool) -> (bool, bool) {
@@ -257,6 +223,45 @@ fn appearance_slider_release_saves_only_appearance() {
 }
 
 struct LatentSpeed;
+
+#[test]
+fn subtitle_rows_follow_the_selected_layout_and_skip_duplicates() {
+    use folia_store::{RowSource, SubtitleLayout, SubtitleSettings};
+    let lines = vec![
+        folia_core::Line {
+            text: "原文".into(),
+            start: 0.0,
+            end: 5.0,
+            translation: Some("Translation".into()),
+            romanization: Some("Romaji".into()),
+            ..Default::default()
+        },
+        folia_core::Line { text: "......".into(), start: 5.0, end: 6.0, ..Default::default() },
+        folia_core::Line { text: "下一句".into(), start: 6.0, end: 9.0, ..Default::default() },
+        folia_core::Line { text: "再下一句".into(), start: 9.0, end: 12.0, ..Default::default() },
+    ];
+    let mut settings = SubtitleSettings {
+        layout: SubtitleLayout::parse("current+translation+romanization").unwrap(),
+        ..Default::default()
+    };
+    let rows = folia_ui::subtitle_rows_at(&lines, 2.0, &settings);
+    assert_eq!(rows.rows.map(|row| row.map(|row| row.text)), [Some("原文"), Some("Translation"), Some("Romaji")]);
+    settings.layout = SubtitleLayout::parse("current+next+next").unwrap();
+    let rows = folia_ui::subtitle_rows_at(&lines, 2.0, &settings);
+    assert_eq!(rows.rows.map(|row| row.map(|row| row.text)), [Some("原文"), Some("下一句"), Some("再下一句")]);
+    let mut duplicate = lines.clone();
+    duplicate[0].translation = Some(" 原文 ".into());
+    settings.layout = SubtitleLayout::parse("current+translation").unwrap();
+    let rows = folia_ui::subtitle_rows_at(&duplicate, 2.0, &settings);
+    assert_eq!(rows.rows.iter().flatten().count(), 1);
+    settings.layout = SubtitleLayout::parse("romanization").unwrap();
+    duplicate[0].romanization = None;
+    let rows = folia_ui::subtitle_rows_at(&duplicate, 2.0, &settings);
+    assert!(rows.fallback);
+    assert_eq!(rows.rows[0].unwrap().source, RowSource::Next);
+    settings.hide_translation = true;
+    assert!(folia_ui::subtitle_rows_at(&lines, 2.0, &settings).rows.iter().all(Option::is_none));
+}
 
 impl LatentSpeed {
     fn read(store: &Store) -> f32 {

@@ -20,7 +20,6 @@ folia-render.workspace = true
 folia-visualizer.workspace = true
 iced.workspace = true
 image.workspace = true
-cryoglyph = "0.1.0"
 pollster.workspace = true
 wgpu.workspace = true
 resvg = "0.45.1"
@@ -33,3 +32,6 @@ tracing = "0.1.44"
 [features]
 # Set by CI: skips tests that need a hardware GPU.
 ci = []
+
+# Opt-in local atlas longevity check.
+stress = []

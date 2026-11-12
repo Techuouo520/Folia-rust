@@ -10,14 +10,16 @@ path = "lib.rs"
 [dependencies]
 folia-core.workspace = true
 folia-lyrics.workspace = true
-folia-render.workspace = true
+folia-render = { workspace = true, features = ["dev"] }
 folia-ui.workspace = true
 folia-visualizer.workspace = true
 iced.workspace = true
 iced_wgpu = { version = "0.14.0", features = ["geometry"] }
-image.workspace = true
 pollster = "0.4.0"
 
 [features]
 # Set by CI: skips tests that need a hardware GPU.
 ci = []
+
+# Opt-in local GPU stress checks.
+stress = []

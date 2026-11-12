@@ -2,8 +2,6 @@
 
 #![cfg(test)]
 
-mod latency;
-
 use folia_core::AudioQuality;
 use folia_omni::{LoginQr, Omni, OmniError, cover_cache_key};
 
@@ -124,8 +122,9 @@ async fn fetch_cover_returns_the_cached_file() {
     assert_eq!(cover_cache_key(url), cover_cache_key("https://cdn.example/cover.jpg"));
 }
 
+#[cfg(feature = "live")]
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit real-service check"]
 async fn netease_search_lyrics_and_audio() {
     let cache = tempfile::tempdir().unwrap();
     let omni = Omni::new(cache.path().to_owned(), "Folia-rust-test".to_owned()).unwrap();
@@ -171,16 +170,18 @@ async fn netease_search_lyrics_and_audio() {
     assert_eq!(again, path, "second fetch reuses the cache");
 }
 
+#[cfg(feature = "live")]
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit real-service check"]
 async fn netease_instrumental_has_no_lyrics() {
     let omni = Omni::new(std::env::temp_dir(), "Folia-rust-test".to_owned()).unwrap();
     let song = folia_core::OnlineId { provider: "netease".into(), id: "548823721".into() };
     assert!(omni.lyrics(&song).await.unwrap().is_none());
 }
 
+#[cfg(feature = "live")]
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit real-service check"]
 async fn netease_gives_a_waiting_qr_code() {
     let omni = Omni::new(std::env::temp_dir(), "Folia-rust-test".to_owned()).unwrap();
     let qr = omni.login_qr("netease").await.unwrap();
@@ -190,8 +191,9 @@ async fn netease_gives_a_waiting_qr_code() {
 }
 
 /// The two platforms whose sign-in arrives as a picture, fetched live and read back; needs the network.
+#[cfg(feature = "live")]
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit real-service check"]
 async fn qishui_and_qq_pictures_read_as_qr_codes() {
     let cache = tempfile::tempdir().unwrap();
     let omni = Omni::new(cache.path().to_owned(), "Folia-rust-test".to_owned()).unwrap();
@@ -203,8 +205,9 @@ async fn qishui_and_qq_pictures_read_as_qr_codes() {
     }
 }
 
+#[cfg(feature = "live")]
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit real-service check"]
 async fn netease_explore_reads_as_a_guest() {
     let omni = Omni::new(std::env::temp_dir(), "Folia-rust-test".to_owned()).unwrap();
     let sections = omni.explore("netease").await.unwrap();
@@ -220,8 +223,9 @@ fn no_kept_session_restores_nothing() {
 }
 
 // Search, download and lyrics on every platform without signing in; prints what each step returned.
+#[cfg(feature = "live")]
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit real-service check"]
 async fn live_guest_smoke_on_every_platform() {
     let cache = tempfile::tempdir().unwrap();
     let omni = Omni::new(cache.path().to_owned(), "Folia-rust-test".to_owned()).unwrap();
@@ -263,8 +267,9 @@ async fn live_guest_smoke_on_every_platform() {
     }
 }
 
+#[cfg(feature = "live")]
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit real-service check"]
 async fn qq_guest_search_is_repeatable() {
     let cache = tempfile::tempdir().unwrap();
     let omni = Omni::new(cache.path().to_owned(), "Folia-rust-test-guest".to_owned()).unwrap();
@@ -289,8 +294,9 @@ async fn qq_guest_search_is_repeatable() {
 
 /// NetEase `/song/chorus` and KuGou `song_climax` for one well-known song, then lyrics marked from them; needs the
 /// network.
+#[cfg(feature = "live")]
 #[tokio::test]
-#[ignore]
+#[ignore = "explicit real-service check"]
 async fn netease_and_kugou_chorus_ranges() {
     let cache = tempfile::tempdir().unwrap();
     let omni = Omni::new(cache.path().to_owned(), "Folia-rust-test".to_owned()).unwrap();

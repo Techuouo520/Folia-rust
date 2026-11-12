@@ -1,5 +1,6 @@
 /target/
 /test/target/
+/test/ui/fixtures/fonts/surfaces/
 *.local.toml
 .env
 .env.*

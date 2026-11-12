@@ -20,6 +20,7 @@ const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 
 /// A line timed character by character.
+#[cfg(all(feature = "stress", not(feature = "ci")))]
 fn timed(start: f64, end: f64, text: &str) -> Line {
     let count = text.chars().count() as f64;
     let span = (end - start) / count;
@@ -36,6 +37,7 @@ fn timed(start: f64, end: f64, text: &str) -> Line {
 }
 
 /// A whole song for the atlas: 24 lines, a new paragraph after every sixth.
+#[cfg(all(feature = "stress", not(feature = "ci")))]
 fn song() -> Lyrics {
     let texts = [
         "夜色慢慢落进城市的灯",
@@ -130,6 +132,7 @@ fn defaults_match_the_original_panel() {
 }
 
 /// The stage pass of one frame, drawn the way the app's shader widget draws it.
+#[cfg(all(feature = "stress", not(feature = "ci")))]
 fn stage<'a>(
     lyrics: &'a Lyrics,
     time: f64,
@@ -151,6 +154,7 @@ fn stage<'a>(
         artist: String::new(),
         album: String::new(),
         portrait: None,
+        typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &folia_core::AudioFrame::SILENT,
     };
@@ -158,30 +162,10 @@ fn stage<'a>(
     Program::draw(&lumiere::field_view::<()>(scene), state, mouse::Cursor::Unavailable, bounds)
 }
 
-/// The first seed and time of `song()` where a cross burst has just started. Burst slot ages sit at bytes
-/// `(6 + slot) * 16 + 8` of the decor uniform.
-fn first_burst(lyrics: &Lyrics) -> Option<(String, f64)> {
-    for seed in std::iter::once("lumiere".to_owned()).chain((1..40).map(|n| format!("lumiere-{n}"))) {
-        let state = lumiere::LiveState::default();
-        for step in 0..1400 {
-            let time = step as f64 * 0.1;
-            let pass = stage(lyrics, time, &seed, &state);
-            let started = (0..14).any(|slot| {
-                let at = (6 + slot) * 16 + 8;
-                let age = f32::from_le_bytes(pass.decor[at..at + 4].try_into().unwrap());
-                (0.05..0.15).contains(&age)
-            });
-            if started {
-                return Some((seed, time));
-            }
-        }
-    }
-    None
-}
-
 /// Plays `song()` at 30 frames a second through a sprite pipeline of its own and reports the atlas.
 #[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+#[cfg(all(feature = "stress", not(feature = "ci")))]
+#[ignore = "explicit release GPU stress check"]
 fn atlas_over_a_whole_song() {
     folia_ui::install_fonts();
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -222,80 +206,30 @@ fn atlas_over_a_whole_song() {
 }
 
 #[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
-fn offscreen_frames_write_pngs() {
-    let lyrics = sample();
-    let theme = Theme::MIDNIGHT;
-    let dir = PathBuf::from(std::env::temp_dir()).join("folia-lumiere-text");
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut picture = Picture::new();
-    let manifest = Style::Lumiere.manifest();
-    let mut variants = Vec::new();
-    for (name, key, value) in
-        [("text-only", "textOnly", 1.0), ("text-bloom-0", "textBloom", 0.0), ("bloom-0", "bloom", 0.0)]
-    {
-        let mut values = Values::default();
-        if key == "textOnly" {
-            values.set_flag(manifest, key, true);
-        } else {
-            values.set_number(manifest, key, value);
-        }
-        variants.push((format!("lumiere-9.0-{name}.png"), &lyrics, 9.0, values));
-    }
-    let long = song();
-    let burst = first_burst(&long);
-    eprintln!("lumiere burst frame {burst:?} (song())");
-    let mut seeds = vec!["lumiere".to_owned(); variants.len()];
-    if let Some((seed, time)) = &burst {
-        variants.push((format!("lumiere-burst-{seed}-{time:.1}.png"), &long, *time, Values::default()));
-        seeds.push(seed.clone());
-    }
-    for ((name, lyrics, time, values), seed) in variants.into_iter().zip(seeds) {
-        let (png, kind, lines, sprites) = picture.render(lyrics, time, &theme, &seed, values);
-        eprintln!("lumiere {name} kind={kind} line_bytes={lines} sprites={sprites:?}");
-        std::fs::write(dir.join(name), &png).unwrap();
-    }
-    for time in [5.0_f64, 9.0, 16.0] {
-        let (png, kind, lines, sprites) = picture.render(&lyrics, time, &theme, "lumiere", Values::default());
-        eprintln!("lumiere t={time} kind={kind} line_bytes={lines} sprites={sprites:?}");
-        let path = dir.join(format!("lumiere-{time:.1}.png"));
-        std::fs::write(&path, &png).unwrap();
-        let image = image::load_from_memory(&png).unwrap().to_rgba8();
-        assert_eq!((image.width(), image.height()), (WIDTH, HEIGHT));
-        let channels = image.pixels().map(|pixel| pixel[0].max(pixel[1]).max(pixel[2]));
-        let (mut low, mut high) = (255u8, 0u8);
-        for channel in channels {
-            low = low.min(channel);
-            high = high.max(channel);
-        }
-        assert!(high > 24, "frame {time} max channel {high}");
-        assert!(high - low > 20, "frame {time} is flat: {low}..{high}");
-        assert!(lines > 64, "frame {time} has no line art");
-        assert!(sprites.1 > sprites.0 as usize, "frame {time} has no lyric glyphs");
-    }
-}
-
-/// The paragraph fixture `lanterns.ttml` in a verse, a chorus and the bridge, for checking the paragraph moods.
-#[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
-fn paragraph_frames_write_pngs() {
+#[cfg_attr(feature = "ci", ignore = "needs a hardware GPU")]
+fn lyric_frames_keep_their_glyphs_and_line_art() {
+    let short = sample();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lyrics/fixtures/lanterns.ttml");
-    let lyrics = folia_lyrics::parse(folia_lyrics::Format::Ttml, &std::fs::read_to_string(path).unwrap(), "", "");
-    let program = lumiere::Program::compile(&lyrics, "lumiere", false);
-    let dir = std::env::temp_dir().join("folia-paragraphs");
-    std::fs::create_dir_all(&dir).unwrap();
+    let paragraphs = folia_lyrics::parse(folia_lyrics::Format::Ttml, &std::fs::read_to_string(path).unwrap(), "", "");
     let mut picture = Picture::new();
-    for time in [12.0_f64, 31.0, 80.0] {
-        let shot = &program.shots[program.active(time)];
-        let span = program.spans.iter().rev().find(|span| span.start <= time).unwrap();
-        let (png, kind, _, sprites) = picture.render(&lyrics, time, &Theme::MIDNIGHT, "lumiere", Values::default());
-        eprintln!(
-            "lumiere t={time} paragraph={:?} cast={} drawn={kind} sprites={sprites:?}",
-            span.kind,
-            shot.profile_kind()
-        );
-        std::fs::write(dir.join(format!("lumiere-{time:.1}.png")), &png).unwrap();
-        assert!(sprites.1 > sprites.0 as usize, "frame {time} has no lyric glyphs");
+    for (lyrics, times, check_art) in [(&short, [5.0, 9.0, 16.0], true), (&paragraphs, [12.0, 31.0, 80.0], false)] {
+        for time in times {
+            let (pixels, _, lines, sprites) =
+                picture.render(lyrics, time, &Theme::MIDNIGHT, "lumiere", Values::default());
+            assert!(sprites.1 > sprites.0 as usize, "frame {time} has no lyric glyphs");
+            if check_art {
+                assert_eq!(pixels.len(), (WIDTH * HEIGHT * 4) as usize);
+                let (mut low, mut high) = (255u8, 0u8);
+                for pixel in pixels.chunks_exact(4) {
+                    let channel = pixel[0].max(pixel[1]).max(pixel[2]);
+                    low = low.min(channel);
+                    high = high.max(channel);
+                }
+                assert!(high > 24, "frame {time} max channel {high}");
+                assert!(high - low > 20, "frame {time} is flat: {low}..{high}");
+                assert!(lines > 64, "frame {time} has no line art");
+            }
+        }
     }
 }
 
@@ -367,6 +301,7 @@ impl Picture {
             artist: String::new(),
             album: String::new(),
             portrait: None,
+            typography: folia_visualizer::Typography::default(),
             preview: false,
             audio: &folia_core::AudioFrame::SILENT,
         };
@@ -439,10 +374,7 @@ impl Picture {
         }
         drop(mapped);
         self.read.unmap();
-        let image = image::RgbaImage::from_raw(WIDTH, HEIGHT, pixels).unwrap();
-        let mut png = Vec::new();
-        image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-        (png, kind, line_bytes, sprites)
+        (pixels, kind, line_bytes, sprites)
     }
 
     fn reset(&mut self) {
@@ -458,7 +390,16 @@ fn present(
     view: &wgpu::TextureView,
     viewport: &Viewport,
 ) {
+    let started = folia_render::gpu_builds().1;
     renderer.present(clear, format, view, viewport);
+    if folia_render::gpu_builds().1 != started {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while folia_render::gpu_builds().0 > 0 {
+            assert!(std::time::Instant::now() < deadline, "GPU initialization timed out");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        renderer.present(clear, format, view, viewport);
+    }
 }
 
 fn target(

@@ -24,6 +24,7 @@ fn scene<'a>(lyrics: &'a Lyrics, theme: &'a Theme) -> Scene<'a> {
         artist: "folia".into(),
         album: String::new(),
         portrait: None,
+        typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &folia_core::AudioFrame::SILENT,
     }

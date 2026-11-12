@@ -77,7 +77,6 @@ slider resolution 0.5 2 0.25 1
 [lumiere]
 storage lumiere_tuning
 reset notifications.lumiereReset
-locked keywordColors themeIcons
 slider lightIntensity 0.3 2 0.05 1
 slider audioResponse 0 2 0.05 1
 slider bloom 0 2 0.05 1
@@ -108,7 +107,6 @@ hiddenUnless audioStyle showAudioVisualization
 reset notifications.monetReset
 path portraitPath
 concealed portraitOffsetX
-locked keywordColoringEnabled
 slider fontScale 0.7 1.5 0.05 1.2
 switch keywordColoringEnabled true
 switch showDescription true

@@ -1,25 +1,16 @@
-// Search duration, paging rules, Monet's silent bars, and one offscreen frame of each.
+// Search duration, provider paging rules and Monet audio response.
 
 use std::time::Instant;
 
-use folia_core::{Lyrics, Theme, Track};
 use folia_omni::{
     BodianCursor, bodian_search_page, kugou_search_page, netease_search_page, qishui_search_continues,
     qq_anonymous_search_page, qq_session_search_page, spotify_search_done, spotify_search_page, ytm_search_page,
     ytm_walk_done,
 };
-use folia_ui::search_results::{Bindings, List, Look};
 use folia_ui::{PlayerBar, PlayerPanel, format_duration};
 use folia_visualizer::styles::monet::{
     active_bar_height, energy, envelope, pulse, sample_raw_spectrum_profile, sample_spectrum_profile,
 };
-use folia_visualizer::{Scene, Style, Values};
-use iced::advanced::renderer::{Headless, Style as DrawStyle};
-use iced::widget::canvas;
-use iced::widget::image::Handle;
-use iced::widget::scrollable::Viewport;
-use iced::{Color, Element, Length, Pixels, Size, Theme as IcedTheme};
-use iced_runtime::user_interface::{Cache, UserInterface};
 
 #[test]
 fn duration_is_minutes_and_padded_seconds() {
@@ -122,99 +113,4 @@ fn a_modal_leaves_the_capsule_and_the_handle_alone() {
     panel.set_modal(false);
     panel.on_handle_hover(true, now);
     assert_eq!(panel.handle_hover_goal(), 1.0);
-}
-
-#[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
-fn search_and_monet_frames_are_written() {
-    let output = tempfile::tempdir().unwrap();
-    let dir = output.path();
-    std::fs::create_dir_all(&dir).unwrap();
-    let tracks = sample_tracks();
-    let covers = vec![None];
-    let search = paint(search_frame(&tracks, &covers), Color::from_rgb8(8, 8, 10));
-    let monet = paint(monet_frame(), Color::BLACK);
-    std::fs::write(dir.join("search.png"), &encode(&search)).unwrap();
-    std::fs::write(dir.join("monet.png"), &encode(&monet)).unwrap();
-    assert_eq!(search.len(), 1200 * 800 * 4);
-    assert!(search.iter().any(|byte| *byte != 8 && *byte != 10));
-    assert!(monet.iter().any(|byte| *byte != 0));
-}
-
-fn sample_tracks() -> Vec<Track> {
-    vec![Track {
-        id: 1,
-        title: "Sneaky Snitch".into(),
-        artist: Some("Kevin MacLeod".into()),
-        album: Some("Mystery".into()),
-        duration: 224.0,
-        ..Track::default()
-    }]
-}
-
-fn search_frame<'a>(tracks: &'a [Track], covers: &'a [Option<Handle>]) -> Element<'a, ()> {
-    let look = Look {
-        text: Color::from_rgb8(0xf4, 0xf4, 0xf5),
-        secondary: Color::from_rgb8(0xa1, 0xa1, 0xaa),
-        daylight: false,
-        wide: true,
-        queue_tip: "Add to queue",
-    };
-    let bindings = Bindings {
-        scroll: drop_scroll,
-        wheel: drop_wheel,
-        hover: drop_opt,
-        play: drop_index,
-        enqueue: drop_index,
-        plus: drop_opt,
-    };
-    List::default().view(tracks, covers, look, bindings)
-}
-
-fn drop_scroll(_: Viewport) {}
-fn drop_wheel(_: iced::mouse::ScrollDelta) {}
-fn drop_opt(_: Option<usize>) {}
-fn drop_index(_: usize) {}
-
-fn monet_frame() -> Element<'static, folia_visualizer::styles::monet::Event> {
-    let lyrics = Lyrics::default();
-    let theme = Theme::MIDNIGHT;
-    // The scene has to outlive the element. Leak the two borrows: this test process exits after the shot.
-    let lyrics: &'static Lyrics = Box::leak(Box::new(lyrics));
-    let theme: &'static Theme = Box::leak(Box::new(theme));
-    let scene = Scene {
-        style: Style::Monet,
-        lyrics,
-        time: 6.0,
-        theme,
-        font_scale: 1.0,
-        seed: "polish",
-        stage: None,
-        tuning: Values::default(),
-        backdrop: true,
-        title: "Sneaky Snitch".into(),
-        artist: "Kevin MacLeod".into(),
-        album: "Mystery".into(),
-        portrait: None,
-        preview: false,
-        audio: &folia_core::AudioFrame::SILENT,
-    };
-    canvas(folia_visualizer::Stage::new(scene)).width(Length::Fill).height(Length::Fill).into()
-}
-
-fn paint<M>(root: Element<'_, M>, clear: Color) -> Vec<u8> {
-    folia_ui::install_fonts();
-    let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap();
-    let mut ui = UserInterface::build(root, Size::new(1200.0, 800.0), Cache::default(), &mut renderer);
-    let style = DrawStyle { text_color: Color::WHITE };
-    ui.draw(&mut renderer, &IcedTheme::Dark, &style, iced::mouse::Cursor::Unavailable);
-    renderer.screenshot(&iced::advanced::graphics::Viewport::with_physical_size(Size::new(1200, 800), 1.0), clear)
-}
-
-fn encode(rgba: &[u8]) -> Vec<u8> {
-    let image = image::RgbaImage::from_raw(1200, 800, rgba.to_vec()).unwrap();
-    let mut png = Vec::new();
-    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    png
 }

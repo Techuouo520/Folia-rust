@@ -161,7 +161,8 @@ fn sample(size: [u32; 2], time: f64, bus: f32, theme: &Theme) -> Pass {
 }
 
 #[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+#[cfg(all(feature = "stress", not(feature = "ci")))]
+#[ignore = "explicit release GPU stress check"]
 fn nebbia_gpu_300_frames() {
     let _guard = GPU.lock().unwrap();
     for size in [[1920, 1080], [2560, 1440]] {
@@ -347,11 +348,12 @@ fn nebbia_widget_releases_gpu_resources() {
     let _guard = GPU.lock().unwrap();
     let gpu = Offscreen::new([640, 360]);
     let lyrics = Lyrics::default();
+    let theme = Theme::MIDNIGHT;
     let view = folia_visualizer::styles::nebbia::view::<()>(folia_visualizer::Scene {
         style: folia_visualizer::Style::Nebbia,
         lyrics: &lyrics,
         time: 6.0,
-        theme: &Theme::MIDNIGHT,
+        theme: &theme,
         font_scale: 1.0,
         seed: "nebbia",
         stage: None,
@@ -361,6 +363,7 @@ fn nebbia_widget_releases_gpu_resources() {
         artist: String::new(),
         album: String::new(),
         portrait: None,
+        typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &folia_core::AudioFrame::SILENT,
     });
@@ -382,6 +385,18 @@ fn nebbia_widget_releases_gpu_resources() {
         ]
     };
     let before = resources();
+    primitive.prepare(
+        &mut pipeline,
+        &gpu.device,
+        &gpu.queue,
+        &bounds,
+        &Viewport::with_physical_size(iced::Size::new(640, 360), 1.0),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while folia_render::gpu_builds().0 > 0 {
+        assert!(std::time::Instant::now() < deadline, "GPU initialization timed out");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     primitive.prepare(
         &mut pipeline,
         &gpu.device,

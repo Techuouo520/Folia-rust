@@ -1,8 +1,9 @@
-# Formatting, lints and the offline test suite on every push and pull request.
+# Formatting, lints and offline tests for main updates and pull requests.
 name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -32,4 +33,4 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
-        run: cargo test --manifest-path test/Cargo.toml --workspace --all-features
+        run: cargo test --manifest-path test/Cargo.toml --workspace --features test-ui/ci,test-render/ci,test-visualizer/ci,test-visual-lumiere/ci,test-visual-monet/ci

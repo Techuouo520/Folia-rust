@@ -100,6 +100,7 @@ fn scene_audio<'a>(
         artist: lyrics.artist.clone().unwrap_or_default(),
         album: "初学者".into(),
         portrait,
+        typography: folia_visualizer::Typography::default(),
         preview: false,
         audio,
     }

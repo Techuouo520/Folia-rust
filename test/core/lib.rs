@@ -5,6 +5,25 @@
 use folia_core::{Language, LanguagePreference, Origin, Queue, Repeat};
 
 #[test]
+fn keyword_colors_match_phrases_and_whole_latin_words() {
+    use folia_core::{WordColor, word_color_ranges};
+    let colors = vec![
+        WordColor { word: "花火".into(), color: "#ff6600".into() },
+        WordColor { word: "花".into(), color: "#00ff00".into() },
+        WordColor { word: "Love sky".into(), color: "rgb(20, 60, 200)".into() },
+    ];
+    let text = "火车旁的花火和花 LOVE lovely Sky";
+    let ranges = word_color_ranges(text, &colors);
+    assert_eq!(
+        ranges.iter().map(|entry| &text[entry.range.clone()]).collect::<Vec<_>>(),
+        ["花火", "花", "LOVE", "Sky"]
+    );
+    assert_eq!(ranges[0].color, folia_core::Rgb::hex(0xff6600));
+    assert_eq!(ranges[1].color, folia_core::Rgb::hex(0x00ff00));
+    assert_eq!(ranges[2].color, folia_core::Rgb { r: 20, g: 60, b: 200 });
+}
+
+#[test]
 fn maps_os_locale_tags() {
     let cases = [
         ("zh-CN", Language::ZhCn),

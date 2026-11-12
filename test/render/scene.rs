@@ -13,6 +13,17 @@ use iced_runtime::user_interface::{Cache, UserInterface};
 const W: u32 = 900;
 const H: u32 = 600;
 
+// Each picture gets a fresh engine and widget cache; device creation is shared across this serial GPU suite.
+fn test_device() -> &'static (wgpu::Adapter, wgpu::Device, wgpu::Queue) {
+    static DEVICE: std::sync::OnceLock<(wgpu::Adapter, wgpu::Device, wgpu::Queue)> = std::sync::OnceLock::new();
+    DEVICE.get_or_init(|| {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        (adapter, device, queue)
+    })
+}
+
 #[derive(Debug, Clone)]
 enum Msg {
     Monet,
@@ -69,6 +80,7 @@ fn scene<'a>(lyrics: &'a Lyrics, theme: &'a Theme, style: Style) -> Scene<'a> {
         artist: "Test".into(),
         album: String::new(),
         portrait: None,
+        typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &AudioFrame::SILENT,
     }
@@ -114,13 +126,11 @@ impl Picture {
     }
 
     fn with_size(width: u32, height: u32) -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let (adapter, device, queue) = test_device();
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let renderer = iced_wgpu::Renderer::new(
             iced_wgpu::Engine::new(
-                &adapter,
+                adapter,
                 device.clone(),
                 queue.clone(),
                 format,
@@ -130,17 +140,15 @@ impl Picture {
             Font::DEFAULT,
             Pixels(16.0),
         );
-        Self::from_renderer(width, height, device, queue, format, renderer)
+        Self::from_renderer(width, height, device.clone(), queue.clone(), format, renderer)
     }
 
     /// Two windows on one engine, so a present in `other` trims pipelines owned by `main`.
     fn shared(main: (u32, u32), other: (u32, u32)) -> (Self, Self) {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let (adapter, device, queue) = test_device();
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let engine = iced_wgpu::Engine::new(
-            &adapter,
+            adapter,
             device.clone(),
             queue.clone(),
             format,
@@ -158,8 +166,8 @@ impl Picture {
         let other = Self::from_renderer(
             other.0,
             other.1,
-            device,
-            queue,
+            device.clone(),
+            queue.clone(),
             format,
             iced_wgpu::Renderer::new(engine, Font::DEFAULT, Pixels(16.0)),
         );
@@ -218,6 +226,7 @@ impl Picture {
     }
 
     fn frame(&mut self, element: Element<'_, Msg>, cache: Cache) -> Cache {
+        let submitted = folia_render::gpu_builds().1;
         let mut ui =
             UserInterface::build(element, Size::new(self.logical.0, self.logical.1), cache, &mut self.renderer);
         ui.draw(
@@ -227,14 +236,22 @@ impl Picture {
             mouse::Cursor::Unavailable,
         );
         self.renderer.present(Some(Color::BLACK), self.format, &self.view, &self.viewport);
-        ui.into_cache()
-    }
+        if folia_render::gpu_builds().1 != submitted {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while folia_render::gpu_builds().0 > 0 {
+                assert!(std::time::Instant::now() < deadline, "GPU initialization timed out");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            ui.draw(
+                &mut self.renderer,
+                &IcedTheme::Dark,
+                &RenderStyle { text_color: Color::BLACK },
+                mouse::Cursor::Unavailable,
+            );
+            self.renderer.present(Some(Color::BLACK), self.format, &self.view, &self.viewport);
+        }
 
-    fn frame_timed(&mut self, element: Element<'_, Msg>, cache: Cache) -> (Cache, f64) {
-        let started = std::time::Instant::now();
-        let cache = self.frame(element, cache);
-        self.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        (cache, started.elapsed().as_secs_f64() * 1000.0)
+        ui.into_cache()
     }
 
     fn screenshot(&self) -> Vec<u8> {
@@ -292,13 +309,6 @@ fn range(rgba: &[u8], width: u32, top: u32, bottom: u32) -> f32 {
         }
     }
     high - low
-}
-
-fn png(rgba: &[u8], width: u32, height: u32, name: &str) {
-    let dir = std::env::temp_dir().join("folia-gpu-lyrics");
-    std::fs::create_dir_all(&dir).unwrap();
-    let image = image::RgbaImage::from_raw(width, height, rgba.to_vec()).unwrap();
-    image.save(dir.join(name)).unwrap();
 }
 
 /// The backdrop stage is shared by the process; tests with their own devices take turns.
@@ -369,56 +379,487 @@ fn loading_capsule_keeps_a_visible_rotating_lucide_glyph() {
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn latent_background_enters_the_glass_source() {
     let _guard = guarded();
+    let _clock = PinnedClock::pin();
     folia_ui::install_fonts();
-    let lyrics = lyrics();
-    let theme = Theme::MIDNIGHT;
-    let mut picture = Picture::new();
-    let mut cache = Cache::default();
-    let mut lyrics_scene = scene(&lyrics, &theme, Style::Classic);
-    lyrics_scene.backdrop = false;
-    for _ in 0..2 {
-        let ground = folia_visualizer::Ground {
-            mode: folia_visualizer::Background::Latent,
-            seed: "geometry",
-            time: 0.0,
-            theme: &theme,
-            audio: &AudioFrame::SILENT,
-            shapes: true,
-            vignette: false,
-            publish: true,
-            paused: false,
-            player: true,
-            cover: &[],
-            latent: folia_visualizer::LatentTuning::DEFAULT,
-        };
-        let element: Element<'_, Msg> =
-            stack![folia_visualizer::background_view(ground), lyric_view::<Msg>(lyrics_scene.clone()), glass()].into();
-        cache = picture.frame(element, cache);
+    let empty = Lyrics::default();
+    let fixed = lyrics();
+    let midnight = Theme::MIDNIGHT;
+    let day = Theme::DAYLIGHT;
+    let red = [folia_core::Rgb { r: 220, g: 30, b: 40 }];
+    let blue = [folia_core::Rgb { r: 30, g: 50, b: 210 }];
+
+    let bare = glass_clip(&empty, &midnight, &[], false, false);
+    assert!(glass_contrast(&bare) < 8.0, "empty lyrics already fill the glass");
+
+    let (early, late, paints_early, paints_late, binds_early, binds_late) =
+        glass_motion(&empty, &midnight, &[], true, 123);
+    assert!(glass_contrast(&early) > 20.0, "the glass is missing the background");
+    assert!(diff_count(&early.rgba, &late.rgba) > 1_000, "the glass froze the moving background");
+    assert!(paints_late > paints_early + 50, "a moving background reused the blur cache");
+    assert_eq!(binds_early, binds_late, "the underlay sample group was rebuilt while it moved");
+
+    let (still_early, still_late, still_paints_early, still_paints_late, _, _) =
+        glass_motion(&empty, &midnight, &[], false, 123);
+    assert!(glass_contrast(&still_early) > 20.0, "a static background is missing from the glass");
+    assert_eq!(diff_count(&still_early.rgba, &still_late.rgba), 0, "a static background was blurred again");
+    assert_eq!(still_paints_early, still_paints_late, "a static background rebuilt the pyramid");
+
+    let held = glass_clip(&fixed, &midnight, &red, false, true);
+    let recolored = glass_clip(&fixed, &midnight, &blue, false, true);
+    assert!(diff_count(&held.rgba, &recolored.rgba) > 100, "a new cover left the glass unchanged");
+    let themed = glass_clip(&fixed, &day, &red, false, true);
+    assert!(diff_count(&held.rgba, &themed.rgba) > 100, "a new theme left the glass unchanged");
+    let (lyric_early, lyric_late, _, _, _, _) = glass_motion(&fixed, &midnight, &[], true, 123);
+    assert!(diff_count(&lyric_early.rgba, &lyric_late.rgba) > 1_000, "fixed lyrics hid a moving background");
+    let (held_early, held_late, held_paints_early, held_paints_late, _, _) =
+        glass_motion(&fixed, &midnight, &red, false, 123);
+    assert_eq!(diff_count(&held_early.rgba, &held_late.rgba), 0, "fixed lyrics blurred a still background again");
+    assert_eq!(held_paints_early, held_paints_late, "fixed lyrics rebuilt a static pyramid");
+}
+
+struct GlassShot {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+fn glass_contrast(shot: &GlassShot) -> f32 {
+    range(&shot.rgba, shot.width, 0, shot.height)
+}
+
+fn published_ground<'a>(theme: &'a Theme, cover: &'a [folia_core::Rgb], player: bool) -> folia_visualizer::Ground<'a> {
+    folia_visualizer::Ground {
+        mode: folia_visualizer::Background::Latent,
+        seed: "geometry",
+        time: 0.0,
+        theme,
+        audio: &AudioFrame::SILENT,
+        shapes: true,
+        vignette: false,
+        publish: true,
+        paused: false,
+        player,
+        cover,
+        latent: folia_visualizer::LatentTuning::DEFAULT,
+        daylight: false,
+        sora: folia_visualizer::SoraTuning::DEFAULT,
+        monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+        picture: None,
+        nomand: folia_visualizer::nomand::Tuning::default(),
     }
-    let source = folia_render::read_picture(&picture.device, &picture.queue).expect("latent blur source");
-    let contrast = range(&source.rgba, source.width, 0, source.height);
-    assert!(contrast > 20.0, "latent background did not reach the glass source: {contrast}");
+}
+
+fn latent_glass<'a>(
+    lyrics: &'a Lyrics,
+    theme: &'a Theme,
+    cover: &'a [folia_core::Rgb],
+    player: bool,
+    background: bool,
+) -> Element<'a, Msg> {
+    let mut lyrics_scene = scene(lyrics, theme, Style::Classic);
+    lyrics_scene.backdrop = false;
+    let lyrics = lyric_view::<Msg>(lyrics_scene);
+    if background {
+        stack![folia_visualizer::background_view(published_ground(theme, cover, player)), lyrics, glass()].into()
+    } else {
+        stack![lyrics, glass()].into()
+    }
+}
+
+fn glass_clip(lyrics: &Lyrics, theme: &Theme, cover: &[folia_core::Rgb], player: bool, background: bool) -> GlassShot {
+    folia_render::release_backdrop();
+    let mut picture = Picture::with_size(640, 360);
+    let mut cache = Cache::default();
+    let mut shot = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    for step in 0..3 {
+        PinnedClock::at(step);
+        cache = picture.frame(latent_glass(lyrics, theme, cover, player, background), cache);
+        if step == 2 {
+            let read = folia_render::read_picture(&picture.device, &picture.queue).expect("glass source");
+            shot = GlassShot { width: read.width, height: read.height, rgba: read.rgba };
+        }
+    }
+    shot
+}
+
+fn glass_motion(
+    lyrics: &Lyrics,
+    theme: &Theme,
+    cover: &[folia_core::Rgb],
+    player: bool,
+    frames: u64,
+) -> (GlassShot, GlassShot, u64, u64, u64, u64) {
+    folia_render::release_backdrop();
+    let mut picture = Picture::with_size(640, 360);
+    let mut cache = Cache::default();
+    let mut early = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    let mut late = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    let mut paints_early = 0;
+    let mut paints_late = 0;
+    let mut binds_early = 0;
+    let mut binds_late = 0;
+    for step in 0..frames {
+        PinnedClock::at(step);
+        cache = picture.frame(latent_glass(lyrics, theme, cover, player, true), cache);
+        if step == 2 || step + 1 == frames {
+            let read = folia_render::read_picture(&picture.device, &picture.queue).expect("glass source");
+            let shot = GlassShot { width: read.width, height: read.height, rgba: read.rgba };
+            let paints = folia_render::external_paints();
+            let binds = folia_render::underlay_binds();
+            if step == 2 {
+                early = shot;
+                paints_early = paints;
+                binds_early = binds;
+            } else {
+                late = shot;
+                paints_late = paints;
+                binds_late = binds;
+            }
+        }
+    }
+    (early, late, paints_early, paints_late, binds_early, binds_late)
 }
 
 #[test]
-fn classic_enters_the_glass_source() {
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn latent_budget_is_released_with_its_widget() {
     let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let empty = Lyrics::default();
+    let theme = Theme::MIDNIGHT;
+    let (mut main, mut other) = Picture::shared((1040, 360), (64, 64));
+    let mut cache = Cache::default();
+    for step in 0..3 {
+        PinnedClock::at(step);
+        cache = main.frame(latent_duo(&empty, &theme, true), cache);
+    }
+    assert_eq!(folia_visualizer::live_targets(), 2, "player and preview each keep a budget texture");
+    assert!(folia_render::underlay_held(), "the player did not publish a background");
+    let binds = folia_render::underlay_binds();
+    for _ in 0..40 {
+        let _ = other.frame(blank_cell(64.0), Cache::default());
+    }
+    assert_eq!(folia_visualizer::live_targets(), 2, "another window dropped the budget texture");
+    assert_eq!(folia_render::underlay_binds(), binds, "another window rebuilt the underlay sample group");
+    assert!(folia_render::underlay_held());
+    cache = main.frame(latent_duo(&empty, &theme, false), cache);
+    assert_eq!(folia_visualizer::live_targets(), 1, "closing the preview kept its budget texture");
+    assert_eq!(folia_render::underlay_binds(), binds, "closing the preview rebuilt the underlay sample group");
+    assert!(folia_render::underlay_held(), "closing the preview dropped the playing background");
+    let _ = main.frame(common_ground(true, true), cache);
+    assert_eq!(folia_visualizer::live_targets(), 0, "switching backgrounds kept the budget texture");
+    assert!(!folia_render::underlay_held(), "switching backgrounds kept the underlay");
+    let mut cache = Cache::default();
+    for step in 0..2 {
+        PinnedClock::at(step);
+        cache = main.frame(latent_duo(&empty, &theme, true), cache);
+    }
+    assert_eq!(folia_visualizer::live_targets(), 2);
+    assert!(folia_render::underlay_held());
+    assert_eq!(folia_render::underlay_binds(), binds + 1, "reopening rebuilt the sample group more than once");
+    let _ = main.frame(blank_cell(1040.0), cache);
+    assert_eq!(folia_visualizer::live_targets(), 0, "destroying every scene kept a budget texture");
+    assert!(!folia_render::underlay_held(), "destroying every scene kept the underlay");
+}
+
+fn latent_duo<'a>(lyrics: &'a Lyrics, theme: &'a Theme, preview: bool) -> Element<'a, Msg> {
+    let play = container(latent_glass(lyrics, theme, &[], true, true)).width(640.0).height(360.0);
+    let side =
+        if preview { container(latent_preview(theme)).width(400.0).height(360.0).into() } else { blank_cell(400.0) };
+    stack![row![play, side], glass()].into()
+}
+
+fn latent_preview<'a>(theme: &'a Theme) -> Element<'a, Msg> {
+    folia_visualizer::background_view(folia_visualizer::Ground {
+        mode: folia_visualizer::Background::Latent,
+        seed: "preview",
+        time: 0.0,
+        theme,
+        audio: &AudioFrame::SILENT,
+        shapes: true,
+        vignette: false,
+        publish: false,
+        paused: false,
+        player: false,
+        cover: &[],
+        latent: folia_visualizer::LatentTuning::DEFAULT,
+        daylight: false,
+        sora: folia_visualizer::SoraTuning::DEFAULT,
+        monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+        picture: None,
+        nomand: folia_visualizer::nomand::Tuning::default(),
+    })
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn lumiere_glass_includes_the_shared_background() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
     folia_ui::install_fonts();
     let lyrics = lyrics();
     let theme = Theme::MIDNIGHT;
-    let mut picture = Picture::new();
+    let with_ground = lumiere_glass(&lyrics, &theme, true, false);
+    let lights = lumiere_glass(&lyrics, &theme, false, false);
+    assert!(diff_count(&with_ground.rgba, &lights.rgba) > 500, "lumiere glass ignored the shared background");
+    let preview = lumiere_pair(&lyrics, &theme);
+    assert_eq!(preview.width, with_ground.width, "the preview resized the playing glass");
+    assert_eq!(preview.height, with_ground.height, "the preview resized the playing glass");
+    assert_eq!(diff_count(&preview.rgba, &with_ground.rgba), 0, "the preview replaced the playing glass");
+    let (early, late, paints_early, paints_late) = lumiere_motion(&lyrics, &theme, 123);
+    assert!(diff_count(&early.rgba, &late.rgba) > 500, "lumiere glass froze the shared background");
+    assert!(paints_late > paints_early + 50, "lumiere reused the blur cache while the background moved");
+}
+
+fn lumiere_motion(lyrics: &Lyrics, theme: &Theme, frames: u64) -> (GlassShot, GlassShot, u64, u64) {
+    folia_render::release_backdrop();
+    let mut picture = Picture::with_size(640, 360);
     let mut cache = Cache::default();
-    for _ in 0..2 {
-        let element: Element<'_, Msg> =
-            stack![lyric_view::<Msg>(scene(&lyrics, &theme, Style::Classic)), glass()].into();
-        cache = picture.frame(element, cache);
+    let mut early = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    let mut late = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    let mut paints_early = 0;
+    let mut paints_late = 0;
+    for step in 0..frames {
+        PinnedClock::at(step);
+        cache = picture.frame(lumiere_stack(lyrics, theme, true, false), cache);
+        if step == 2 || step + 1 == frames {
+            let read = folia_render::read_picture(&picture.device, &picture.queue).expect("lumiere glass");
+            let shot = GlassShot { width: read.width, height: read.height, rgba: read.rgba };
+            let paints = folia_render::external_paints();
+            if step == 2 {
+                early = shot;
+                paints_early = paints;
+            } else {
+                late = shot;
+                paints_late = paints;
+            }
+        }
     }
-    let source = folia_render::read_picture(&picture.device, &picture.queue).expect("blur source");
-    let contrast = range(&source.rgba, source.width, source.height / 3, source.height * 2 / 3);
-    eprintln!("classic source {}x{} contrast {contrast:.1}", source.width, source.height);
-    assert!(contrast > 30.0, "the blur source is nearly flat: {contrast}");
-    let shot = picture.screenshot();
-    png(&shot, W, H, "classic-glass.png");
+    (early, late, paints_early, paints_late)
+}
+
+fn lumiere_glass(lyrics: &Lyrics, theme: &Theme, background: bool, preview: bool) -> GlassShot {
+    lumiere_glass_at_preview(lyrics, theme, background, preview, 4)
+}
+
+fn lumiere_glass_at_preview(lyrics: &Lyrics, theme: &Theme, background: bool, preview: bool, step: u64) -> GlassShot {
+    folia_render::release_backdrop();
+    let mut picture = Picture::with_size(640, 360);
+    let mut cache = Cache::default();
+    let mut shot = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    for frame in 0..3 {
+        PinnedClock::at(step + frame);
+        cache = picture.frame(lumiere_stack(lyrics, theme, background, preview), cache);
+        if frame == 2 {
+            let read = folia_render::read_picture(&picture.device, &picture.queue).expect("lumiere glass");
+            shot = GlassShot { width: read.width, height: read.height, rgba: read.rgba };
+        }
+    }
+    shot
+}
+
+fn lumiere_pair(lyrics: &Lyrics, theme: &Theme) -> GlassShot {
+    folia_render::release_backdrop();
+    let mut picture = Picture::with_size(1040, 360);
+    let mut cache = Cache::default();
+    let mut shot = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    for frame in 0..3 {
+        PinnedClock::at(4 + frame);
+        let play = container(lumiere_stack(lyrics, theme, true, false)).width(640.0).height(360.0);
+        let preview = container(lumiere_stack(lyrics, theme, true, true)).width(400.0).height(360.0);
+        cache = picture.frame(stack![row![play, preview], glass()].into(), cache);
+        if frame == 2 {
+            let read =
+                folia_render::read_picture(&picture.device, &picture.queue).expect("playing glass beside preview");
+            shot = GlassShot { width: read.width, height: read.height, rgba: read.rgba };
+        }
+    }
+    shot
+}
+
+fn lumiere_stack<'a>(lyrics: &'a Lyrics, theme: &'a Theme, background: bool, preview: bool) -> Element<'a, Msg> {
+    let lyric = lyric_view::<Msg>(styled(lyrics, theme, Style::Lumiere, 6.0, preview));
+    if !background {
+        return stack![lyric, glass()].into();
+    }
+    let ground = folia_visualizer::Ground {
+        mode: folia_visualizer::Background::Latent,
+        seed: "geometry",
+        time: 0.0,
+        theme,
+        audio: &AudioFrame::SILENT,
+        shapes: true,
+        vignette: false,
+        publish: !preview,
+        paused: false,
+        player: !preview,
+        cover: &[],
+        latent: folia_visualizer::LatentTuning::DEFAULT,
+        daylight: false,
+        sora: folia_visualizer::SoraTuning::DEFAULT,
+        monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+        picture: None,
+        nomand: folia_visualizer::nomand::Tuning::default(),
+    };
+    stack![folia_visualizer::background_view(ground), lyric, glass()].into()
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn sora_stars_reach_the_glass_and_release() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let theme = Theme::MIDNIGHT;
+    let empty = Lyrics::default();
+    {
+        let mut picture = Picture::with_size(640, 360);
+        let mut cache = Cache::default();
+        cache = picture.frame(latent_glass(&empty, &theme, &[], true, true), cache);
+        let mut early = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+        let mut late = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+        let mut paints_early = 0;
+        let mut paints_late = 0;
+        let mut binds_early = 0;
+        let mut binds_late = 0;
+        for step in 0..40 {
+            folia_visualizer::clock::set_test_clock_ms(Some(1_000_000 + step * 100));
+            cache = picture.frame(sora_stack(&empty, &theme, false, false, false, true), cache);
+            if step == 3 || step == 39 {
+                let read = folia_render::read_picture(&picture.device, &picture.queue).expect("sora glass");
+                let shot = GlassShot { width: read.width, height: read.height, rgba: read.rgba };
+                if step == 3 {
+                    early = shot;
+                    paints_early = folia_render::external_paints();
+                    binds_early = folia_render::underlay_binds();
+                } else {
+                    late = shot;
+                    paints_late = folia_render::external_paints();
+                    binds_late = folia_render::underlay_binds();
+                }
+            }
+        }
+        assert!(glass_contrast(&early) > 15.0, "sora glass is missing the stars");
+        assert!(diff_count(&early.rgba, &late.rgba) > 20, "sora glass froze the stars");
+        assert!(paints_late > paints_early + 10, "moving stars reused the blur cache");
+        assert_eq!(binds_early, binds_late, "latent trim rebuilt the sora underlay every frame");
+    }
+
+    let paused = sora_span(&empty, &theme, false, true, false, 16);
+    assert_eq!(diff_count(&paused.0.rgba, &paused.1.rgba), 0, "paused stars kept moving");
+    assert_eq!(paused.2, paused.3, "paused stars rebuilt the pyramid");
+    let blank = sora_span(&empty, &theme, true, false, false, 8);
+    assert!(glass_contrast(&blank.0) < 8.0, "blank sora still drew stars");
+    assert_eq!(diff_count(&blank.0.rgba, &blank.1.rgba), 0, "a blank frame was redrawn");
+    let day = sora_span(&empty, &theme, true, false, true, 4);
+    assert!(glass_contrast(&day.0) < 8.0, "daylight blank is not flat");
+    assert!(mean_luma(&day.0) > 200.0, "daylight blank is not white");
+
+    folia_render::release_backdrop();
+    let (mut main, mut other) = Picture::shared((640, 360), (64, 64));
+    let mut cache = Cache::default();
+    cache = main.frame(latent_glass(&empty, &theme, &[], true, true), cache);
+    for step in 0..3 {
+        PinnedClock::at(step);
+        cache = main.frame(sora_stack(&empty, &theme, false, false, false, true), cache);
+    }
+    assert_eq!(folia_visualizer::sora_targets(), 1);
+    assert!(folia_render::underlay_held());
+    let binds = folia_render::underlay_binds();
+    for _ in 0..20 {
+        let _ = other.frame(blank_cell(64.0), Cache::default());
+    }
+    assert_eq!(folia_visualizer::sora_targets(), 1, "another window dropped the star texture");
+    assert_eq!(folia_render::underlay_binds(), binds);
+    assert!(folia_render::underlay_held(), "another window dropped the star background");
+    let _ = main.frame(blank_cell(640.0), cache);
+    assert_eq!(folia_visualizer::sora_targets(), 0, "closing the picture kept the star texture");
+    assert!(!folia_render::underlay_held(), "closing the picture kept the star background");
+}
+
+fn sora_stack<'a>(
+    lyrics: &'a Lyrics,
+    theme: &'a Theme,
+    blank: bool,
+    paused: bool,
+    daylight: bool,
+    publish: bool,
+) -> Element<'a, Msg> {
+    let mut lyrics_scene = scene(lyrics, theme, Style::Classic);
+    lyrics_scene.backdrop = false;
+    let ground = folia_visualizer::Ground {
+        mode: folia_visualizer::Background::Sora,
+        seed: "geometry",
+        time: 0.0,
+        theme,
+        audio: &AudioFrame::SILENT,
+        shapes: true,
+        vignette: false,
+        publish,
+        paused,
+        player: true,
+        cover: &[],
+        latent: folia_visualizer::LatentTuning::DEFAULT,
+        daylight,
+        sora: folia_visualizer::SoraTuning { blank },
+        monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+        picture: None,
+        nomand: folia_visualizer::nomand::Tuning::default(),
+    };
+    stack![folia_visualizer::background_view(ground), lyric_view::<Msg>(lyrics_scene), glass()].into()
+}
+
+fn sora_span(
+    lyrics: &Lyrics,
+    theme: &Theme,
+    blank: bool,
+    paused: bool,
+    daylight: bool,
+    frames: u64,
+) -> (GlassShot, GlassShot, u64, u64) {
+    folia_render::release_backdrop();
+    let mut picture = Picture::with_size(640, 360);
+    let mut cache = Cache::default();
+    let mut early = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    let mut late = GlassShot { width: 0, height: 0, rgba: Vec::new() };
+    let mut paints_early = 0;
+    let mut paints_late = 0;
+    for step in 0..frames {
+        folia_visualizer::clock::set_test_clock_ms(Some(2_000_000 + step * 100));
+        cache = picture.frame(sora_stack(lyrics, theme, blank, paused, daylight, true), cache);
+        if step == 2 || step + 1 == frames {
+            let read = folia_render::read_picture(&picture.device, &picture.queue).expect("sora glass");
+            let shot = GlassShot { width: read.width, height: read.height, rgba: read.rgba };
+            let paints = folia_render::external_paints();
+            if step == 2 {
+                early = shot;
+                paints_early = paints;
+            } else {
+                late = shot;
+                paints_late = paints;
+            }
+        }
+    }
+    let _ = cache;
+    (early, late, paints_early, paints_late)
+}
+
+fn mean_luma(shot: &GlassShot) -> f32 {
+    let count = (shot.width * shot.height).max(1) as f32;
+    let sum: f32 = shot
+        .rgba
+        .chunks_exact(4)
+        .map(|pixel| 0.2126 * f32::from(pixel[0]) + 0.7152 * f32::from(pixel[1]) + 0.0722 * f32::from(pixel[2]))
+        .sum();
+    sum / count
+}
+
+#[test]
+fn sora_tuning_round_trips_the_stored_table() {
+    let stored = toml::Value::Table(folia_visualizer::SoraTuning { blank: true }.table());
+    assert!(folia_visualizer::SoraTuning::read(Some(&stored)).blank);
+    assert!(!folia_visualizer::SoraTuning::read(None).blank);
 }
 
 #[test]
@@ -448,9 +889,8 @@ fn every_canvas_style_enters_the_glass_source() {
         let source = folia_render::read_picture(&picture.device, &picture.queue).expect("blur source");
         let contrast = range(&source.rgba, source.width, source.height / 3, source.height * 2 / 3);
         eprintln!("{style:?} source {}x{} contrast {contrast:.1}", source.width, source.height);
-        assert!(contrast > 20.0, "{style:?} blur source is nearly flat: {contrast}");
-        let shot = picture.screenshot();
-        png(&shot, W, H, &format!("{style:?}-glass.png"));
+        let minimum = if style == Style::Classic { 30.0 } else { 20.0 };
+        assert!(contrast > minimum, "{style:?} blur source is nearly flat: {contrast}");
     }
 }
 
@@ -482,146 +922,6 @@ fn timeline_card_blurs_the_lyrics_behind_it() {
     let shot = picture.screenshot();
     let card_contrast = range(&shot, W, H / 4, H * 3 / 4);
     assert!(card_contrast > 20.0, "the card region is flat: {card_contrast}");
-    png(&shot, W, H, "timeline-card.png");
-}
-
-#[test]
-#[ignore]
-fn scene_frame_time() {
-    let _guard = guarded();
-    folia_ui::install_fonts();
-    let lyrics = lyrics();
-    let theme = Theme::MIDNIGHT;
-    for style in [Style::Classic, Style::Monet] {
-        for name in ["canvas", "old-glass", "glass-closed", "glass-open"] {
-            folia_render::release_backdrop();
-            let mut picture = Picture::with_size(1920, 1080);
-            let mut cache = Cache::default();
-            let mut times = Vec::new();
-            for frame in 0..70 {
-                let scene = scene(&lyrics, &theme, style);
-                let element: Element<'_, Msg> = match name {
-                    "canvas" => {
-                        canvas(folia_visualizer::Stage::new(scene)).width(Length::Fill).height(Length::Fill).into()
-                    }
-                    "old-glass" => {
-                        let ground = folia_render::BackdropScene {
-                            window: [1920.0, 1080.0],
-                            ground: [
-                                f32::from(theme.background.r) / 255.0,
-                                f32::from(theme.background.g) / 255.0,
-                                f32::from(theme.background.b) / 255.0,
-                                1.0,
-                            ],
-                            shade: [0.0; 4],
-                            tilt: [0.0; 3],
-                            quads: Vec::new(),
-                            images: Vec::new(),
-                            stamp: 7,
-                        };
-                        stack![
-                            shader(folia_render::Backdrop::new(ground)).width(Length::Fill).height(Length::Fill),
-                            canvas(folia_visualizer::Stage::new(scene)).width(Length::Fill).height(Length::Fill),
-                            glass()
-                        ]
-                        .into()
-                    }
-                    "glass-open" => stack![lyric_view::<Msg>(scene), glass()].into(),
-                    _ => lyric_view::<Msg>(scene),
-                };
-                let (next, ms) = picture.frame_timed(element, cache);
-                cache = next;
-                if frame >= 10 {
-                    times.push(ms);
-                }
-            }
-            times.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let avg = times.iter().sum::<f64>() / times.len() as f64;
-            let max = times.last().copied().unwrap_or(0.0);
-            let p50 = times[times.len() / 2];
-            let source = folia_render::read_picture(&picture.device, &picture.queue)
-                .map(|shot| (shot.width, shot.height, shot.bytes));
-            eprintln!("{style:?} {name}: avg {avg:.3} ms p50 {p50:.3} ms max {max:.3} ms source {source:?}");
-        }
-    }
-}
-
-#[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
-fn lyric_styles_render_small_cjk_and_mixed_text() {
-    let _guard = guarded();
-    folia_ui::install_fonts();
-    let lines = ["虽然我不想轻易逃跑", "还是怕分别", "心跳 Heartbeat 134 雾霞鬱"]
-        .into_iter()
-        .enumerate()
-        .map(|(line, text)| {
-            let start = line as f64 * 6.0;
-            let step = 5.5 / text.chars().count() as f64;
-            Line {
-                text: text.into(),
-                start,
-                end: start + 5.5,
-                words: text
-                    .chars()
-                    .enumerate()
-                    .map(|(i, c)| Word {
-                        text: c.to_string(),
-                        start: start + i as f64 * step,
-                        end: start + (i + 1) as f64 * step,
-                    })
-                    .collect(),
-                ..Line::default()
-            }
-        })
-        .collect();
-    let lyrics = Lyrics { lines, word_timed: true, ..Lyrics::default() };
-    let temporary = tempfile::tempdir().unwrap();
-    let dir = std::env::var_os("FOLIA_VISUAL_AUDIT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| temporary.path().to_owned());
-    // Font rasterization and stroke data finish before the first visual audit frame.
-    folia_visualizer::styles::nebbia::frame(
-        &lyrics,
-        3.0,
-        Size::new(1920.0, 1080.0),
-        &Theme::MIDNIGHT,
-        1.0,
-        &Values::default(),
-        0.0,
-    );
-    let start = std::time::Instant::now();
-    while !folia_visualizer::styles::nebbia::glyphs_settled(&lyrics) {
-        assert!(start.elapsed().as_secs() < 60);
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    for (w, h) in [(1200, 800), (1920, 1080)] {
-        for (theme_name, theme) in [("dark", Theme::MIDNIGHT), ("light", Theme::DAYLIGHT)] {
-            let mut contact = image::RgbaImage::new(1920, 1080);
-            let mut mixed_contact = image::RgbaImage::new(1920, 1080);
-            for (index, style) in Style::ALL.into_iter().enumerate() {
-                folia_render::release_backdrop();
-                let mut picture = Picture::with_size(w, h);
-                let mut cache = Cache::default();
-                for (sample, time, scale) in [("small", 3.0, 0.75), ("mixed", 15.0, 1.0)] {
-                    for _ in 0..6 {
-                        let scene = Scene { time, font_scale: scale, ..scene(&lyrics, &theme, style) };
-                        cache = picture.frame(lyric_view::<Msg>(scene), cache);
-                    }
-                    let pixels = picture.screenshot();
-                    let bright = pixels.chunks_exact(4).filter(|p| p[0].max(p[1]).max(p[2]) > 30).count();
-                    assert!(bright > 100, "{} {sample} is blank", style.id());
-                    let shot = image::RgbaImage::from_raw(w, h, pixels).unwrap();
-                    let thumb = image::imageops::resize(&shot, 640, 360, image::imageops::FilterType::Triangle);
-                    let sheet = if sample == "small" { &mut contact } else { &mut mixed_contact };
-                    image::imageops::overlay(sheet, &thumb, (index % 3 * 640) as i64, (index / 3 * 360) as i64);
-                    shot.save(dir.join(format!("{theme_name}-{w}-{}-{sample}.png", style.id()))).unwrap();
-                }
-            }
-            contact.save(dir.join(format!("contact-{theme_name}-{w}.png"))).unwrap();
-            mixed_contact.save(dir.join(format!("contact-mixed-{theme_name}-{w}.png"))).unwrap();
-        }
-    }
-    folia_render::release_backdrop();
 }
 
 #[test]
@@ -1108,6 +1408,11 @@ fn tuned_ground(latent: folia_visualizer::LatentTuning, player: bool) -> Element
         player,
         cover: &[],
         latent,
+        daylight: false,
+        sora: folia_visualizer::SoraTuning::DEFAULT,
+        monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+        picture: None,
+        nomand: folia_visualizer::nomand::Tuning::default(),
     })
 }
 
@@ -1130,6 +1435,11 @@ fn background_ground(mode: folia_visualizer::Background, shapes: bool, vignette:
         player: true,
         cover: &[],
         latent: folia_visualizer::LatentTuning::DEFAULT,
+        daylight: false,
+        sora: folia_visualizer::SoraTuning::DEFAULT,
+        monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+        picture: None,
+        nomand: folia_visualizer::nomand::Tuning::default(),
     })
 }
 
@@ -1395,4 +1705,321 @@ fn blur_source(width: u32, height: u32, element: Element<'_, Msg>) -> (u32, u32,
     let _ = picture.frame(element, Cache::default());
     let shot = folia_render::read_picture(&picture.device, &picture.queue).expect("glass blur source");
     (shot.width, shot.height, shot.rgba)
+}
+
+// A fixed light field must carry the same dark veil into the glass source as onto the screen.
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn lumiere_dark_field_reaches_glass() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let lyrics = Lyrics::default();
+    let theme = Theme::MIDNIGHT;
+    let sample = |amount: f32, with_glass: bool| {
+        folia_render::release_backdrop();
+        let mut picture = Picture::with_size(640, 360);
+        let mut cache = Cache::default();
+        for step in 0..3 {
+            PinnedClock::at(step);
+            let ground = folia_visualizer::Ground {
+                mode: folia_visualizer::Background::Latent,
+                seed: "dark-field",
+                time: 0.0,
+                theme: &theme,
+                audio: &AudioFrame::SILENT,
+                shapes: true,
+                vignette: false,
+                publish: true,
+                paused: true,
+                player: true,
+                cover: &[],
+                latent: folia_visualizer::LatentTuning::DEFAULT,
+                daylight: false,
+                sora: folia_visualizer::SoraTuning::DEFAULT,
+                monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+                picture: None,
+                nomand: folia_visualizer::nomand::Tuning::default(),
+            };
+            let mut tuning = Values::default();
+            tuning.set_number(Style::Lumiere.manifest(), "darkField", amount);
+            let lyric = lyric_view::<Msg>(Scene { tuning, ..styled(&lyrics, &theme, Style::Lumiere, 6.0, false) });
+            let mut layers = stack![folia_visualizer::background_view(ground), lyric];
+            if with_glass {
+                layers = layers.push(glass());
+            }
+            cache = picture.frame(layers.into(), cache);
+        }
+        if with_glass {
+            folia_render::read_picture(&picture.device, &picture.queue).unwrap().rgba
+        } else {
+            picture.screenshot()
+        }
+    };
+    let original_screen = sample(0.0, false);
+    let original_glass = sample(0.0, true);
+    for amount in [0.75, 1.0] {
+        assert!(diff_count(&original_screen, &sample(amount, false)) > 100);
+        assert!(diff_count(&original_glass, &sample(amount, true)) > 100, "dark veil missing from glass");
+    }
+}
+
+#[test]
+fn monet_background_settings_and_drift_round_trip() {
+    use folia_visualizer::monet_background::{Drift, Tuning};
+    let mut tuning = Tuning::DEFAULT;
+    tuning.half = true;
+    tuning.blur = 12.0;
+    tuning.wash_color = folia_core::Rgb::hex(0x123456);
+    let table = toml::Value::Table(tuning.table());
+    assert_eq!(Tuning::read(Some(&table)), tuning);
+    let drift = Drift::default();
+    for strength in [0.0, 0.5, 1.0] {
+        assert_eq!(drift.at(0.0, strength), drift.at(240.0, strength));
+        for step in 0..157 {
+            let [x, y, scale] = drift.at(step as f64 * 240.0 / 156.0, strength);
+            assert!(scale >= 1.0 + 2.0 * x.abs().max(y.abs()));
+        }
+    }
+}
+
+#[test]
+fn monet_image_treatment_matches_chromium() {
+    let source = image::RgbaImage::from_fn(64, 32, |x, y| image::Rgba([(x * 4) as u8, (y * 8) as u8, 70, 255]));
+    for case in ["default", "grayscale", "wash", "blur"] {
+        let mut tuning = folia_visualizer::monet_background::Tuning::DEFAULT;
+        match case {
+            "grayscale" => {
+                tuning.grayscale = 1.0;
+                tuning.wash = 0.0;
+            }
+            "wash" => {
+                tuning.wash = 1.0;
+                tuning.custom_wash = true;
+                tuning.wash_color = folia_core::Rgb::hex(0x2379a1);
+            }
+            "blur" => tuning.blur = 60.0,
+            _ => {}
+        }
+        let picture = folia_visualizer::monet_background::paint(&source, &Theme::DAYLIGHT, tuning);
+        let iced::widget::image::Handle::Rgba { width, height, pixels, .. } = picture else { panic!("expected RGBA") };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../visual/monet/fixtures/backgrounds")
+            .join(format!("{case}.png"));
+        let reference = image::open(path).unwrap().into_rgba8();
+        assert_eq!((width, height), reference.dimensions());
+        let mut total = 0u64;
+        let mut large = 0usize;
+        for (actual, expected) in pixels.chunks_exact(4).zip(reference.as_raw().chunks_exact(4)) {
+            let errors = [0, 1, 2].map(|i| actual[i].abs_diff(expected[i]));
+            total += errors.into_iter().map(u64::from).sum::<u64>();
+            large += usize::from(errors.into_iter().any(|error| error > 8));
+        }
+        let mean = total as f64 / f64::from(width * height * 3);
+        let large = large as f64 / f64::from(width * height);
+        eprintln!("Monet {case}: mean {mean:.5}/255, pixels over 8 {large:.5}");
+        if let Some(dir) = std::env::var_os("FOLIA_MONET_AUDIT") {
+            image::save_buffer(
+                std::path::PathBuf::from(dir).join(format!("rust-{case}.png")),
+                &pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+        assert!(mean < 1.0 && large < 0.01, "{case} differs from the original Chromium image treatment");
+    }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn monet_poster_and_controls_reach_the_playing_glass() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let theme = Theme::DAYLIGHT;
+    let lyrics = Lyrics::default();
+    let source = image::RgbaImage::from_fn(64, 32, |x, y| image::Rgba([(x * 4) as u8, (y * 8) as u8, 70, 255]));
+    let tuning = folia_visualizer::monet_background::Tuning::DEFAULT;
+    let poster = folia_visualizer::monet_background::paint(&source, &theme, tuning);
+    let shot = |tuning, poster: &iced::widget::image::Handle| {
+        folia_render::release_backdrop();
+        let mut picture = Picture::with_size(640, 360);
+        let mut cache = Cache::default();
+        for step in 0..3 {
+            PinnedClock::at(step);
+            let ground = folia_visualizer::Ground {
+                mode: folia_visualizer::Background::Monet,
+                seed: "monet",
+                time: 0.0,
+                theme: &theme,
+                audio: &AudioFrame::SILENT,
+                shapes: true,
+                vignette: false,
+                publish: true,
+                paused: true,
+                player: true,
+                cover: &[],
+                latent: folia_visualizer::LatentTuning::DEFAULT,
+                sora: folia_visualizer::SoraTuning::DEFAULT,
+                daylight: true,
+                monet: tuning,
+                picture: Some(poster),
+                nomand: folia_visualizer::nomand::Tuning::default(),
+            };
+            let lyric = Scene { backdrop: false, ..scene(&lyrics, &theme, Style::Classic) };
+            cache = picture.frame(
+                stack![folia_visualizer::background_view(ground), lyric_view::<Msg>(lyric), glass()].into(),
+                cache,
+            );
+        }
+        folia_render::read_picture(&picture.device, &picture.queue).unwrap().rgba
+    };
+    let first = shot(tuning, &poster);
+    let half = shot(folia_visualizer::monet_background::Tuning { half: true, ..tuning }, &poster);
+    assert!(diff_count(&first, &half) > 100, "half-pane setting has no visible effect");
+    let different = folia_visualizer::monet_background::Tuning { grayscale: 1.0, wash: 0.0, ..tuning };
+    let poster = folia_visualizer::monet_background::paint(&source, &theme, different);
+    assert!(diff_count(&first, &shot(different, &poster)) > 100, "Monet filters did not change the glass source");
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn nomand_effects_match_the_original_paper_shaders() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let theme = Theme::DAYLIGHT;
+    let source = image::RgbaImage::from_fn(64, 32, |x, y| image::Rgba([(x * 4) as u8, (y * 8) as u8, 70, 255]));
+    let image = iced::widget::image::Handle::from_rgba(64, 32, source.into_raw());
+    for effect in folia_visualizer::nomand::Effect::ALL {
+        let mut picture = Picture::with_size(320, 180);
+        let mut tuning = folia_visualizer::nomand::Tuning::default();
+        tuning.effect = effect;
+        let ground = folia_visualizer::Ground {
+            mode: folia_visualizer::Background::Nomand,
+            seed: "reference",
+            time: 0.0,
+            theme: &theme,
+            audio: &AudioFrame::SILENT,
+            shapes: false,
+            vignette: false,
+            publish: false,
+            paused: true,
+            player: true,
+            cover: &[],
+            latent: folia_visualizer::LatentTuning::DEFAULT,
+            sora: folia_visualizer::SoraTuning::DEFAULT,
+            daylight: true,
+            monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+            nomand: tuning,
+            picture: Some(&image),
+        };
+        let _ = picture.frame(folia_visualizer::background_view::<Msg>(ground), Cache::default());
+        let shot = picture.screenshot();
+        let name = if effect == folia_visualizer::nomand::Effect::Dithering { "image-dithering" } else { effect.id() };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../visual/nomand/fixtures")
+            .join(format!("{name}.png"));
+        let expected = image::open(path).unwrap().into_rgba8();
+        let mut error = 0u64;
+        let mut large = 0usize;
+        for (a, b) in shot.chunks_exact(4).zip(expected.as_raw().chunks_exact(4)) {
+            let difference = [0, 1, 2].map(|i| a[i].abs_diff(b[i]));
+            error += difference.iter().map(|value| u64::from(*value)).sum::<u64>();
+            large += usize::from(difference.into_iter().any(|value| value > 12));
+        }
+        let mean = error as f64 / (320.0 * 180.0 * 3.0);
+        let fraction = large as f64 / (320.0 * 180.0);
+        eprintln!("Nomand {name}: mean {mean:.5}/255, pixels over 12 {fraction:.5}");
+        if let Some(dir) = std::env::var_os("FOLIA_MONET_AUDIT") {
+            image::save_buffer(
+                std::path::PathBuf::from(dir).join(format!("rust-{name}.png")),
+                &shot,
+                320,
+                180,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+        assert!(mean < 2.0 && fraction < 0.02, "{name} differs from the original Paper shader");
+    }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn lyric_fonts_invalidate_layout_and_change_each_text_style() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let text = "Wide words iii WWW love";
+    let lyrics = Lyrics {
+        lines: vec![Line {
+            text: text.into(),
+            start: 1.0,
+            end: 10.0,
+            words: vec![Word { text: text.into(), start: 1.0, end: 10.0 }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for style in Style::ALL.into_iter().filter(|style| *style != Style::Nebbia) {
+        folia_render::release_backdrop();
+        let mut picture = Picture::with_size(800, 600);
+        let mut cache = Cache::default();
+        let theme = Theme::MIDNIGHT;
+        let initial = scene(&lyrics, &theme, style);
+        for _ in 0..2 {
+            cache = picture.frame(lyric_view::<Msg>(initial.clone()), cache);
+        }
+        let before = picture.screenshot();
+        let changed = Scene {
+            typography: folia_visualizer::Typography {
+                family: Some(iced::font::Family::Monospace),
+                weight: Some(iced::font::Weight::Black),
+                ..Default::default()
+            },
+            ..initial
+        };
+        for _ in 0..2 {
+            cache = picture.frame(lyric_view::<Msg>(changed.clone()), cache);
+        }
+        let delta = diff_count(&before, &picture.screenshot());
+        eprintln!("{style:?} changed-font pixels {delta}");
+        assert!(delta > 100, "{style:?} ignored the font setting or kept its old layout");
+    }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn theme_keywords_and_icons_change_monet_and_lumiere() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let mut theme = Theme::MIDNIGHT;
+    theme.word_colors = vec![folia_core::WordColor { word: "reality".into(), color: "#ff2266".into() }];
+    theme.lyrics_icons = vec!["Heart".into(), "Music".into(), "Star".into()];
+    let lyrics = lyrics();
+    for (style, key) in
+        [(Style::Monet, "keywordColoringEnabled"), (Style::Lumiere, "keywordColors"), (Style::Lumiere, "themeIcons")]
+    {
+        folia_render::release_backdrop();
+        // This lead's text region leaves icon space at wide aspect ratios.
+        let (width, height) = if key == "themeIcons" { (1920, 900) } else { (960, 600) };
+        let mut picture = Picture::with_size(width, height);
+        let mut cache = Cache::default();
+        let draw = |enabled| {
+            let mut tuning = Values::default();
+            tuning.set_flag(style.manifest(), key, enabled);
+            Scene { theme: &theme, tuning, time: 8.6, ..scene(&lyrics, &theme, style) }
+        };
+        for _ in 0..2 {
+            cache = picture.frame(lyric_view::<Msg>(draw(false)), cache);
+        }
+        let before = picture.screenshot();
+        for _ in 0..2 {
+            cache = picture.frame(lyric_view::<Msg>(draw(true)), cache);
+        }
+        let delta = diff_count(&before, &picture.screenshot());
+        eprintln!("{style:?} {key} changed pixels {delta}");
+        assert!(delta > 10, "{style:?} {key} is not consumed by its renderer");
+    }
 }

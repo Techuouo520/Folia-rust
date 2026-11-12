@@ -202,8 +202,8 @@ impl Provider for Native {
     fn explore(&self) -> BoxFuture<'_, Result<Vec<folia_omni::ExploreSection>, OmniError>> {
         unsupported()
     }
-    fn sized_cover(&self, _: &str, _: u32) -> Option<String> {
-        None
+    fn sized_cover(&self, url: &str, px: u32) -> Option<String> {
+        url.starts_with("https://cover.fixture/").then(|| format!("{}?px={px}", self.url))
     }
     fn id(&self) -> &'static str {
         "fixture"
@@ -230,6 +230,67 @@ impl Provider for Native {
     fn lyrics<'a>(&'a self, _: &'a OnlineId) -> BoxFuture<'a, Result<Option<ProviderLyrics>, OmniError>> {
         Box::pin(async { Ok(None) })
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_tiles_share_one_cover_download() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/cover", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let received = Arc::new(AtomicUsize::new(0));
+    let count = received.clone();
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut socket, _)) => {
+                    let mut request = [0u8; 2048];
+                    socket.read(&mut request).unwrap();
+                    count.fetch_add(1, Ordering::Relaxed);
+                    std::thread::sleep(Duration::from_millis(80));
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nRGBA").unwrap();
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(2))
+                }
+                Err(err) => panic!("cover fixture listener: {err}"),
+            }
+        }
+    });
+    let temp = tempfile::tempdir().unwrap();
+    let omni = Omni::with_providers(
+        temp.path().into(),
+        "unused".into(),
+        vec![Box::new(Native { calls: Arc::new(AtomicUsize::new(0)), url })],
+    )
+    .unwrap();
+    let (a, b, c) = tokio::join!(
+        omni.fetch_cover("https://cover.fixture/same", 512),
+        omni.fetch_cover("https://cover.fixture/same", 512),
+        omni.fetch_cover("https://cover.fixture/same", 512)
+    );
+    let a = a.unwrap();
+    assert_eq!(a, b.unwrap());
+    assert_eq!(a, c.unwrap());
+    assert_eq!(std::fs::read(a).unwrap(), b"RGBA");
+    server.join().unwrap();
+    assert_eq!(received.load(Ordering::Relaxed), 1, "identical cover URLs downloaded more than once");
+}
+
+#[tokio::test]
+async fn thumbnail_request_reuses_a_cached_larger_cover() {
+    let temp = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:9/cover".to_owned();
+    let image = temp.path().join("covers").join(folia_omni::cover_cache_key(&format!("{url}?px=512")));
+    std::fs::create_dir_all(image.parent().unwrap()).unwrap();
+    std::fs::write(&image, b"cached image").unwrap();
+    let omni = Omni::with_providers(
+        temp.path().into(),
+        "unused".into(),
+        vec![Box::new(Native { calls: Arc::new(AtomicUsize::new(0)), url })],
+    )
+    .unwrap();
+    assert_eq!(omni.fetch_cover("https://cover.fixture/same", 64).await.unwrap(), image);
 }
 
 fn unsupported<T>() -> BoxFuture<'static, Result<T, OmniError>> {

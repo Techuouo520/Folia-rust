@@ -81,13 +81,6 @@ fn panel_pixels(shot: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-fn save(name: &str, shot: &[u8]) {
-    let output = tempfile::tempdir().unwrap();
-    let dir = output.path();
-    let _ = std::fs::create_dir_all(&dir);
-    let _ = image::RgbaImage::from_raw(W, H, shot.to_vec()).map(|img| img.save(dir.join(name)));
-}
-
 fn time_at(frame: u32) -> f64 {
     // 60 fps playback with a seek every 15 s, as if the lyrics were scrolled by hand.
     (f64::from(frame) / 60.0 + f64::from(frame / 900) * 37.0) % 270.0
@@ -116,6 +109,7 @@ fn draw(
         artist: "昆仑 / 在与东".into(),
         album: String::new(),
         portrait: None,
+        typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &audio,
     };
@@ -130,16 +124,17 @@ fn draw(
 }
 
 fn renderer() -> iced::Renderer {
+    folia_ui::install_fonts();
     pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, Pixels(16.0), None)).unwrap()
 }
 
 /// Frames to play, from `FOLIA_ATLAS_FRAMES`. Before the fix the shared atlas filled up at frame 21298.
 fn frames() -> u32 {
-    std::env::var("FOLIA_ATLAS_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(1200)
+    std::env::var("FOLIA_ATLAS_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(24000)
 }
 
 #[test]
-#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+#[ignore = "explicit long atlas regression"]
 fn panel_text_survives_long_monet_playback() {
     let lyrics = folia_lyrics::parse_file("lrc", &lrc(), "");
     let mut long = renderer();
@@ -147,6 +142,7 @@ fn panel_text_survives_long_monet_playback() {
     let mut baseline: Option<Vec<u8>> = None;
     let started = std::time::Instant::now();
     let total = frames();
+    assert!(total > 0, "atlas stress run needs at least one frame");
     for frame in 0..total {
         let workbench = (frame / 300) % 3 == 1;
         let (shot, next) = draw(&mut long, cache, &lyrics, frame, workbench);
@@ -156,7 +152,6 @@ fn panel_text_survives_long_monet_playback() {
             None => baseline = Some(pixels),
             Some(base) if *base != pixels => {
                 let differing = base.chunks(4).zip(pixels.chunks(4)).filter(|(a, b)| a != b).count();
-                save(&format!("broken-{frame}.png"), &shot);
                 panic!("panel text changed at frame {frame}: {differing} pixels differ");
             }
             Some(_) => {}
@@ -166,11 +161,14 @@ fn panel_text_survives_long_monet_playback() {
             let (fresh, _) = draw(&mut renderer(), Cache::default(), &lyrics, frame, false);
             let differing = fresh.chunks(4).zip(shot.chunks(4)).filter(|(a, b)| a != b).count();
             if differing > 0 {
-                save(&format!("long-{frame}.png"), &shot);
-                save(&format!("fresh-{frame}.png"), &fresh);
                 panic!("frame {frame} differs from a fresh renderer: {differing} pixels");
             }
         }
     }
+    // Close the workbench before the final main-view comparison, matching the periodic check's scope.
+    let (final_main, _) = draw(&mut long, cache, &lyrics, total, false);
+    let (fresh_main, _) = draw(&mut renderer(), Cache::default(), &lyrics, total, false);
+    let differing = fresh_main.chunks_exact(4).zip(final_main.chunks_exact(4)).filter(|(a, b)| a != b).count();
+    assert_eq!(differing, 0, "final main view differs from a fresh renderer");
     eprintln!("{total} frames, {:.2} ms/frame", started.elapsed().as_secs_f64() * 1000.0 / f64::from(total));
 }
