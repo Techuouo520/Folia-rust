@@ -95,24 +95,36 @@ pub fn layout(
     intensity: AnimationIntensity,
     width_ratio: f64,
 ) -> Vec<Placement> {
+    layout_with_font(line, width, height, lyrics_scale, intensity, width_ratio, crate::BOLD)
+}
+
+pub fn layout_with_font(
+    line: &Line,
+    width: f32,
+    height: f32,
+    lyrics_scale: f32,
+    intensity: AnimationIntensity,
+    width_ratio: f64,
+    font: iced::Font,
+) -> Vec<Placement> {
     let chars = envelopes::graphemes(&line.text);
     if chars.is_empty() || width <= 0.0 || height <= 0.0 {
         return Vec::new();
     }
     let px = font_px(width, chars.len(), line.words.len().max(1), lyrics_scale);
-    let widths = measure_widths(&chars, px);
+    let widths = measure_widths(&chars, px, font);
     let limit = max_width(width, chars.len(), width_ratio);
     let rows = wrap(&chars, &widths, limit);
     let ranges = word_ranges(line, &chars);
     let fragments = fragments(&chars, &widths, &rows, &ranges);
-    scatter(line, &fragments, px, limit, intensity)
+    scatter(line, &fragments, px, limit, intensity, font)
 }
 
-fn measure_widths(chars: &[String], font_px: f32) -> Vec<f32> {
+fn measure_widths(chars: &[String], font_px: f32, font: iced::Font) -> Vec<f32> {
     chars
         .iter()
         .map(|glyph| {
-            let measured = crate::measure(glyph, font_px, crate::BOLD, 10_000.0).width;
+            let measured = crate::measure(glyph, font_px, font, 10_000.0).width;
             if measured > 0.0 {
                 measured
             } else if envelopes::is_cjk_text(glyph) {
@@ -277,6 +289,7 @@ fn scatter(
     font_px: f32,
     max_width: f32,
     intensity: AnimationIntensity,
+    font: iced::Font,
 ) -> Vec<Placement> {
     let line_height = (f64::from(font_px) * if envelopes::is_cjk_text(&line.text) { 1.22 } else { 1.1 }).round();
     let total_height = (fragments.iter().map(|f| f.line_index).max().unwrap_or(0) + 1) as f64 * line_height;
@@ -295,7 +308,7 @@ fn scatter(
     for plan in &plans {
         let (x, y) = choose_spot(plan, fragments, &hero, max_width, total_height, line_height, &occupied);
         occupied.push(rect(x, y, plan));
-        placed.push(finish(line, &fragments[plan.fragment], plan, x, y, font_px, intensity));
+        placed.push(finish(line, &fragments[plan.fragment], plan, x, y, (font_px, font), intensity));
     }
     placed
 }
@@ -523,9 +536,10 @@ fn finish(
     plan: &Plan,
     x: f64,
     y: f64,
-    font_px: f32,
+    text: (f32, iced::Font),
     intensity: AnimationIntensity,
 ) -> Placement {
+    let (font_px, font) = text;
     let seed = line.start * 1000.0
         + fragment.word_index as f64 * 17.0
         + fragment.line_index as f64 * 31.0
@@ -560,13 +574,13 @@ fn finish(
         passed_drift_x: outward_x / length * drift + (random(7.0) - 0.5) * 2.4,
         passed_drift_y: outward_y / length * drift * 0.72 + (random(8.0) - 0.5) * 2.0,
         emphasis: plan.emphasis,
-        glyphs: glyphs(fragment, font_px),
+        glyphs: glyphs(fragment, font_px, font),
         interlude: line.is_interlude(),
         cjk: envelopes::is_cjk_text(&fragment.text),
     }
 }
 
-fn glyphs(fragment: &Fragment, font_px: f32) -> Vec<Glyph> {
+fn glyphs(fragment: &Fragment, font_px: f32, font: iced::Font) -> Vec<Glyph> {
     let chars: Vec<char> = fragment.text.chars().collect();
     let count = fragment.word_len.max(1);
     let unit = (fragment.word_end - fragment.word_start).max(0.0) / count as f64;
@@ -581,7 +595,7 @@ fn glyphs(fragment: &Fragment, font_px: f32) -> Vec<Glyph> {
                 if index + 1 == count { fragment.word_end } else { fragment.word_start + unit * (index as f64 + 1.0) };
             let text = ch.to_string();
             let glyph = Glyph { text: text.clone(), offset, start, end };
-            offset += crate::measure(&text, font_px, crate::BOLD, 10_000.0).width;
+            offset += crate::measure(&text, font_px, font, 10_000.0).width;
             glyph
         })
         .collect()

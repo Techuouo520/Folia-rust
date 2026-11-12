@@ -3,8 +3,6 @@
 use folia_lyrics::WordSpan;
 use folia_render::glyphs::shape;
 
-use super::glyph_line::LYRIC_FONT;
-
 const FRAME_CLEARANCE_X: f32 = 0.04;
 const FRAME_CLEARANCE_TOP: f32 = 0.035;
 const SUBTITLE_CLEARANCE: f32 = 0.2;
@@ -58,8 +56,8 @@ pub struct FlowGlyph<'a> {
 }
 
 /// Width of `text` at `px` with letter spacing after every grapheme, the last included (pretext's natural width).
-pub fn natural(text: &str, px: f32, spacing: f32) -> f32 {
-    shape(text, px, LYRIC_FONT).width + spacing * px * folia_lyrics::graphemes(text).len() as f32
+pub fn natural(text: &str, px: f32, spacing: f32, font: iced::Font) -> f32 {
+    shape(text, px, font).width + spacing * px * folia_lyrics::graphemes(text).len() as f32
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -217,6 +215,7 @@ fn break_lines(
     hero_px: f32,
     spacing: f32,
     lines: usize,
+    font: iced::Font,
 ) -> (Vec<usize>, Vec<f32>, Vec<f32>) {
     let mut units = Vec::new();
     let mut gap = 0.0;
@@ -226,7 +225,7 @@ fn break_lines(
         match *piece {
             Piece::Space { start } => {
                 let px = hero_px * glyphs[start].scale;
-                gap = natural("a a", px, spacing) - natural("aa", px, spacing);
+                gap = natural("a a", px, spacing, font) - natural("aa", px, spacing, font);
                 widest_gap = widest_gap.max(gap);
             }
             Piece::Unit { start, end, .. } => {
@@ -299,13 +298,20 @@ fn break_lines(
 }
 
 /// `flowLine`: the four layouts of a line. `limits` (logical pixels) only decide which words must split into letters.
-pub fn flow_line(glyphs: &[FlowGlyph<'_>], words: &[WordSpan], hero_px: f32, spacing: f32, limits: [f32; 2]) -> Flow {
+pub fn flow_line(
+    glyphs: &[FlowGlyph<'_>],
+    words: &[WordSpan],
+    hero_px: f32,
+    spacing: f32,
+    limits: [f32; 2],
+    font: iced::Font,
+) -> Flow {
     let spans = spans_of(glyphs, words);
     let base = units_of(glyphs, &spans);
     let mut horizontal = vec![0.0; glyphs.len()];
     for span in &spans {
         let px = hero_px * glyphs[span.start].scale;
-        let width = natural(&text_of(glyphs, span.start, span.end), px, spacing);
+        let width = natural(&text_of(glyphs, span.start, span.end), px, spacing, font);
         let canvas: f32 = glyphs[span.start..span.end].iter().map(|glyph| glyph.advance).sum();
         for index in span.start..span.end {
             horizontal[index] = if canvas > 0.0 {
@@ -323,7 +329,7 @@ pub fn flow_line(glyphs: &[FlowGlyph<'_>], words: &[WordSpan], hero_px: f32, spa
     let variant = |orient: usize, lines: usize| {
         let advances = if orient == 0 { &horizontal } else { &vertical };
         let pieces = split_long(glyphs, &base, advances, limits[orient]);
-        let (row, offset, lengths) = break_lines(glyphs, &pieces, advances, hero_px, spacing, lines);
+        let (row, offset, lengths) = break_lines(glyphs, &pieces, advances, hero_px, spacing, lines, font);
         place(glyphs, advances, &row, &offset, &lengths, orient, hero_px)
     };
     [[variant(0, 1), variant(0, MAX_LINES)], [variant(1, 1), variant(1, MAX_LINES)]]

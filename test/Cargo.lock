@@ -6625,6 +6625,7 @@ dependencies = [
  "image",
  "pollster",
  "tempfile",
+ "toml",
  "wgpu",
 ]
 

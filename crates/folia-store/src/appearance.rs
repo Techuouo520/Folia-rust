@@ -81,16 +81,7 @@ pub struct FontSettings {
     pub weight: Option<u16>,
 }
 
-/// `SubtitleContentMode`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SubtitleContentMode {
-    #[default]
-    Translation,
-    Romanization,
-    Both,
-    None,
-}
+pub use folia_core::SubtitleContentMode;
 
 /// One row of the bottom subtitle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +271,9 @@ pub struct AppearanceSettings {
     pub visualizer_background_mode: Option<String>,
     /// `disable_visualizer_vignette` of the common background.
     pub disable_visualizer_vignette: bool,
+    /// `disable_visualizer_geometric_background`. Missing in older files means shapes stay on.
+    #[serde(default)]
+    pub disable_visualizer_geometric_background: bool,
     /// `visualizerOpacity`, 0.2..=1.
     pub visualizer_opacity: f32,
     pub lyrics_font: FontSettings,
@@ -296,6 +290,7 @@ impl Default for AppearanceSettings {
             animation_intensity: folia_core::AnimationIntensity::Normal,
             visualizer_background_mode: None,
             disable_visualizer_vignette: false,
+            disable_visualizer_geometric_background: false,
             visualizer_opacity: 1.0,
             lyrics_font: FontSettings::default(),
             subtitle: SubtitleSettings::default(),

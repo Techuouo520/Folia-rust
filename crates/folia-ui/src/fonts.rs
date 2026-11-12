@@ -65,6 +65,24 @@ pub fn resolve(settings: &FontSettings) -> Font {
     Font { family, weight: settings.weight.map(weight).unwrap_or(Weight::Normal), ..Font::DEFAULT }
 }
 
+pub fn typography(appearance: &folia_store::AppearanceSettings) -> folia_visualizer::Typography {
+    let lyric = resolve(&appearance.lyrics_font);
+    let settings =
+        if appearance.subtitle.font_inherits_lyrics { &appearance.lyrics_font } else { &appearance.subtitle.font };
+    let mut subtitle = resolve(settings);
+    if settings.weight.is_none() {
+        subtitle.weight = Weight::Medium;
+    }
+    folia_visualizer::Typography {
+        family: Some(lyric.family),
+        weight: appearance.lyrics_font.weight.map(weight),
+        subtitle: Some(subtitle),
+        subtitle_scale: appearance.subtitle.font_scale,
+        subtitle_mode: appearance.subtitle.content_mode,
+        hide_subtitle: appearance.subtitle.hide_translation,
+    }
+}
+
 /// `resolveThemeFontWeight`: a 100–900 number as the nearest named weight.
 pub fn weight(value: u16) -> Weight {
     match value {

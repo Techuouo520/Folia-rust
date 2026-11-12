@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use folia_core::{AnimationIntensity, Line, Theme, Word};
+use folia_core::{AnimationIntensity, Line, Word};
 use folia_lyrics::{LayoutUnit, RenderHints, display_words, layout_units};
 use iced::widget::canvas::{Frame, Path, Stroke};
 use iced::{Color, Point, Radians, Size, Vector};
@@ -50,7 +50,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<PartitaLayout>, frame: &m
     let (stagger_min, stagger_max) = (stagger_min.min(stagger_max), stagger_min.max(stagger_max));
     let center = Point::new(size.width / 2.0, size.height / 2.0);
     let (breath_y, breath_scale) = glow::breathing(scene.time, theme.intensity, 1.0);
-    let salt = scene.tuning.fingerprint();
+    let salt = scene.layout_key();
 
     glow::visible_lines(&scene.lyrics.lines, scene.time, |line, opacity, scale, _active| {
         let layout = cache.get_or_insert(line, size, scene.font_scale, salt, || {
@@ -60,7 +60,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<PartitaLayout>, frame: &m
         frame.with_save(|frame| {
             glow::scale_around(frame, center, scale * breath_scale, breath_y);
             for row in &layout.rows {
-                draw_row(frame, theme, row, hints, scene.time, opacity, layout.font_px);
+                draw_row(frame, scene, row, hints, scene.time, opacity, layout.font_px);
             }
         });
     });
@@ -68,13 +68,14 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<PartitaLayout>, frame: &m
 
 fn draw_row(
     frame: &mut Frame,
-    theme: &Theme,
+    scene: &Scene<'_>,
     row: &Row,
     hints: RenderHints,
     time: f64,
     line_opacity: f64,
     font_px: f32,
 ) {
+    let theme = scene.theme;
     let active_at = row.start - hints.word_lookahead();
     let passed_at = hints.word_active_end(row.last_word.0, row.last_word.1);
     if time < active_at {
@@ -105,7 +106,7 @@ fn draw_row(
         }
         for ((word, config), offset) in row.words.iter().zip(&row.configs).zip(&row.offsets) {
             let pose = glow::word_pose(config, word.start, word.end, hints, theme.intensity, true, time);
-            glow::draw_word(frame, theme, &word.text, Point::new(*offset, 0.0), &pose, opacity * line_opacity, font_px);
+            glow::draw_word(frame, scene, &word.text, Point::new(*offset, 0.0), &pose, opacity * line_opacity, font_px);
         }
     });
 }
@@ -166,8 +167,10 @@ fn build(
             let chunk_scale = if intensity == AnimationIntensity::Calm { 1.0 } else { 0.8 + next_random() * 0.9 };
             let row_bias = index as f64 - (row_count as f64 - 1.0) / 2.0;
             let configs = word_configs(&words, intensity, chunk_scale);
-            let widths: Vec<f32> =
-                words.iter().map(|w| measure(&w.text, font_px, crate::BOLD, f32::INFINITY).width).collect();
+            let widths: Vec<f32> = words
+                .iter()
+                .map(|w| measure(&w.text, font_px, scene.typography.font(crate::BOLD), f32::INFINITY).width)
+                .collect();
             let width = widths.iter().map(|w| w + WORD_GAP).sum::<f32>() + PAD_X * 2.0;
             let mut cursor = -width / 2.0 + PAD_X;
             let offsets = widths

@@ -204,6 +204,68 @@ fn line_text(text: &str) -> Option<&str> {
     readable(text).then_some(text)
 }
 
+/// A resolved subtitle row, preserving whether it previews an upcoming lyric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubtitleRow<'a> {
+    pub text: &'a str,
+    pub source: folia_store::RowSource,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SubtitleRows<'a> {
+    pub rows: [Option<SubtitleRow<'a>>; 3],
+    pub fallback: bool,
+}
+
+/// Resolves the shared overlay independently of the alternate-track mode inside lyric styles.
+pub fn subtitle_rows_at<'a>(
+    lines: &'a [Line],
+    time: f64,
+    settings: &folia_store::SubtitleSettings,
+) -> SubtitleRows<'a> {
+    use folia_store::RowSource;
+    let mut result = SubtitleRows::default();
+    if settings.hide_translation {
+        return result;
+    }
+    let Some(index) = lines.iter().rposition(|line| line.start <= time) else {
+        return result;
+    };
+    let line = &lines[index];
+    let mut upcoming = lines.iter().skip(index + 1).filter(|line| readable(&line.text));
+    let mut count = 0;
+    for source in settings.layout.rows() {
+        let text = match source {
+            RowSource::Current => Some(line.text.as_str()),
+            RowSource::Next => upcoming.next().map(|line| line.text.as_str()),
+            RowSource::Translation => line.translation.as_deref(),
+            RowSource::Romanization => line.romanization.as_deref(),
+        }
+        .map(str::trim)
+        .filter(|text| readable(text));
+        let Some(text) = text else { continue };
+        if source != RowSource::Current
+            && source != RowSource::Next
+            && result.rows.iter().flatten().any(|row| row.source != RowSource::Next && row.text == text)
+        {
+            continue;
+        }
+        if let Some(slot) = result.rows.get_mut(count) {
+            *slot = Some(SubtitleRow { source, text });
+            count += 1;
+        }
+    }
+    if count == 0 && line.end > time {
+        result.fallback = true;
+        for (slot, next) in
+            result.rows.iter_mut().take(2).zip(lines.iter().skip(index + 1).filter(|line| readable(&line.text)))
+        {
+            *slot = Some(SubtitleRow { source: RowSource::Next, text: next.text.trim() });
+        }
+    }
+    result
+}
+
 /// `clamp(1.125rem, 2.6vw, 1.25rem)` times the lyric font scale.
 pub fn translation_px(width: f32, scale: f32) -> f32 {
     let scale = positive(scale);

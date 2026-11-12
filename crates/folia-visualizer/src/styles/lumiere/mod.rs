@@ -17,19 +17,29 @@ mod tuning;
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use folia_lyrics::active_line;
 use folia_render::glyphs::Batch;
-use iced::widget::canvas::{Frame, Path, Stroke, Text};
+use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
 use iced::widget::shader;
-use iced::{Color, Point, Radians, Rectangle, Size, Vector, mouse};
+use iced::{Color, Point, Radians, Rectangle, Renderer, Size, Vector, mouse};
 
 use crate::Scene;
 
+#[cfg(feature = "dev")]
+pub use gpu::{front_slots, stage_slots, stage_textures};
 pub use program::{Program, Shot, Span};
 pub use tuning::{Quality, Tuning, manifest};
 
 use field::View;
+
+/// Shader-widget state. The owner keeps this scene's GPU slot alive across other windows' presents.
+#[derive(Default)]
+pub struct LiveState {
+    pub cache: RefCell<Cache>,
+    owner: Arc<std::sync::atomic::AtomicBool>,
+}
 
 #[derive(Default)]
 pub struct Cache {
@@ -51,18 +61,64 @@ pub fn field_view<'a, Message>(scene: Scene<'a>) -> Field<'a, Message> {
     Field { scene, _message: PhantomData }
 }
 
+/// The dark-field sprite under the lights: theme background × 0.06 at the resolved alpha.
+pub struct Veil {
+    pub color: Color,
+}
+
+impl<Message> canvas::Program<Message> for Veil {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &iced::Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), self.color);
+        vec![frame.into_geometry()]
+    }
+}
+
+pub fn veil_color(theme: &folia_core::Theme, amount: f32) -> Color {
+    let field = palette::dark_field(theme, amount);
+    Color::from_rgba(field.rgb[0], field.rgb[1], field.rgb[2], field.alpha)
+}
+
 impl<Message> shader::Program<Message> for Field<'_, Message> {
-    type State = RefCell<Cache>;
+    type State = LiveState;
     type Primitive = gpu::Pass;
 
+    fn update(
+        &self,
+        state: &mut Self::State,
+        _event: &iced::Event,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<shader::Action<Message>> {
+        (!state.owner.load(std::sync::atomic::Ordering::Acquire)).then(|| {
+            shader::Action::request_redraw_at(std::time::Instant::now() + std::time::Duration::from_millis(16))
+        })
+    }
+
     fn draw(&self, state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
-        let mut cache = state.borrow_mut();
+        let mut cache = state.cache.borrow_mut();
+        if !state.owner.load(std::sync::atomic::Ordering::Acquire) {
+            cache.decor.invalidate();
+        }
         let size = bounds.size();
         let tuning = Tuning::read(&self.scene.tuning);
         cache.sync(self.scene.lyrics, self.scene.seed, tuning.seamless);
         let heard = cache.audio.sample(audio::wall_ms(), self.scene.audio);
         let view = field::prepare(&cache.program, self.scene.time, size, self.scene.theme, tuning, heard);
-        stage_pass(&mut cache, &self.scene, &view, tuning, heard)
+        let mut pass = stage_pass(&mut cache, &self.scene, &view, tuning, heard);
+        pass.slot = Arc::as_ptr(&state.owner) as u64;
+        pass.owner = Arc::downgrade(&state.owner);
+        pass.publish_blur = !self.scene.preview;
+        pass
     }
 }
 
@@ -77,11 +133,26 @@ pub fn front_view<'a, Message>(scene: Scene<'a>) -> Front<'a, Message> {
 }
 
 impl<Message> shader::Program<Message> for Front<'_, Message> {
-    type State = RefCell<Cache>;
+    type State = LiveState;
     type Primitive = gpu::FrontPass;
 
+    fn update(
+        &self,
+        state: &mut Self::State,
+        _event: &iced::Event,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<shader::Action<Message>> {
+        (!state.owner.load(std::sync::atomic::Ordering::Acquire)).then(|| {
+            shader::Action::request_redraw_at(std::time::Instant::now() + std::time::Duration::from_millis(16))
+        })
+    }
+
     fn draw(&self, state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
-        let mut cache = state.borrow_mut();
+        let mut cache = state.cache.borrow_mut();
+        if !state.owner.load(std::sync::atomic::Ordering::Acquire) {
+            cache.decor.invalidate();
+        }
         let size = bounds.size();
         let tuning = Tuning::read(&self.scene.tuning);
         cache.sync(self.scene.lyrics, self.scene.seed, tuning.seamless);
@@ -95,6 +166,8 @@ impl<Message> shader::Program<Message> for Front<'_, Message> {
             bytes: field::pack(&view),
             decor: decor::uniform(&cache.program, self.scene.time, tuning, mote_lift(heard, tuning)),
             particles,
+            slot: Arc::as_ptr(&state.owner) as u64,
+            owner: Arc::downgrade(&state.owner),
         }
     }
 }
@@ -124,7 +197,7 @@ fn light<'a>(view: &'a View, tuning: Tuning, intensity: f32) -> text::Light<'a> 
 
 fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning, heard: audio::Heard) -> gpu::Pass {
     let Cache { decor, program, seed, text, glyphs, .. } = cache;
-    text.sync(program, scene.lyrics, *seed, view, tuning, scene.time);
+    text.sync(program, scene, *seed, view, tuning);
     let light = light(view, tuning, text.window_intensity(scene.time));
     let echo = {
         let mut sprites = glyphs.lock();
@@ -136,7 +209,7 @@ fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning,
     };
     decor.ensure(*seed, scene.lyrics, program);
     let bursts = decor.active(scene.time);
-    let (lines, particles) = decor.rebuild(program, view, scene.time, tuning);
+    let (lines, particles) = decor.rebuild(program, view, scene.time, tuning, &scene.theme.lyrics_icons);
     let mut decor_bytes = decor::uniform(program, scene.time, tuning, mote_lift(heard, tuning));
     for (slot, burst) in bursts.iter().enumerate() {
         let Some(burst) = burst else { continue };
@@ -145,7 +218,11 @@ fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning,
         };
         let age = scene.time as f32 - burst.time;
         let at = [x, y + font_px * burst.dy, font_px * burst.size];
-        decor::stamp(&mut decor_bytes, slot, at, age, burst.tint, view.palette.light);
+        let tint = text.keyword(burst.line, burst.grapheme).map_or(burst.tint, |keyword| {
+            let light = self::text::keyword_light(view.palette.light, keyword, 0.7);
+            std::array::from_fn(|i| burst.tint[i] + (light[i] - burst.tint[i]) * 0.8)
+        });
+        decor::stamp(&mut decor_bytes, slot, at, age, tint, view.palette.light);
     }
     gpu::Pass {
         bytes: field::pack(view),
@@ -160,7 +237,14 @@ fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning,
         echo,
         text_only: tuning.text_only,
         base: view.base,
+        veil: {
+            let color = veil_color(scene.theme, tuning.dark_field);
+            [color.r, color.g, color.b, color.a]
+        },
         graphics_scale: tuning.graphics_scale(),
+        slot: 0,
+        owner: std::sync::Weak::new(),
+        publish_blur: false,
     }
 }
 
@@ -177,7 +261,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
     let view = field::prepare(&cache.program, scene.time, size, scene.theme, tuning, heard);
     if scene.backdrop && active_line(&scene.lyrics.lines, scene.time).is_some() {
         let Cache { program, seed, text, .. } = cache;
-        text.sync(program, scene.lyrics, *seed, &view, tuning, scene.time);
+        text.sync(program, scene, *seed, &view, tuning);
         let light = light(&view, tuning, text.window_intensity(scene.time));
         frame.with_save(|frame| {
             apply_camera(frame, &view.camera);
@@ -190,7 +274,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
                         position: Point::ORIGIN,
                         color: Color::from_rgba(color[0], color[1], color[2], color[3]),
                         size: font_px.into(),
-                        font: text::LYRIC_FONT,
+                        font: scene.typography.font(text::LYRIC_FONT),
                         align_x: iced::widget::text::Alignment::Center,
                         align_y: iced::alignment::Vertical::Center,
                         ..Text::default()

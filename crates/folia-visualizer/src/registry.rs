@@ -46,6 +46,11 @@ impl Style {
         Style::ALL.into_iter().find(|style| style.id() == id)
     }
 
+    /// Still, nebbia and machi set `background: false` on their entry. Machi is not in this build.
+    pub fn shows_shared_background(self) -> bool {
+        !matches!(self, Style::Still | Style::Nebbia)
+    }
+
     /// The style a song draws when the random setting is on: stable for one song, spread over all styles.
     pub fn random_for(song_id: i64) -> Style {
         let mixed = (song_id as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29);

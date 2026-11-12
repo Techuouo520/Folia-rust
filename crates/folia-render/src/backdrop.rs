@@ -3,6 +3,10 @@
 // Only the render thread takes it.
 
 use std::marker::PhantomData;
+#[cfg(feature = "dev")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 
 use iced::advanced::image::Handle;
 use iced::widget::shader::{self, Primitive as ShaderPrimitive};
@@ -188,9 +192,186 @@ pub fn release() {
     let mut stage = lock_stage();
     stage.gpu = None;
     stage.levels.clear();
+    stage.owned = None;
+    stage.blit = None;
     stage.live = false;
     stage.last_live = false;
     stage.idle = 0;
+}
+
+struct Owned {
+    texture: wgpu::Texture,
+    // The sample group does not keep this view alive on its own.
+    _view: wgpu::TextureView,
+    bind: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+    /// Picture identity. Unchanged while the background is actually still.
+    content: u64,
+    ready: bool,
+}
+
+#[cfg(feature = "dev")]
+static EXTERNAL_PAINTS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "dev")]
+static UNDERLAY_BINDS: AtomicU64 = AtomicU64::new(0);
+
+/// How many times the blur pyramid was rebuilt from a new picture.
+#[cfg(feature = "dev")]
+pub fn external_paints() -> u64 {
+    EXTERNAL_PAINTS.load(Ordering::Relaxed)
+}
+
+/// How many underlay sample groups have been created. A moving picture reuses one.
+#[cfg(feature = "dev")]
+pub fn underlay_binds() -> u64 {
+    UNDERLAY_BINDS.load(Ordering::Relaxed)
+}
+
+/// Whether the shared-background copy is still allocated.
+pub fn underlay_held() -> bool {
+    lock_stage().owned.is_some()
+}
+
+static PUBLISHERS: Mutex<Vec<Weak<AtomicBool>>> = Mutex::new(Vec::new());
+
+/// Each background pipeline reports its own current lifetime, independently of other renderers' presents.
+pub struct PublisherGuard(Arc<AtomicBool>);
+
+impl PublisherGuard {
+    pub fn register() -> Self {
+        let alive = Arc::new(AtomicBool::new(false));
+        let mut publishers = PUBLISHERS.lock();
+        publishers.retain(|publisher| publisher.strong_count() > 0);
+        publishers.push(Arc::downgrade(&alive));
+        Self(alive)
+    }
+
+    pub fn report(&self, alive: bool) {
+        let mut publishers = PUBLISHERS.lock();
+        self.0.store(alive, Ordering::Relaxed);
+        publishers.retain(|publisher| publisher.strong_count() > 0);
+        if !publishers.iter().filter_map(Weak::upgrade).any(|publisher| publisher.load(Ordering::Relaxed)) {
+            lock_stage().owned = None;
+        }
+    }
+}
+
+impl Drop for PublisherGuard {
+    fn drop(&mut self) {
+        self.report(false);
+    }
+}
+
+fn mix_underlay(stamp: u64) -> u64 {
+    match lock_stage().owned.as_ref().map(|owned| owned.content) {
+        Some(content) => stamp ^ content.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+        None => stamp,
+    }
+}
+
+/// Copies a finished shader picture into a texture this module owns, so the lyric capture can sample it.
+pub fn copy_underlay(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    source: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    content: u64,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let mut stage = lock_stage();
+    if stage.blit.as_ref().is_none_or(|blit| blit.format != source.format()) {
+        stage.blit = Some(Blit::new(device, source.format()));
+    }
+    let size_changed = stage.owned.as_ref().is_none_or(|owned| owned.width != width || owned.height != height);
+    if size_changed {
+        let Some(blit) = stage.blit.as_ref() else { return };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("folia-underlay"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: source.format(),
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("folia-underlay"),
+            layout: &blit.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&blit.sampler) },
+            ],
+        });
+        #[cfg(feature = "dev")]
+        UNDERLAY_BINDS.fetch_add(1, Ordering::Relaxed);
+        stage.owned = Some(Owned { texture, _view: view, bind, width, height, content, ready: false });
+    }
+    let same = stage.owned.as_ref().is_some_and(|owned| owned.content == content && !size_changed);
+    if !same {
+        let Some(dest) = stage.owned.as_ref().map(|owned| owned.texture.clone()) else { return };
+        encoder.copy_texture_to_texture(
+            source.as_image_copy(),
+            dest.as_image_copy(),
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+    }
+    if let Some(owned) = stage.owned.as_mut() {
+        owned.content = content;
+        owned.ready = true;
+    }
+}
+
+/// Drops the shared-background copy. The next publisher allocates it again.
+pub fn release_underlay() {
+    let mut stage = lock_stage();
+    stage.owned = None;
+}
+
+/// Draws the copied background into `target`. `false` when this frame has none.
+pub fn paint_underlay(
+    _device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    format: wgpu::TextureFormat,
+    target: &wgpu::TextureView,
+    width: u32,
+    height: u32,
+) -> bool {
+    let mut stage = lock_stage();
+    if !stage.owned.as_ref().is_some_and(|owned| owned.ready) {
+        return false;
+    }
+    if stage.blit.as_ref().is_none_or(|blit| blit.format != format) {
+        return false;
+    }
+    let Some(bind) = stage.owned.as_ref().map(|owned| owned.bind.clone()) else { return false };
+    if let Some(owned) = stage.owned.as_mut() {
+        owned.ready = false;
+    }
+    let Some(blit) = stage.blit.as_ref() else { return false };
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("folia-underlay"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+    pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+    pass.set_scissor_rect(0, 0, width, height);
+    pass.set_pipeline(&blit.pipeline);
+    pass.set_bind_group(0, &bind, &[]);
+    pass.draw(0..3, 0..1);
+    true
 }
 
 /// Called from the plate pipeline once a frame. Two quiet frames after the last glass plate, the textures go.
@@ -222,6 +403,7 @@ pub fn paint_external(
     stamp: u64,
     window: [f32; 2],
 ) {
+    let stamp = mix_underlay(stamp);
     set_window(window);
     let mut stage = lock_stage();
     let count = stage.levels.len().min(blur::MAX_LEVELS as usize);
@@ -241,6 +423,111 @@ pub fn paint_external(
     gpu.stamp = stamp;
     gpu.levels.clear();
     gpu.levels.extend_from_slice(levels);
+    #[cfg(feature = "dev")]
+    EXTERNAL_PAINTS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// A foreground texture and its colour veil, composited over a published shared background.
+pub struct UnderlayOverlay<'a> {
+    pub foreground: &'a wgpu::TextureView,
+    pub stamp: u64,
+    pub window: [f32; 2],
+    pub veil: [f32; 4],
+}
+
+/// Like [`paint_external`], but draws the shared background and veil under the foreground.
+pub fn paint_over_underlay(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    format: wgpu::TextureFormat,
+    overlay: UnderlayOverlay<'_>,
+) {
+    let UnderlayOverlay { foreground, stamp, window, veil } = overlay;
+    let stamp = veil
+        .iter()
+        .fold(mix_underlay(stamp), |hash, value| hash.wrapping_mul(0x100_0000_01b3) ^ u64::from(value.to_bits()));
+    set_window(window);
+    let mut stage = lock_stage();
+    let count = stage.levels.len().min(blur::MAX_LEVELS as usize);
+    if count == 0 {
+        return;
+    }
+    let mut buffer = [0u32; blur::MAX_LEVELS as usize];
+    buffer[..count].copy_from_slice(&stage.levels[..count]);
+    let levels = &buffer[..count];
+    let skip = {
+        let gpu = stage.gpu.get_or_insert_with(|| Picture::new(device, queue, format));
+        let rebuilt = gpu.pyramid.ensure(device, queue, window[0] as u32, window[1] as u32, deepest(levels));
+        !rebuilt && gpu.stamp == stamp && gpu.levels.as_slice() == levels
+    };
+    if skip {
+        return;
+    }
+    let ready = stage.owned.as_ref().is_some_and(|owned| owned.ready);
+    if ready {
+        let (width, height) = blur::source_size(window[0] as u32, window[1] as u32);
+        let source = stage.gpu.as_ref().and_then(|gpu| gpu.pyramid.source().cloned());
+        let ground = stage.owned.as_ref().map(|owned| owned.bind.clone());
+        let pipes = stage.blit.as_mut().map(|blit| {
+            queue.write_buffer(&blit.veil_uniform, 0, bytemuck::cast_slice(&veil));
+            (blit.veil.clone(), blit.over.clone(), blit.foreground(device, foreground), blit.veil_bind.clone())
+        });
+        if let Some(owned) = stage.owned.as_mut() {
+            owned.ready = false;
+        }
+        if let (Some(source), Some(ground), Some((base, over, foreground_bind, veil_bind))) = (source, ground, pipes) {
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("folia-underlay-source"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &source,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                pass.set_pipeline(&base);
+                pass.set_bind_group(0, &ground, &[]);
+                pass.set_bind_group(1, &veil_bind, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("folia-underlay-over"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &source,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_viewport(0.0, 0.0, width as f32, height as f32, 0.0, 1.0);
+                pass.set_pipeline(&over);
+                pass.set_bind_group(0, &foreground_bind, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+    } else if let Some(gpu) = stage.gpu.as_mut() {
+        gpu.pyramid.copy_into_source(device, encoder, foreground);
+    }
+    let Some(gpu) = stage.gpu.as_mut() else { return };
+    gpu.pyramid.blur(device, encoder, levels);
+    gpu.stamp = stamp;
+    gpu.levels.clear();
+    gpu.levels.extend_from_slice(levels);
+    #[cfg(feature = "dev")]
+    EXTERNAL_PAINTS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Lets a shader style draw straight into the quarter-resolution source. The encoder stays with the caller.
@@ -301,7 +588,190 @@ struct Stage {
     live: bool,
     last_live: bool,
     idle: u32,
+    owned: Option<Owned>,
+    blit: Option<Blit>,
 }
+
+struct Blit {
+    pipeline: wgpu::RenderPipeline,
+    over: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    format: wgpu::TextureFormat,
+    foreground: Option<(usize, wgpu::BindGroup)>,
+    veil: wgpu::RenderPipeline,
+    veil_uniform: wgpu::Buffer,
+    veil_bind: wgpu::BindGroup,
+}
+
+impl Blit {
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("folia-underlay"),
+            source: wgpu::ShaderSource::Wgsl(UNDERLAY.into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("folia-underlay"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("folia-underlay"),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = blit_pipeline(device, &module, &pipeline_layout, format, wgpu::BlendState::REPLACE, "fs");
+        let over = blit_pipeline(
+            device,
+            &module,
+            &pipeline_layout,
+            format,
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            "fs",
+        );
+        let veil_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("folia-underlay-veil"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let veil_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("folia-underlay-veil"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let veil_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("folia-underlay-veil"),
+            layout: &veil_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: veil_uniform.as_entire_binding() }],
+        });
+        let veil_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("folia-underlay-veil"),
+            bind_group_layouts: &[&layout, &veil_layout],
+            push_constant_ranges: &[],
+        });
+        let veil = blit_pipeline(device, &module, &veil_pipeline_layout, format, wgpu::BlendState::REPLACE, "fs_veil");
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("folia-underlay"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..wgpu::SamplerDescriptor::default()
+        });
+        Self { pipeline, over, layout, sampler, format, foreground: None, veil, veil_uniform, veil_bind }
+    }
+
+    fn foreground(&mut self, device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        let key = view as *const wgpu::TextureView as usize;
+        if let Some((held, bind)) = &self.foreground
+            && *held == key
+        {
+            return bind.clone();
+        }
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("folia-underlay-over"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        });
+        self.foreground = Some((key, bind.clone()));
+        bind
+    }
+}
+
+fn blit_pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    format: wgpu::TextureFormat,
+    blend: wgpu::BlendState,
+    fragment: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("folia-underlay"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("vs"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(fragment),
+            targets: &[Some(wgpu::ColorTargetState { format, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+const UNDERLAY: &str = r#"
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@group(0) @binding(0) var under_tex: texture_2d<f32>;
+@group(0) @binding(1) var under_samp: sampler;
+@group(1) @binding(0) var<uniform> veil: vec4<f32>;
+
+@vertex
+fn vs(@builtin(vertex_index) index: u32) -> VsOut {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
+    let p = positions[index];
+    var out: VsOut;
+    out.pos = vec4<f32>(p, 0.0, 1.0);
+    out.uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    return out;
+}
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    return textureSample(under_tex, under_samp, in.uv);
+}
+
+@fragment
+fn fs_veil(in: VsOut) -> @location(0) vec4<f32> {
+    let background = textureSample(under_tex, under_samp, in.uv);
+    return vec4<f32>(mix(background.rgb, veil.rgb, veil.a), background.a + veil.a * (1.0 - background.a));
+}
+"#;
 
 struct Picture {
     device: wgpu::Device,
@@ -634,8 +1104,16 @@ const VERT_ATTRS: [wgpu::VertexAttribute; 6] = [
     wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 64, shader_location: 5 },
 ];
 
-static STAGE: Mutex<Stage> =
-    Mutex::new(Stage { gpu: None, levels: Vec::new(), window: [0.0, 0.0], live: false, last_live: false, idle: 0 });
+static STAGE: Mutex<Stage> = Mutex::new(Stage {
+    gpu: None,
+    levels: Vec::new(),
+    window: [0.0, 0.0],
+    live: false,
+    last_live: false,
+    idle: 0,
+    owned: None,
+    blit: None,
+});
 
 /// Frame time of the blur while the picture changes, and the bytes kept while the glass is open.
 pub struct GlassBench {

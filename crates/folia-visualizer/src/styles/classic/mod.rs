@@ -36,7 +36,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<LineLayout>, frame: &mut 
         word_spacing: f64::from(scene.tuning.number(manifest, "wordSpacing")),
         legacy: scene.tuning.choice(manifest, "useLegacyLayout") == "true",
     };
-    let salt = scene.tuning.fingerprint();
+    let salt = scene.layout_key();
     let theme = scene.theme;
     let center = Point::new(size.width / 2.0, size.height / 2.0);
     let (breath_y, breath_scale) = glow::breathing(scene.time, theme.intensity, tuning.breathing);
@@ -56,7 +56,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<LineLayout>, frame: &mut 
                     tuning.word_rotation,
                     scene.time,
                 );
-                glow::draw_word(frame, theme, &word.text, *at, &pose, opacity, layout.font_px);
+                glow::draw_word(frame, scene, &word.text, *at, &pose, opacity, layout.font_px);
             }
         });
     });
@@ -69,8 +69,10 @@ fn build(line: &Line, scene: &Scene<'_>, size: Size, tuning: ClassicTuning) -> R
     } else {
         folia_lyrics::display_words(line, &folia_lyrics::layout_units(line, true))
     };
-    let widths: Vec<f32> =
-        words.iter().map(|word| measure(&word.text, font_px, crate::BOLD, f32::INFINITY).width).collect();
+    let widths: Vec<f32> = words
+        .iter()
+        .map(|word| measure(&word.text, font_px, scene.typography.font(crate::BOLD), f32::INFINITY).width)
+        .collect();
     let seed = line.start;
     let interlude = line.is_interlude();
     let configs = word_configs(seed, scene.theme.intensity, interlude, &widths, font_px, tuning);

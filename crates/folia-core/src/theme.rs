@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rgb {
     pub r: u8,
     pub g: u8,
@@ -24,7 +24,7 @@ impl Rgb {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AnimationIntensity {
     Calm,
@@ -33,7 +33,7 @@ pub enum AnimationIntensity {
     Chaotic,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Theme {
     pub name: Cow<'static, str>,
     pub background: Rgb,
@@ -41,6 +41,12 @@ pub struct Theme {
     pub accent: Rgb,
     pub secondary: Rgb,
     pub intensity: AnimationIntensity,
+    #[serde(default, alias = "wordColors")]
+    pub word_colors: Vec<crate::WordColor>,
+    #[serde(default, alias = "lyricsIcons")]
+    pub lyrics_icons: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 impl Theme {
@@ -52,6 +58,9 @@ impl Theme {
         accent: Rgb::hex(0xf4f4f5),
         secondary: Rgb::hex(0x71717a),
         intensity: AnimationIntensity::Normal,
+        word_colors: Vec::new(),
+        lyrics_icons: Vec::new(),
+        description: None,
     };
 
     /// "Daylight Default" (日光素白), the original light preset.
@@ -62,5 +71,8 @@ impl Theme {
         accent: Rgb::hex(0xea580c),
         secondary: Rgb::hex(0x44403c),
         intensity: AnimationIntensity::Normal,
+        word_colors: Vec::new(),
+        lyrics_icons: Vec::new(),
+        description: None,
     };
 }

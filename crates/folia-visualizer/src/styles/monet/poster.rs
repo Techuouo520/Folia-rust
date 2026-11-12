@@ -29,7 +29,7 @@ pub struct Cache {
 }
 
 /// What the artist raster was made for: label, size, colour, pixel density and the width it was cut to.
-type ArtistKey = (String, u32, [u8; 4], u32, u32);
+type ArtistKey = (String, u32, [u8; 4], u32, u32, iced::Font);
 
 /// The hanger: a click enters edit mode, a drag moves the portrait, a click again leaves.
 #[derive(Debug, Default)]
@@ -100,12 +100,19 @@ fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Lay
             ink.into_rgba8(),
             density.to_bits(),
             layout.header_width.to_bits(),
+            scene.typography.font(ITALIC),
         );
         let fresh = cache.artist.as_ref().is_none_or(|(held, _)| *held != key);
         if fresh {
-            let shown = truncate(label, layout.artist_px, ITALIC, layout.header_width);
-            let raster =
-                text::raster_italic(&shown, layout.artist_px, layout.artist.height, iced::Font::DEFAULT, ink, density);
+            let shown = truncate(label, layout.artist_px, scene.typography.font(ITALIC), layout.header_width);
+            let raster = text::raster_italic(
+                &shown,
+                layout.artist_px,
+                layout.artist.height,
+                scene.typography.font(iced::Font::DEFAULT),
+                ink,
+                density,
+            );
             if let Some(raster) = raster.as_ref().filter(|raster| raster.missing > 0) {
                 tracing::warn!(missing = raster.missing, "monet artist has glyphs no font covers");
             }
@@ -141,7 +148,7 @@ fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Lay
     }
     let dx = -40.0 * (1.0 - title_p);
     let title = if scene.title.trim().is_empty() { "Monet" } else { scene.title.trim() };
-    let rows = title_rows(title, layout.title_px, layout.header_width);
+    let rows = title_rows(title, layout.title_px, layout.header_width, scene.typography.font(SEMIBOLD));
     let line_height = layout.title_px * 1.06;
     let shadow = ink::blur_offsets(18.0, (0.0, 14.0));
     let shade = color(theme.background, ink::split_alpha(0.28 * title_p, shadow.len()));
@@ -151,7 +158,7 @@ fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Lay
             at: Point::new(layout.title.x + dx, layout.title.y + index as f32 * line_height),
             px: layout.title_px,
             line_height,
-            font: SEMIBOLD,
+            font: scene.typography.font(SEMIBOLD),
         };
         let band = Rectangle {
             x: 0.0,
@@ -176,8 +183,8 @@ fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Lay
 }
 
 /// At most two rows of the title, the second cut with an ellipsis (`line-clamp-2`, `overflow-wrap: anywhere`).
-fn title_rows(title: &str, px: f32, width: f32) -> Vec<String> {
-    let rows = text::wrap(title, px, SEMIBOLD, width);
+fn title_rows(title: &str, px: f32, width: f32, font: iced::Font) -> Vec<String> {
+    let rows = text::wrap(title, px, font, width);
     let piece = |row: &text::Row| title.get(row.start..row.end).unwrap_or_default().trim_end().to_owned();
     match rows.as_slice() {
         [] => vec![title.to_owned()],
@@ -186,7 +193,7 @@ fn title_rows(title: &str, px: f32, width: f32) -> Vec<String> {
         [first, second, ..] => {
             vec![
                 piece(first),
-                truncate(&format!("{}\u{2026}", title.get(second.start..).unwrap_or_default()), px, SEMIBOLD, width),
+                truncate(&format!("{}\u{2026}", title.get(second.start..).unwrap_or_default()), px, font, width),
             ]
         }
     }

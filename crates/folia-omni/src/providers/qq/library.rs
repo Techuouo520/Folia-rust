@@ -328,22 +328,38 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
             .encrypt_uin
             .clone()
             .ok_or_else(|| OmniError::Response("Login credential is missing encryptUin".to_owned()))?;
-        let mut songs = Vec::new();
-        let mut begin = 0u64;
-        loop {
+        let fetch = async |begin| {
             let param = json!({
                 "disstid": 0, "dirid": dir.parse::<u64>().unwrap_or(0), "tag": true, "song_begin": begin, "song_num": 100,
                 "userinfo": true, "orderlist": true, "enc_host_uin": encrypted,
             });
-            let data = client.android("music.srfDissInfo.DissInfo", "CgiGetDiss", param).await?;
-            let page = tracks(data.get("songlist"));
-            let count = page.len() as u64;
-            songs.extend(page);
-            let total = data.get("total_song_num").and_then(Value::as_u64).unwrap_or(0);
-            if count == 0 || begin + count >= total {
+            client.android("music.srfDissInfo.DissInfo", "CgiGetDiss", param).await
+        };
+        let first = fetch(0).await?;
+        let mut songs = tracks(first.get("songlist"));
+        let total = first.get("total_song_num").and_then(Value::as_u64).unwrap_or(songs.len() as u64);
+        let mut begin = songs.len() as u64;
+        let page = async |offset| {
+            if offset >= total {
+                return Ok(Vec::new());
+            }
+            fetch(offset).await.map(|data| tracks(data.get("songlist")))
+        };
+        // Keep request concurrency bounded and append pages in playlist order, regardless of response order.
+        while begin > 0 && begin < total {
+            let (a, b, c, d) = tokio::try_join!(page(begin), page(begin + 100), page(begin + 200), page(begin + 300))?;
+            let mut ended = false;
+            for batch in [a, b, c, d] {
+                if batch.is_empty() {
+                    ended = true;
+                    break;
+                }
+                songs.extend(batch);
+            }
+            if ended {
                 break;
             }
-            begin += count;
+            begin = begin.saturating_add(400);
         }
         return Ok(CollectionDetail {
             tracks: songs,

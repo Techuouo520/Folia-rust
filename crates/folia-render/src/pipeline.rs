@@ -20,11 +20,11 @@ pub struct Fullscreen {
 pub struct Slot(AtomicUsize);
 
 impl Slot {
-    pub(crate) fn get(&self) -> usize {
+    pub fn get(&self) -> usize {
         self.0.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn set(&self, index: usize) {
+    pub fn set(&self, index: usize) {
         self.0.store(index, Ordering::Relaxed)
     }
 }

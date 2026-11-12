@@ -1,7 +1,6 @@
 #![cfg(test)]
 // Offscreen lumiere frames through the app's own primitives: both groups with their bloom, front bokeh, frame.
 
-use std::cell::RefCell;
 use std::path::PathBuf;
 
 use folia_core::{Line, Lyrics, Theme, Word};
@@ -135,7 +134,7 @@ fn stage<'a>(
     lyrics: &'a Lyrics,
     time: f64,
     seed: &'a str,
-    state: &RefCell<lumiere::Cache>,
+    state: &lumiere::LiveState,
 ) -> <lumiere::Field<'a, ()> as Program<()>>::Primitive {
     let theme = Theme::MIDNIGHT;
     let scene = folia_visualizer::Scene {
@@ -163,7 +162,7 @@ fn stage<'a>(
 /// `(6 + slot) * 16 + 8` of the decor uniform.
 fn first_burst(lyrics: &Lyrics) -> Option<(String, f64)> {
     for seed in std::iter::once("lumiere".to_owned()).chain((1..40).map(|n| format!("lumiere-{n}"))) {
-        let state = RefCell::new(lumiere::Cache::default());
+        let state = lumiere::LiveState::default();
         for step in 0..1400 {
             let time = step as f64 * 0.1;
             let pass = stage(lyrics, time, &seed, &state);
@@ -192,7 +191,7 @@ fn atlas_over_a_whole_song() {
         folia_render::glyphs::Glyphs::new(&device, wgpu::TextureFormat::Rgba8Unorm, 4096, lumiere::sprite_images());
     let lyrics = song();
     let end = lyrics.lines.last().unwrap().end + 8.0;
-    let state = RefCell::new(lumiere::Cache::default());
+    let state = lumiere::LiveState::default();
     let (mut most_sprites, mut most_echo, mut frames) = (0, 0, 0);
     let mut side_at = Vec::new();
     let mut time = 0.0;
@@ -371,7 +370,7 @@ impl Picture {
             preview: false,
             audio: &folia_core::AudioFrame::SILENT,
         };
-        let state = RefCell::new(lumiere::Cache::default());
+        let state = lumiere::LiveState::default();
         let field = lumiere::field_view::<()>(scene());
         let pass = Program::draw(&field, &state, mouse::Cursor::Unavailable, bounds);
         let scale = f32::from_le_bytes(pass.bytes[824..828].try_into().unwrap());
@@ -384,7 +383,7 @@ impl Picture {
         present(&mut self.renderer, self.format, Some(iced::Color::BLACK), &self.frame_view, &self.viewport);
 
         self.reset();
-        let front_state = RefCell::new(lumiere::Cache::default());
+        let front_state = lumiere::LiveState::default();
         let front = lumiere::front_view::<()>(scene());
         let over = Program::draw(&front, &front_state, mouse::Cursor::Unavailable, bounds);
         ShaderDraw::draw_primitive(&mut self.renderer, bounds, over);

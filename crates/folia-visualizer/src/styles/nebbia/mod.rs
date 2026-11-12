@@ -12,6 +12,8 @@ mod scene;
 mod strokes;
 mod tuning;
 
+#[cfg(feature = "dev")]
+pub use gpu::live_slots;
 pub use gpu::{Pass, Renderer, frame};
 
 /// One step of `VocalEnergy`: peak jumps to the raw byte, floor creeps, the span is at least 8.
@@ -52,10 +54,7 @@ impl RainEnergy {
 }
 
 fn wall_ms() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs_f64() * 1000.0)
-        .unwrap_or(0.0)
+    crate::clock::wall_ms()
 }
 pub use ink::glyphs_settled;
 pub use strokes::{StrokesError, load_file};
@@ -63,7 +62,7 @@ pub use tuning::manifest;
 
 use std::cell::Cell;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use iced::widget::canvas::{Frame, Text};
 use iced::widget::shader;
@@ -86,18 +85,37 @@ impl<Message> shader::Program<Message> for View<'_, Message> {
     type State = ViewState;
     type Primitive = gpu::LivePass;
 
+    fn update(
+        &self,
+        state: &mut Self::State,
+        _event: &iced::Event,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Option<shader::Action<Message>> {
+        (!state.owner.load(std::sync::atomic::Ordering::Acquire)).then(|| {
+            shader::Action::request_redraw_at(std::time::Instant::now() + std::time::Duration::from_millis(16))
+        })
+    }
+
     fn draw(&self, state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
         let energy = state.energy.step(self.scene.audio.vocal);
-        let frame = frame(
-            self.scene.lyrics,
-            self.scene.time,
-            bounds.size(),
-            self.scene.theme,
-            self.scene.font_scale,
-            &self.scene.tuning,
-            energy,
-        );
-        gpu::LivePass { frame, owner: Arc::downgrade(&state.owner) }
+        let frame = {
+            let mut paint = state.pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            gpu::frame_in(
+                gpu::FrameIn {
+                    lyrics: self.scene.lyrics,
+                    time: self.scene.time,
+                    size: bounds.size(),
+                    theme: self.scene.theme,
+                    font_scale: self.scene.font_scale,
+                    tuning: &self.scene.tuning,
+                    energy,
+                    publish_blur: !self.scene.preview,
+                },
+                &mut paint,
+            )
+        };
+        gpu::LivePass { frame, owner: Arc::downgrade(&state.owner), pool: Arc::clone(&state.pool) }
     }
 }
 
@@ -105,7 +123,8 @@ impl<Message> shader::Program<Message> for View<'_, Message> {
 #[derive(Default)]
 pub struct ViewState {
     energy: RainEnergy,
-    owner: Arc<()>,
+    owner: Arc<std::sync::atomic::AtomicBool>,
+    pool: Arc<Mutex<place::Paint>>,
 }
 
 /// Shelf thumbnails have no street shader, so they draw the letters. The playing view leaves this clear.

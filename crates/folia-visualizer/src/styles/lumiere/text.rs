@@ -28,6 +28,14 @@ pub use wrap::frame_insets;
 pub const ZERO: Sprite =
     Sprite { mark: Mark::Image(0), anchor: [0.0; 2], pen: [0.0; 2], axes: [0.0; 4], color: [0.0; 4] };
 
+pub fn keyword_light(light: [f32; 3], keyword: folia_core::Rgb, amount: f32) -> [f32; 3] {
+    let rgb = [keyword.r, keyword.g, keyword.b].map(|value| f32::from(value) / 255.0);
+    let mixed: [f32; 3] = std::array::from_fn(|i| light[i] + (rgb[i] - light[i]) * amount);
+    let peak = mixed.into_iter().fold(0.0, f32::max);
+    let target = light.into_iter().fold(0.0, f32::max);
+    if peak > 0.0001 { mixed.map(|value| value * target / peak) } else { light }
+}
+
 /// Light and color shared by the window and the echo for one frame.
 pub struct Light<'a> {
     pub beams: &'a [Resolved],
@@ -43,6 +51,7 @@ pub struct Light<'a> {
 
 #[derive(Clone, PartialEq)]
 struct Key {
+    keywords: u64,
     unit: Option<u16>,
     seed: u32,
     lyric: u32,
@@ -64,9 +73,16 @@ pub struct Text {
 }
 
 impl Text {
-    pub fn sync(&mut self, program: &Program, lyrics: &Lyrics, lyric: u32, view: &View, tuning: Tuning, time: f64) {
+    pub fn sync(&mut self, program: &Program, scene: &crate::Scene<'_>, lyric: u32, view: &View, tuning: Tuning) {
+        use std::hash::{Hash, Hasher};
+        let lyrics = scene.lyrics;
+        let time = scene.time;
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        (&scene.theme.word_colors, tuning.keyword_colors).hash(&mut hash);
+        scene.typography.fingerprint().hash(&mut hash);
         let unit = (!program.seamless).then(|| decor::unit_paragraph(program, time));
         let key = Key {
+            keywords: hash.finish(),
             unit,
             seed: super::program::hash_text(2_166_136_261, &program.seed),
             lyric,
@@ -89,6 +105,8 @@ impl Text {
         let aspect = width / height.max(1.0);
         let unit_lines = &lyrics.lines[lines.clone()];
         let setup = Setup {
+            font: scene.typography.font(LYRIC_FONT),
+            keywords: if tuning.keyword_colors { scene.theme.word_colors.clone() } else { Vec::new() },
             width,
             height,
             region: Region {
@@ -104,8 +122,17 @@ impl Text {
             seed: seed.clone(),
         };
         self.window = Some(Window::new(setup, unit_lines, kinds(program, unit, lines.clone())));
-        self.echo = (tuning.echo > 0.0 && !tuning.text_only)
-            .then(|| Echo::new(unit_lines, &seed, lead.echo * height, tuning.echo, aspect));
+        self.echo = (tuning.echo > 0.0 && !tuning.text_only).then(|| {
+            Echo::new(
+                unit_lines,
+                &seed,
+                lead.echo * height,
+                tuning.echo,
+                aspect,
+                if tuning.keyword_colors { &scene.theme.word_colors } else { &[] },
+                scene.typography.font(LYRIC_FONT),
+            )
+        });
         self.lines = lines;
         self.start = start;
         self.key = Some(key);
@@ -152,6 +179,10 @@ impl Text {
     /// Light intensity of the window: the unit fades in over 0.6 s.
     pub fn window_intensity(&self, time: f64) -> f32 {
         slots::smooth(((time - self.start) / 0.6) as f32)
+    }
+
+    pub fn keyword(&self, line: usize, glyph: usize) -> Option<folia_core::Rgb> {
+        self.window.as_ref()?.keyword(line.checked_sub(self.lines.start)?, glyph)
     }
 }
 

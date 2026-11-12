@@ -33,8 +33,8 @@ pub struct GlyphLine {
 }
 
 /// Shapes `text` once and splits it at grapheme boundaries. `spacing` is letter spacing as a fraction of `font_px`.
-pub fn build(text: &str, font_px: f32, spacing: f32) -> GlyphLine {
-    let shaped = shape(text, font_px, LYRIC_FONT);
+pub fn build(text: &str, font_px: f32, spacing: f32, font: Font) -> GlyphLine {
+    let shaped = shape(text, font_px, font);
     let ranges = folia_lyrics::graphemes(text);
     let prefix =
         |byte: usize| shaped.glyphs.iter().find(|glyph| glyph.cluster >= byte).map_or(shaped.width, |glyph| glyph.x);

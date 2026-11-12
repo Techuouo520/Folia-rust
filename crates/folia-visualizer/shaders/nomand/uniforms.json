@@ -1,0 +1,282 @@
+[
+  {
+    "name": "u_resolution",
+    "type": "vec2"
+  },
+  {
+    "name": "u_pixelRatio",
+    "type": "float"
+  },
+  {
+    "name": "u_originX",
+    "type": "float"
+  },
+  {
+    "name": "u_originY",
+    "type": "float"
+  },
+  {
+    "name": "u_worldWidth",
+    "type": "float"
+  },
+  {
+    "name": "u_worldHeight",
+    "type": "float"
+  },
+  {
+    "name": "u_fit",
+    "type": "float"
+  },
+  {
+    "name": "u_scale",
+    "type": "float"
+  },
+  {
+    "name": "u_rotation",
+    "type": "float"
+  },
+  {
+    "name": "u_offsetX",
+    "type": "float"
+  },
+  {
+    "name": "u_offsetY",
+    "type": "float"
+  },
+  {
+    "name": "u_colorFront",
+    "type": "vec4"
+  },
+  {
+    "name": "u_colorBack",
+    "type": "vec4"
+  },
+  {
+    "name": "u_colorHighlight",
+    "type": "vec4"
+  },
+  {
+    "name": "u_imageAspectRatio",
+    "type": "float"
+  },
+  {
+    "name": "u_type",
+    "type": "float"
+  },
+  {
+    "name": "u_pxSize",
+    "type": "float"
+  },
+  {
+    "name": "u_originalColors",
+    "type": "bool"
+  },
+  {
+    "name": "u_inverted",
+    "type": "bool"
+  },
+  {
+    "name": "u_colorSteps",
+    "type": "float"
+  },
+  {
+    "name": "u_colorShadow",
+    "type": "vec4"
+  },
+  {
+    "name": "u_size",
+    "type": "float"
+  },
+  {
+    "name": "u_shadows",
+    "type": "float"
+  },
+  {
+    "name": "u_angle",
+    "type": "float"
+  },
+  {
+    "name": "u_stretch",
+    "type": "float"
+  },
+  {
+    "name": "u_shape",
+    "type": "float"
+  },
+  {
+    "name": "u_distortion",
+    "type": "float"
+  },
+  {
+    "name": "u_highlights",
+    "type": "float"
+  },
+  {
+    "name": "u_distortionShape",
+    "type": "float"
+  },
+  {
+    "name": "u_shift",
+    "type": "float"
+  },
+  {
+    "name": "u_blur",
+    "type": "float"
+  },
+  {
+    "name": "u_edges",
+    "type": "float"
+  },
+  {
+    "name": "u_marginLeft",
+    "type": "float"
+  },
+  {
+    "name": "u_marginRight",
+    "type": "float"
+  },
+  {
+    "name": "u_marginTop",
+    "type": "float"
+  },
+  {
+    "name": "u_marginBottom",
+    "type": "float"
+  },
+  {
+    "name": "u_grainMixer",
+    "type": "float"
+  },
+  {
+    "name": "u_grainOverlay",
+    "type": "float"
+  },
+  {
+    "name": "u_contrast",
+    "type": "float"
+  },
+  {
+    "name": "u_roughness",
+    "type": "float"
+  },
+  {
+    "name": "u_fiber",
+    "type": "float"
+  },
+  {
+    "name": "u_fiberSize",
+    "type": "float"
+  },
+  {
+    "name": "u_crumples",
+    "type": "float"
+  },
+  {
+    "name": "u_crumpleSize",
+    "type": "float"
+  },
+  {
+    "name": "u_folds",
+    "type": "float"
+  },
+  {
+    "name": "u_foldCount",
+    "type": "float"
+  },
+  {
+    "name": "u_drops",
+    "type": "float"
+  },
+  {
+    "name": "u_seed",
+    "type": "float"
+  },
+  {
+    "name": "u_fade",
+    "type": "float"
+  },
+  {
+    "name": "u_time",
+    "type": "float"
+  },
+  {
+    "name": "u_radius",
+    "type": "float"
+  },
+  {
+    "name": "u_grainSize",
+    "type": "float"
+  },
+  {
+    "name": "u_grid",
+    "type": "float"
+  },
+  {
+    "name": "u_spread",
+    "type": "float"
+  },
+  {
+    "name": "u_bias",
+    "type": "float"
+  },
+  {
+    "name": "u_perspective",
+    "type": "float"
+  },
+  {
+    "name": "u_count",
+    "type": "float"
+  },
+  {
+    "name": "u_dispersion",
+    "type": "float"
+  },
+  {
+    "name": "u_dispersionShift",
+    "type": "float"
+  },
+  {
+    "name": "u_dispersionColor",
+    "type": "float"
+  },
+  {
+    "name": "u_focusCenter",
+    "type": "float"
+  },
+  {
+    "name": "u_focusEdges",
+    "type": "float"
+  },
+  {
+    "name": "u_swirl",
+    "type": "float"
+  },
+  {
+    "name": "u_noise",
+    "type": "float"
+  },
+  {
+    "name": "u_noiseFrequency",
+    "type": "float"
+  },
+  {
+    "name": "u_noiseOffset",
+    "type": "float"
+  },
+  {
+    "name": "u_lensBulge",
+    "type": "float"
+  },
+  {
+    "name": "u_lensCircle",
+    "type": "float"
+  },
+  {
+    "name": "u_imageX",
+    "type": "float"
+  },
+  {
+    "name": "u_imageY",
+    "type": "float"
+  }
+]

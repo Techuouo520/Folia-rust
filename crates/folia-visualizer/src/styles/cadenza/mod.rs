@@ -48,6 +48,18 @@ impl Cache {
         salt: u64,
         width_ratio: f64,
     ) -> Rc<LineLayout> {
+        self.layout_with_font(line, size, font_scale, intensity, (salt, width_ratio, crate::BOLD))
+    }
+
+    fn layout_with_font(
+        &mut self,
+        line: &Line,
+        size: Size,
+        font_scale: f32,
+        intensity: AnimationIntensity,
+        options: (u64, f64, iced::Font),
+    ) -> Rc<LineLayout> {
+        let (salt, width_ratio, font) = options;
         let key = Key {
             start: line.start.to_bits(),
             width: size.width.to_bits(),
@@ -64,7 +76,15 @@ impl Cache {
             return Rc::clone(hit);
         }
         let layout = Rc::new(LineLayout {
-            placements: layout(line, size.width, size.height, font_scale, intensity, width_ratio),
+            placements: place::layout_with_font(
+                line,
+                size.width,
+                size.height,
+                font_scale,
+                intensity,
+                width_ratio,
+                font,
+            ),
         });
         if self.entries.len() == 4 {
             self.entries.remove(0);
@@ -81,7 +101,13 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
     };
     let line = &scene.lyrics.lines[index];
     let scale = scene.font_scale;
-    let layout = cache.layout(line, size, scale, scene.theme.intensity, 0, envelopes::WIDTH_RATIO);
+    let layout = cache.layout_with_font(
+        line,
+        size,
+        scale,
+        scene.theme.intensity,
+        (scene.layout_key(), envelopes::WIDTH_RATIO, scene.typography.font(crate::BOLD)),
+    );
     let timing = timing_of(line);
     let (opacity, line_scale) = line_fade(scene.time, line, &timing);
     if opacity <= 0.01 {
@@ -190,7 +216,14 @@ fn paint(frame: &mut Frame, placement: &Placement, paint: &Paint<'_>) {
         frame.scale(posed.scale as f32);
         paint_glow(frame, scene, placement, timing, posed.glow * opacity, font_px, (glow, 1.0 + energy * 0.22));
         let body = scene.theme.primary.mix(scene.theme.accent, posed.mix as f32);
-        fill(frame, &placement.text, 0.0, color(body, (posed.alpha * opacity) as f32), font_px);
+        fill(
+            frame,
+            &placement.text,
+            0.0,
+            color(body, (posed.alpha * opacity) as f32),
+            font_px,
+            scene.typography.font(crate::BOLD),
+        );
     });
 }
 
@@ -213,7 +246,14 @@ fn paint_glow(
     if !split {
         frame.with_save(|frame| {
             frame.scale(spread);
-            fill(frame, &placement.text, 0.0, fade(tint, glow * 0.55 * glow_scale), font_px);
+            fill(
+                frame,
+                &placement.text,
+                0.0,
+                fade(tint, glow * 0.55 * glow_scale),
+                font_px,
+                scene.typography.font(crate::BOLD),
+            );
         });
         return;
     }
@@ -222,7 +262,14 @@ fn paint_glow(
         let width = next.unwrap_or(placement.width as f32) - glyph.offset;
         let intensity = envelopes::char_glow(scene.time, placement.end, glyph.start, glyph.end);
         let x = glyph.offset + width / 2.0 - placement.width as f32 / 2.0;
-        fill(frame, &glyph.text, x, fade(tint, glow * intensity * 0.7 * glow_scale), font_px);
+        fill(
+            frame,
+            &glyph.text,
+            x,
+            fade(tint, glow * intensity * 0.7 * glow_scale),
+            font_px,
+            scene.typography.font(crate::BOLD),
+        );
     }
 }
 
@@ -231,13 +278,13 @@ fn fade(mut tint: iced::Color, alpha: f64) -> iced::Color {
     tint
 }
 
-fn fill(frame: &mut Frame, text: &str, x: f32, color: iced::Color, font_px: f32) {
+fn fill(frame: &mut Frame, text: &str, x: f32, color: iced::Color, font_px: f32, font: iced::Font) {
     frame.fill_text(Text {
         content: text.to_owned(),
         position: Point::new(x, 0.0),
         color,
         size: font_px.into(),
-        font: crate::BOLD,
+        font,
         align_x: iced::widget::text::Alignment::Center,
         align_y: iced::alignment::Vertical::Center,
         shaping: iced::widget::text::Shaping::Advanced,

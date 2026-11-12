@@ -6,20 +6,24 @@ mod frame;
 pub mod glyphs;
 mod pipeline;
 mod plate;
+mod prepared;
 mod scene;
 pub mod text_run;
 pub mod typeface;
 mod wash;
 
 pub use backdrop::{
-    GlassBench, Image as CoverImage, Program as Backdrop, Quad as CoverQuad, Scene as BackdropScene, Shot, bench_glass,
-    blur_source, draw_source, image_key, paint_external, preview_wall, read_picture, release as release_backdrop,
-    resident_bytes, was_wanted as blur_wanted,
+    GlassBench, Image as CoverImage, Program as Backdrop, PublisherGuard, Quad as CoverQuad, Scene as BackdropScene,
+    Shot, UnderlayOverlay, bench_glass, blur_source, copy_underlay, draw_source, image_key, paint_external,
+    paint_over_underlay, preview_wall, read_picture, release as release_backdrop, release_underlay, resident_bytes,
+    underlay_held, was_wanted as blur_wanted,
 };
+#[cfg(feature = "dev")]
+pub use backdrop::{external_paints, underlay_binds};
 pub use blur::{Pyramid, levels_for_radius, pyramid_bytes};
 pub use frame::grain_frame;
 pub use plate::{Plate, compile_plate, css_saturate, glass_over, source_over, to_linear_channel, to_srgb_channel};
-pub use scene::{Program as StyleScene, capture as capture_canvas};
+pub use scene::{Program as StyleScene, capture as capture_canvas, capture_layers};
 pub use wash::{Glow, Veil, Wash};
 
 pub mod backend;
@@ -28,7 +32,10 @@ mod host_widget;
 pub use host::Renderer as HostRenderer;
 pub use host_widget::host;
 
-use pipeline::{Fullscreen, Slot};
+pub use pipeline::{Fullscreen, Slot};
+pub use prepared::Prepared;
+#[cfg(feature = "dev")]
+pub use prepared::gpu_builds;
 
 use std::marker::PhantomData;
 

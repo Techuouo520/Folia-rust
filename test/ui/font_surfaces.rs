@@ -327,7 +327,12 @@ fn all_interface_surfaces() {
                 (WorkbenchTab::Global, "global"),
             ] {
                 let style = folia_visualizer::Style::Classic;
-                let _ = workbench.update(WorkbenchMessage::Tab(tab), style.manifest(), &appearance);
+                let _ = workbench.update(
+                    WorkbenchMessage::Tab(tab),
+                    style.manifest(),
+                    &appearance,
+                    folia_visualizer::LatentTuning::DEFAULT,
+                );
                 capture.paint(
                     &format!("workbench-{name}"),
                     workbench.view(WorkbenchLook {
@@ -341,6 +346,8 @@ fn all_interface_surfaces() {
                         audio: &folia_core::AudioFrame::SILENT,
                         appearance: &appearance,
                         fonts: &[],
+                        cover: &[],
+                        latent: folia_visualizer::LatentTuning::DEFAULT,
                     }),
                 );
             }

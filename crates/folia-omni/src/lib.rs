@@ -360,6 +360,7 @@ pub trait Provider: Send + Sync {
 
 /// Cover downloads at once: what a browser opens to one host, so the first screen of tiles does not queue dozens.
 const COVER_DOWNLOADS: usize = 6;
+type CoverLocks = parking_lot::Mutex<std::collections::HashMap<PathBuf, std::sync::Weak<tokio::sync::Mutex<()>>>>;
 
 #[derive(Clone)]
 pub struct Omni {
@@ -368,6 +369,7 @@ pub struct Omni {
     cache_dir: PathBuf,
     keyring_service: String,
     covers: Arc<tokio::sync::Semaphore>,
+    cover_locks: Arc<CoverLocks>,
     sources: Arc<lx::Sources>,
     audio_cache: Arc<audio_cache::AudioCache>,
 }
@@ -385,6 +387,7 @@ impl Omni {
             cache_dir,
             keyring_service,
             covers,
+            cover_locks: Arc::default(),
             sources: Arc::default(),
             audio_cache: Arc::default(),
         })
@@ -768,9 +771,39 @@ impl Omni {
     /// square (`getSizedCoverUrl`); `http://` is read as `https://`; at most `COVER_DOWNLOADS` run at once.
     pub async fn fetch_cover(&self, url: &str, px: u32) -> Result<PathBuf, OmniError> {
         let url = https(url);
+        // A small preview can reuse a larger cached CDN representation without another download.
+        if px <= 64 {
+            for size in [64, 256, 512, 1024, 1920] {
+                let address = self
+                    .providers
+                    .iter()
+                    .find_map(|provider| provider.sized_cover(&url, size))
+                    .unwrap_or_else(|| url.clone());
+                let cached = self.cache_dir.join("covers").join(cover_cache_key(&address));
+                if cached.is_file() {
+                    return Ok(cached);
+                }
+            }
+        }
         let url = self.providers.iter().find_map(|provider| provider.sized_cover(&url, px)).unwrap_or(url);
         let dir = self.cache_dir.join("covers");
         let path = dir.join(cover_cache_key(&url));
+        if path.is_file() {
+            return Ok(path);
+        }
+        let request = {
+            let mut requests = self.cover_locks.lock();
+            requests.retain(|_, request| request.strong_count() > 0);
+            match requests.get(&path).and_then(std::sync::Weak::upgrade) {
+                Some(request) => request,
+                None => {
+                    let request = Arc::new(tokio::sync::Mutex::new(()));
+                    requests.insert(path.clone(), Arc::downgrade(&request));
+                    request
+                }
+            }
+        };
+        let _request = request.lock().await;
         if path.is_file() {
             return Ok(path);
         }

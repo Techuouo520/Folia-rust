@@ -2,20 +2,42 @@
 
 mod anim;
 mod background;
+pub mod clock;
+mod common;
+mod cover_color;
+mod image_background;
+mod latent;
+pub mod monet_background;
+pub mod nomand;
 mod preview;
 mod quick;
 mod registry;
+mod sora;
 pub mod styles;
+mod theme_icons;
 mod tuning;
 
 pub use anim::{Ease, keyframes, spring, tween};
 pub use background::Background;
+pub use common::{Ground, background_view, drift, follow_spring};
+pub use cover_color::{
+    PALETTE_CAP, PaletteStore, SAMPLE_SIDE, accept_art, cover_colors, cover_palette, resample_cover,
+};
+pub use latent::{
+    ColorMode as LatentColors, LayerMode as LatentLayers, ShaderColors, Tuning as LatentTuning, resolve_colors,
+    shader_budget,
+};
+#[cfg(feature = "dev")]
+pub use latent::{budget_texture_size, live_targets};
 pub use preview::{
     Frozen, POSTER_TIME, PREVIEW_LOOP, Pictures, Playing, RESERVED_LOOP, STAGE_HEIGHT, STAGE_WIDTH, preview_lyrics,
     preview_reserved,
 };
 pub use quick::{QuickControl, QuickKind, apply_quick, quick_controls};
 pub use registry::Style;
+pub use sora::Tuning as SoraTuning;
+#[cfg(feature = "dev")]
+pub use sora::live_targets as sora_targets;
 pub use tuning::{Group, Item, Manifest, Values};
 
 use std::cell::{Cell, RefCell};
@@ -31,9 +53,53 @@ use iced::{Color, Element, Font, Length, Point, Rectangle, Renderer, Size, mouse
 
 pub(crate) const BOLD: Font = Font { weight: iced::font::Weight::Bold, ..Font::DEFAULT };
 
+/// Font overrides and alternate text shared by every lyric renderer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Typography {
+    pub family: Option<iced::font::Family>,
+    pub weight: Option<iced::font::Weight>,
+    pub subtitle: Option<Font>,
+    pub subtitle_scale: f32,
+    pub subtitle_mode: folia_core::SubtitleContentMode,
+    pub hide_subtitle: bool,
+}
+impl Default for Typography {
+    fn default() -> Self {
+        Self {
+            family: None,
+            weight: None,
+            subtitle: None,
+            subtitle_scale: 1.0,
+            subtitle_mode: folia_core::SubtitleContentMode::Translation,
+            hide_subtitle: false,
+        }
+    }
+}
+impl Typography {
+    pub fn font(self, default: Font) -> Font {
+        Font { family: self.family.unwrap_or(default.family), weight: self.weight.unwrap_or(default.weight), ..default }
+    }
+
+    pub fn fingerprint(self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        (
+            self.family,
+            self.weight,
+            self.subtitle,
+            self.subtitle_scale.to_bits(),
+            self.subtitle_mode as u8,
+            self.hide_subtitle,
+        )
+            .hash(&mut hash);
+        hash.finish()
+    }
+}
+
 /// Everything a style needs to draw one frame.
 #[derive(Clone)]
 pub struct Scene<'a> {
+    pub typography: Typography,
     pub style: Style,
     pub lyrics: &'a Lyrics,
     /// Playback position in seconds.
@@ -58,6 +124,15 @@ pub struct Scene<'a> {
     pub preview: bool,
     /// Loudness for this frame. Bands are 0–255, the same scale as the original byte analyser.
     pub audio: &'a AudioFrame,
+}
+
+impl Scene<'_> {
+    pub fn layout_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.theme.hash(&mut hash);
+        hash.finish() ^ self.typography.fingerprint() ^ self.tuning.fingerprint()
+    }
 }
 
 /// Draws between fresh Monet text atlases: one minute at 60 fps.
@@ -103,13 +178,23 @@ impl<Message: From<styles::monet::Event>> canvas::Program<Message> for Stage<'_,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
+        let under = common::take_blur();
         let geometry = self.scene.render(state, renderer, bounds.size());
         if self.capture {
             // Cached geometry keeps its text out of reach, so the cached styles hand over a fresh frame for the blur.
-            if matches!(self.scene.style, Style::Monet | Style::Still) && folia_render::blur_wanted() {
-                folia_render::capture_canvas(&[self.scene.live_geometry(state, renderer, bounds.size())]);
+            let fresh = if matches!(self.scene.style, Style::Monet | Style::Still) && folia_render::blur_wanted() {
+                Some(self.scene.live_geometry(state, renderer, bounds.size()))
             } else {
-                folia_render::capture_canvas(&geometry);
+                None
+            };
+            let top: &[Geometry] = match &fresh {
+                Some(geometry) => std::slice::from_ref(geometry),
+                None => &geometry,
+            };
+            if !self.scene.backdrop && self.scene.style.shows_shared_background() && !under.is_empty() {
+                folia_render::capture_layers(&[&under, top]);
+            } else {
+                folia_render::capture_canvas(top);
             }
         }
         geometry
@@ -319,8 +404,12 @@ pub fn lyric_view<'a, Message: From<styles::monet::Event> + 'a>(scene: Scene<'a>
     if scene.style == Style::Nebbia {
         return stack![shader(styles::nebbia::view(scene)).width(Length::Fill).height(Length::Fill), clear].into();
     }
+    let veil_color = styles::lumiere::veil_color(scene.theme, styles::lumiere::Tuning::read(&scene.tuning).dark_field);
+    let veil =
+        iced::widget::canvas(styles::lumiere::Veil { color: veil_color }).width(Length::Fill).height(Length::Fill);
     let front = shader(styles::lumiere::front_view(scene.clone())).width(Length::Fill).height(Length::Fill);
-    stack![shader(styles::lumiere::field_view(scene)).width(Length::Fill).height(Length::Fill), front, clear].into()
+    stack![veil, shader(styles::lumiere::field_view(scene)).width(Length::Fill).height(Length::Fill), front, clear]
+        .into()
 }
 
 pub fn color(rgb: Rgb, alpha: f32) -> Color {

@@ -31,7 +31,7 @@ pub struct View {
     pub glare: [f32; 4],
     pub glare_streak: f32,
     pub palette: Palette,
-    /// Theme background with the dark field already over it. The shader treats this as opaque.
+    /// Opaque theme-and-dark mix. Text-only mode clears to this. The light field does not bake it.
     pub base: [f32; 3],
     pub camera: Camera,
     pub profile: usize,
@@ -204,8 +204,10 @@ pub fn pack(view: &View) -> [u8; UNIFORM_BYTES] {
     out
 }
 
-fn backdrop(view: &View) -> [f32; 4] {
-    [view.base[0], view.base[1], view.base[2], 1.0]
+/// `LUMIERE_SHADER_NO_DARK`. Folia draws the dark field as its own sprite, so the light stays premultiplied
+/// over whatever is already on the window.
+fn backdrop(_view: &View) -> [f32; 4] {
+    [0.0, 0.0, 0.0, 0.0]
 }
 
 fn base_color(theme: &Theme, amount: f32) -> [f32; 3] {

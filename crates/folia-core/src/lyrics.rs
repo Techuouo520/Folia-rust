@@ -2,6 +2,29 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Alternate tracks displayed inside lyric styles. The shared overlay has its own row layout.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SubtitleContentMode {
+    #[default]
+    Translation,
+    Romanization,
+    Both,
+    None,
+}
+
+impl SubtitleContentMode {
+    pub fn single(self, line: &Line) -> Option<&str> {
+        match self {
+            Self::Translation | Self::Both => line.translation.as_deref(),
+            Self::Romanization => line.romanization.as_deref(),
+            Self::None => None,
+        }
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    }
+}
+
 /// Text of the interlude placeholder line inserted into long instrumental gaps.
 pub const INTERLUDE_TEXT: &str = "......";
 

@@ -6,7 +6,7 @@ use folia_render::Plate;
 use folia_visualizer::styles::monet::Event as MonetEvent;
 use folia_visualizer::{Scene, Style, Values, lyric_view};
 use iced::advanced::renderer::Style as RenderStyle;
-use iced::widget::{canvas, shader, stack};
+use iced::widget::{canvas, container, row, shader, stack, text};
 use iced::{Color, Element, Font, Length, Pixels, Size, Theme as IcedTheme, mouse};
 use iced_runtime::user_interface::{Cache, UserInterface};
 
@@ -97,6 +97,7 @@ fn glass<'a>() -> Element<'a, Msg> {
 struct Picture {
     width: u32,
     height: u32,
+    logical: (f32, f32),
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: iced::Renderer,
@@ -129,6 +130,50 @@ impl Picture {
             Font::DEFAULT,
             Pixels(16.0),
         );
+        Self::from_renderer(width, height, device, queue, format, renderer)
+    }
+
+    /// Two windows on one engine, so a present in `other` trims pipelines owned by `main`.
+    fn shared(main: (u32, u32), other: (u32, u32)) -> (Self, Self) {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let engine = iced_wgpu::Engine::new(
+            &adapter,
+            device.clone(),
+            queue.clone(),
+            format,
+            None,
+            iced_wgpu::graphics::Shell::headless(),
+        );
+        let main = Self::from_renderer(
+            main.0,
+            main.1,
+            device.clone(),
+            queue.clone(),
+            format,
+            iced_wgpu::Renderer::new(engine.clone(), Font::DEFAULT, Pixels(16.0)),
+        );
+        let other = Self::from_renderer(
+            other.0,
+            other.1,
+            device,
+            queue,
+            format,
+            iced_wgpu::Renderer::new(engine, Font::DEFAULT, Pixels(16.0)),
+        );
+        (main, other)
+    }
+
+    fn from_renderer(
+        width: u32,
+        height: u32,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        format: wgpu::TextureFormat,
+        renderer: iced::Renderer,
+    ) -> Self {
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene-target"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -150,6 +195,7 @@ impl Picture {
         Self {
             width,
             height,
+            logical: (width as f32, height as f32),
             device,
             queue,
             renderer,
@@ -161,9 +207,19 @@ impl Picture {
         }
     }
 
+    /// CSS `css_w`×`css_h` at `scale` device pixels per CSS pixel. The framebuffer is the physical size.
+    fn at_scale(css_w: u32, css_h: u32, scale: f32) -> Self {
+        let width = (css_w as f32 * scale).round().max(1.0) as u32;
+        let height = (css_h as f32 * scale).round().max(1.0) as u32;
+        let mut picture = Self::with_size(width, height);
+        picture.logical = (css_w as f32, css_h as f32);
+        picture.viewport = iced::widget::shader::Viewport::with_physical_size(Size::new(width, height), scale);
+        picture
+    }
+
     fn frame(&mut self, element: Element<'_, Msg>, cache: Cache) -> Cache {
         let mut ui =
-            UserInterface::build(element, Size::new(self.width as f32, self.height as f32), cache, &mut self.renderer);
+            UserInterface::build(element, Size::new(self.logical.0, self.logical.1), cache, &mut self.renderer);
         ui.draw(
             &mut self.renderer,
             &IcedTheme::Dark,
@@ -307,6 +363,41 @@ fn loading_capsule_keeps_a_visible_rotating_lucide_glyph() {
     let ymin = changed.iter().map(|p| p.1).min().unwrap();
     let ymax = changed.iter().map(|p| p.1).max().unwrap();
     assert!(xmax - xmin <= 25 && ymax - ymin <= 25, "only the 20px loader rotates: {xmin},{ymin}..{xmax},{ymax}");
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn latent_background_enters_the_glass_source() {
+    let _guard = guarded();
+    folia_ui::install_fonts();
+    let lyrics = lyrics();
+    let theme = Theme::MIDNIGHT;
+    let mut picture = Picture::new();
+    let mut cache = Cache::default();
+    let mut lyrics_scene = scene(&lyrics, &theme, Style::Classic);
+    lyrics_scene.backdrop = false;
+    for _ in 0..2 {
+        let ground = folia_visualizer::Ground {
+            mode: folia_visualizer::Background::Latent,
+            seed: "geometry",
+            time: 0.0,
+            theme: &theme,
+            audio: &AudioFrame::SILENT,
+            shapes: true,
+            vignette: false,
+            publish: true,
+            paused: false,
+            player: true,
+            cover: &[],
+            latent: folia_visualizer::LatentTuning::DEFAULT,
+        };
+        let element: Element<'_, Msg> =
+            stack![folia_visualizer::background_view(ground), lyric_view::<Msg>(lyrics_scene.clone()), glass()].into();
+        cache = picture.frame(element, cache);
+    }
+    let source = folia_render::read_picture(&picture.device, &picture.queue).expect("latent blur source");
+    let contrast = range(&source.rgba, source.width, 0, source.height);
+    assert!(contrast > 20.0, "latent background did not reach the glass source: {contrast}");
 }
 
 #[test]
@@ -613,4 +704,695 @@ fn screen_pixels_match_the_plain_canvas() {
     let differing = frozen.chunks(4).zip(live.chunks(4)).filter(|(a, b)| a != b).count();
     eprintln!("Still cached vs live differing pixels {differing}");
     assert_eq!(differing, 0);
+}
+
+/// Two shader scenes in one iced frame. Prepare runs for every primitive before any of them renders, so a pipeline
+/// that keeps one set of textures shows the last scene in both rectangles.
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn two_shader_scenes_in_one_frame_keep_their_own_pixels() {
+    let _guard = guarded();
+    folia_ui::install_fonts();
+    let lyrics = lyrics();
+    folia_visualizer::styles::nebbia::frame(
+        &lyrics,
+        6.0,
+        Size::new(640.0, 360.0),
+        &Theme::MIDNIGHT,
+        1.0,
+        &Values::default(),
+        0.0,
+    );
+    let started = std::time::Instant::now();
+    while !folia_visualizer::styles::nebbia::glyphs_settled(&lyrics) {
+        assert!(started.elapsed().as_secs() < 30, "nebbia strokes did not settle");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let midnight = Theme::MIDNIGHT;
+    let day = Theme::DAYLIGHT;
+    for style in [Style::Nebbia, Style::Lumiere] {
+        folia_render::release_backdrop();
+        let own_night = solo(&lyrics, &midnight, style, 6.0, 640, 360);
+        let own_day_same = solo(&lyrics, &day, style, 15.0, 640, 360);
+        let own_day = solo(&lyrics, &day, style, 15.0, 400, 360);
+        let apart = diff_count(&own_night, &own_day_same);
+        assert!(apart > 8_000, "{style:?} controls are too alike to prove isolation: {apart}");
+
+        let forward = ScenePair {
+            left: SceneSpec { theme: &midnight, time: 6.0, width: 640.0 },
+            right: SceneSpec { theme: &day, time: 15.0, width: 400.0 },
+        };
+        let backward = ScenePair {
+            left: SceneSpec { theme: &day, time: 15.0, width: 400.0 },
+            right: SceneSpec { theme: &midnight, time: 6.0, width: 640.0 },
+        };
+        expect_isolated(&lyrics, style, forward, &own_night, &own_day, 0, 640, "forward");
+        expect_isolated(&lyrics, style, backward, &own_day, &own_night, 0, 400, "reversed");
+    }
+    folia_render::release_backdrop();
+}
+
+#[derive(Clone, Copy)]
+struct SceneSpec<'a> {
+    theme: &'a Theme,
+    time: f64,
+    width: f32,
+}
+
+#[derive(Clone, Copy)]
+struct ScenePair<'a> {
+    left: SceneSpec<'a>,
+    right: SceneSpec<'a>,
+}
+
+fn expect_isolated(
+    lyrics: &Lyrics,
+    style: Style,
+    sides: ScenePair<'_>,
+    own_left: &[u8],
+    own_right: &[u8],
+    split: u32,
+    left_width: u32,
+    label: &str,
+) {
+    folia_render::release_backdrop();
+    let mut picture = Picture::with_size(1040, 360);
+    let _ = picture.frame(pair(lyrics, style, sides), Cache::default());
+    let shot = picture.screenshot();
+    let left = region(&shot, 1040, 0, 0, left_width, 360);
+    let right = region(&shot, 1040, split + left_width, 0, 1040 - split - left_width, 360);
+    let left_own = diff_count(&left, own_left);
+    let right_own = diff_count(&right, own_right);
+    eprintln!("{style:?} {label} left own {left_own} right own {right_own}");
+    assert_eq!(left_own, 0, "{style:?} {label} left rectangle took on the other scene");
+    assert_eq!(right_own, 0, "{style:?} {label} right rectangle took on the other scene");
+}
+
+fn solo(lyrics: &Lyrics, theme: &Theme, style: Style, time: f64, width: u32, height: u32) -> Vec<u8> {
+    folia_render::release_backdrop();
+    let mut picture = Picture::with_size(width, height);
+    let scene = Scene { style, time, theme, ..scene(lyrics, theme, style) };
+    let cache = picture.frame(lyric_view::<Msg>(scene), Cache::default());
+    let _ = cache;
+    picture.screenshot()
+}
+
+fn pair<'a>(lyrics: &'a Lyrics, style: Style, sides: ScenePair<'a>) -> Element<'a, Msg> {
+    let left =
+        Scene { style, time: sides.left.time, theme: sides.left.theme, ..scene(lyrics, sides.left.theme, style) };
+    let mut right =
+        Scene { style, time: sides.right.time, theme: sides.right.theme, ..scene(lyrics, sides.right.theme, style) };
+    right.preview = true;
+    row![
+        container(lyric_view(left)).width(sides.left.width).height(360.0),
+        container(lyric_view(right)).width(sides.right.width).height(360.0),
+    ]
+    .spacing(0)
+    .into()
+}
+
+fn region(pixels: &[u8], width: u32, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for row_index in y..y + h {
+        let start = ((row_index * width + x) * 4) as usize;
+        out.extend_from_slice(&pixels[start..start + (w * 4) as usize]);
+    }
+    out
+}
+
+fn diff_count(left: &[u8], right: &[u8]) -> usize {
+    let count = left.len().min(right.len()) / 4;
+    left.chunks_exact(4).zip(right.chunks_exact(4)).take(count).filter(|(a, b)| a != b).count()
+}
+
+struct PinnedClock;
+
+impl PinnedClock {
+    fn pin() -> Self {
+        Self::at(0);
+        Self
+    }
+
+    fn at(step: u64) {
+        folia_visualizer::clock::set_test_clock_ms(Some(1_000_000 + step * 16));
+    }
+}
+
+impl Drop for PinnedClock {
+    fn drop(&mut self) {
+        folia_visualizer::clock::set_test_clock_ms(None);
+    }
+}
+
+fn blank_cell<'a>(width: f32) -> Element<'a, Msg> {
+    container(text("")).width(width).height(360.0).into()
+}
+
+fn styled<'a>(lyrics: &'a Lyrics, theme: &'a Theme, style: Style, time: f64, preview: bool) -> Scene<'a> {
+    Scene { style, time, theme, preview, ..scene(lyrics, theme, style) }
+}
+
+fn duo<'a>(left: Element<'a, Msg>, right: Element<'a, Msg>) -> Element<'a, Msg> {
+    row![left, right].spacing(0).into()
+}
+
+fn lyric_cell<'a>(
+    lyrics: &'a Lyrics,
+    theme: &'a Theme,
+    style: Style,
+    time: f64,
+    width: f32,
+    preview: bool,
+) -> Element<'a, Msg> {
+    container(lyric_view::<Msg>(styled(lyrics, theme, style, time, preview))).width(width).height(360.0).into()
+}
+
+fn draw_at(picture: &mut Picture, cache: Cache, step: u64, element: Element<'_, Msg>) -> (Cache, Vec<u8>) {
+    PinnedClock::at(step);
+    let cache = picture.frame(element, cache);
+    (cache, picture.screenshot())
+}
+
+fn solo_for(lyrics: &Lyrics, theme: &Theme, style: Style, time: f64, width: u32, frames: u64) -> Vec<u8> {
+    let mut picture = Picture::with_size(width, 360);
+    let mut cache = Cache::default();
+    let mut shot = Vec::new();
+    for step in 0..frames {
+        let element = lyric_view::<Msg>(styled(lyrics, theme, style, time, false));
+        let drawn = draw_at(&mut picture, cache, step, element);
+        cache = drawn.0;
+        shot = drawn.1;
+    }
+    shot
+}
+
+fn slots(style: Style) -> (usize, usize) {
+    match style {
+        Style::Nebbia => (folia_visualizer::styles::nebbia::live_slots(), 0),
+        Style::Lumiere => {
+            (folia_visualizer::styles::lumiere::stage_slots(), folia_visualizer::styles::lumiere::front_slots())
+        }
+        _ => (0, 0),
+    }
+}
+
+/// Close one side, keep the other for several frames, restore it, then remove both and create them again.
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn shader_scenes_close_and_reopen_on_one_renderer() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let lyrics = lyrics();
+    folia_visualizer::styles::nebbia::frame(
+        &lyrics,
+        6.0,
+        Size::new(640.0, 360.0),
+        &Theme::MIDNIGHT,
+        1.0,
+        &Values::default(),
+        0.0,
+    );
+    let started = std::time::Instant::now();
+    while !folia_visualizer::styles::nebbia::glyphs_settled(&lyrics) {
+        assert!(started.elapsed().as_secs() < 30, "nebbia strokes did not settle");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let midnight = Theme::MIDNIGHT;
+    let day = Theme::DAYLIGHT;
+    for style in [Style::Nebbia, Style::Lumiere] {
+        let fresh_left = solo_for(&lyrics, &midnight, style, 6.0, 640, 1);
+        let lived_left = solo_for(&lyrics, &midnight, style, 6.0, 640, 6);
+        let fresh_right = solo_for(&lyrics, &day, style, 15.0, 400, 1);
+        let lived_right = solo_for(&lyrics, &day, style, 15.0, 400, 6);
+        assert_eq!(slots(style), (0, 0), "{style:?} oracle renderers leaked slots");
+
+        let both = || {
+            duo(
+                lyric_cell(&lyrics, &midnight, style, 6.0, 640.0, false),
+                lyric_cell(&lyrics, &day, style, 15.0, 400.0, true),
+            )
+        };
+        {
+            let mut picture = Picture::with_size(1040, 360);
+            let mut cache = Cache::default();
+            let drawn = draw_at(&mut picture, cache, 0, both());
+            cache = drawn.0;
+            assert_eq!(slots(style).0, 2, "{style:?} did not keep both scenes");
+            for step in 1..=4 {
+                let drawn = draw_at(
+                    &mut picture,
+                    cache,
+                    step,
+                    duo(blank_cell(640.0), lyric_cell(&lyrics, &day, style, 15.0, 400.0, true)),
+                );
+                cache = drawn.0;
+            }
+            assert_eq!(slots(style).0, 1, "{style:?} kept the closed left scene");
+            let drawn = draw_at(&mut picture, cache, 5, both());
+            let shot = drawn.1;
+            assert_eq!(region(&shot, 1040, 0, 0, 640, 360), fresh_left, "{style:?} restored left");
+            assert_eq!(region(&shot, 1040, 640, 0, 400, 360), lived_right, "{style:?} surviving right");
+            assert_eq!(slots(style).0, 2, "{style:?} restored left did not allocate a slot");
+        }
+        assert_eq!(slots(style), (0, 0), "{style:?} first picture leaked slots");
+
+        {
+            let mut picture = Picture::with_size(1040, 360);
+            let mut cache = Cache::default();
+            let drawn = draw_at(&mut picture, cache, 0, both());
+            cache = drawn.0;
+            for step in 1..=4 {
+                let drawn = draw_at(
+                    &mut picture,
+                    cache,
+                    step,
+                    duo(lyric_cell(&lyrics, &midnight, style, 6.0, 640.0, false), blank_cell(400.0)),
+                );
+                cache = drawn.0;
+            }
+            assert_eq!(slots(style).0, 1, "{style:?} kept the closed right scene");
+            let drawn = draw_at(&mut picture, cache, 5, both());
+            let shot = drawn.1;
+            assert_eq!(region(&shot, 1040, 0, 0, 640, 360), lived_left, "{style:?} surviving left");
+            assert_eq!(region(&shot, 1040, 640, 0, 400, 360), fresh_right, "{style:?} restored right");
+        }
+
+        {
+            let mut picture = Picture::with_size(1040, 360);
+            let mut cache = Cache::default();
+            let drawn = draw_at(&mut picture, cache, 0, both());
+            cache = drawn.0;
+            let drawn = draw_at(&mut picture, cache, 1, duo(blank_cell(640.0), blank_cell(400.0)));
+            cache = drawn.0;
+            assert_eq!(slots(style), (0, 0), "{style:?} scenes stayed after both were removed");
+            let drawn = draw_at(&mut picture, cache, 2, both());
+            let shot = drawn.1;
+            assert_eq!(region(&shot, 1040, 0, 0, 640, 360), fresh_left, "{style:?} recreated left");
+            assert_eq!(region(&shot, 1040, 640, 0, 400, 360), fresh_right, "{style:?} recreated right");
+            assert_eq!(slots(style).0, 2, "{style:?} recreated scenes");
+        }
+    }
+}
+
+/// Another window presenting the shared engine must not drop a living scene's textures.
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn living_lumiere_keeps_textures_while_another_window_presents() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let lyrics = lyrics();
+    let midnight = Theme::MIDNIGHT;
+    let (mut main, mut other) = Picture::shared((640, 360), (64, 64));
+    let element = lyric_view::<Msg>(styled(&lyrics, &midnight, Style::Lumiere, 6.0, false));
+    let (cache, before) = draw_at(&mut main, Cache::default(), 0, element);
+    let slots = folia_visualizer::styles::lumiere::stage_slots();
+    let textures = folia_visualizer::styles::lumiere::stage_textures();
+    let fronts = folia_visualizer::styles::lumiere::front_slots();
+    assert_eq!(slots, 1);
+    assert_eq!(fronts, 1);
+    assert_eq!(textures, 1, "lumiere did not allocate its pyramid");
+    for _ in 0..150 {
+        let _ = other.frame(blank_cell(64.0), Cache::default());
+    }
+    assert_eq!(folia_visualizer::styles::lumiere::stage_slots(), slots, "foreign presents dropped the slot");
+    assert_eq!(folia_visualizer::styles::lumiere::front_slots(), fronts);
+    assert_eq!(
+        folia_visualizer::styles::lumiere::stage_textures(),
+        textures,
+        "foreign presents released bloom while the owner was alive"
+    );
+    let element = lyric_view::<Msg>(styled(&lyrics, &midnight, Style::Lumiere, 6.0, false));
+    let (cache, after) = draw_at(&mut main, cache, 0, element);
+    assert_eq!(after, before, "lumiere changed after foreign presents");
+    let _ = main.frame(blank_cell(640.0), cache);
+    assert_eq!(folia_visualizer::styles::lumiere::stage_slots(), 0);
+    assert_eq!(folia_visualizer::styles::lumiere::front_slots(), 0);
+    assert_eq!(folia_visualizer::styles::lumiere::stage_textures(), 0);
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn preview_does_not_replace_the_playing_blur_source() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let lyrics = lyrics();
+    folia_visualizer::styles::nebbia::frame(
+        &lyrics,
+        6.0,
+        Size::new(640.0, 360.0),
+        &Theme::MIDNIGHT,
+        1.0,
+        &Values::default(),
+        0.0,
+    );
+    let started = std::time::Instant::now();
+    while !folia_visualizer::styles::nebbia::glyphs_settled(&lyrics) {
+        assert!(started.elapsed().as_secs() < 30, "nebbia strokes did not settle");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let midnight = Theme::MIDNIGHT;
+    let day = Theme::DAYLIGHT;
+    for style in [Style::Nebbia, Style::Lumiere] {
+        let play = blur_source(
+            640,
+            360,
+            stack![lyric_view::<Msg>(styled(&lyrics, &midnight, style, 6.0, false)), glass()].into(),
+        );
+        let other =
+            blur_source(400, 360, stack![lyric_view::<Msg>(styled(&lyrics, &day, style, 15.0, false)), glass()].into());
+        assert_ne!(play.2, other.2, "{style:?} blur controls are identical");
+        let both = blur_source(
+            1040,
+            360,
+            stack![
+                duo(
+                    lyric_cell(&lyrics, &midnight, style, 6.0, 640.0, false),
+                    lyric_cell(&lyrics, &day, style, 15.0, 400.0, true),
+                ),
+                glass(),
+            ]
+            .into(),
+        );
+        assert_eq!(both.0, play.0, "{style:?} blur width");
+        assert_eq!(both.1, play.1, "{style:?} blur height");
+        assert_eq!(both.2, play.2, "{style:?} preview replaced the playing blur source");
+    }
+}
+
+fn common_ground(shapes: bool, vignette: bool) -> Element<'static, Msg> {
+    background_ground(folia_visualizer::Background::Common, shapes, vignette)
+}
+
+fn latent_ground() -> Element<'static, Msg> {
+    tuned_ground(folia_visualizer::LatentTuning::DEFAULT, true)
+}
+
+fn tuned_ground(latent: folia_visualizer::LatentTuning, player: bool) -> Element<'static, Msg> {
+    let theme = Theme::MIDNIGHT;
+    let audio = folia_core::AudioFrame::SILENT;
+    let theme = Box::leak(Box::new(theme));
+    let audio = Box::leak(Box::new(audio));
+    folia_visualizer::background_view(folia_visualizer::Ground {
+        mode: folia_visualizer::Background::Latent,
+        seed: "geometry",
+        time: 0.0,
+        theme,
+        audio,
+        shapes: true,
+        vignette: false,
+        publish: false,
+        paused: false,
+        player,
+        cover: &[],
+        latent,
+    })
+}
+
+fn background_ground(mode: folia_visualizer::Background, shapes: bool, vignette: bool) -> Element<'static, Msg> {
+    let theme = Theme::MIDNIGHT;
+    let audio = folia_core::AudioFrame::SILENT;
+    // Leak the frame so the view can borrow it for this picture. The test process is short.
+    let theme = Box::leak(Box::new(theme));
+    let audio = Box::leak(Box::new(audio));
+    folia_visualizer::background_view(folia_visualizer::Ground {
+        mode,
+        seed: "geometry",
+        time: 0.0,
+        theme,
+        audio,
+        shapes,
+        vignette,
+        publish: false,
+        paused: false,
+        player: true,
+        cover: &[],
+        latent: folia_visualizer::LatentTuning::DEFAULT,
+    })
+}
+
+#[test]
+fn latent_tuning_round_trips_the_stored_table() {
+    let mut tuning = folia_visualizer::LatentTuning::DEFAULT;
+    tuning.mesh_speed = 1.2;
+    tuning.enhanced = false;
+    tuning.layers = folia_visualizer::LatentLayers::Mesh;
+    tuning.colors = folia_visualizer::LatentColors::CoverOnly;
+    tuning.dynamic_only = false;
+    tuning.overlay_on = false;
+    let stored = toml::Value::Table(tuning.table());
+    let read = folia_visualizer::LatentTuning::read(Some(&stored));
+    assert!((read.mesh_speed - 1.2).abs() < 1.0e-4);
+    assert!(!read.enhanced);
+    assert_eq!(read.layers, folia_visualizer::LatentLayers::Mesh);
+    assert_eq!(read.colors, folia_visualizer::LatentColors::CoverOnly);
+    assert!(!read.dynamic_only);
+    assert!(!read.overlay_on);
+    assert!((read.dither_size - folia_visualizer::LatentTuning::DEFAULT.dither_size).abs() < 1.0e-4);
+}
+
+#[test]
+fn cover_palette_keeps_the_large_region() {
+    let mut pixels = vec![0_u8; 8 * 8 * 4];
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[20, 40, 200, 255]);
+    }
+    for pixel in pixels.chunks_exact_mut(4).take(4) {
+        pixel.copy_from_slice(&[240, 20, 20, 255]);
+    }
+    let colors = folia_visualizer::cover_colors(&pixels, 2);
+    assert_eq!(colors[0], folia_core::Rgb { r: 20, g: 40, b: 200 });
+}
+
+#[test]
+fn latent_cover_only_keeps_the_cover_inside_the_mesh() {
+    let theme = Theme::MIDNIGHT;
+    let cover = [folia_core::Rgb { r: 240, g: 20, b: 20 }, folia_core::Rgb { r: 20, g: 40, b: 200 }];
+    let mixed = folia_visualizer::resolve_colors(&theme, &cover, folia_visualizer::LatentColors::CoverTheme);
+    let only = folia_visualizer::resolve_colors(&theme, &cover, folia_visualizer::LatentColors::CoverOnly);
+    let back =
+        |rgb: folia_core::Rgb| [f32::from(rgb.r) / 255.0, f32::from(rgb.g) / 255.0, f32::from(rgb.b) / 255.0, 1.0];
+    assert_eq!(mixed.dither_back, back(theme.background));
+    assert_eq!(only.dither_back, back(cover[1]));
+    assert_eq!(only.mesh[0], back(cover[0]));
+    assert_eq!(only.mesh[5], back(cover[1]));
+    let empty = folia_visualizer::resolve_colors(&theme, &[], folia_visualizer::LatentColors::CoverOnly);
+    assert_eq!(empty.dither_back, back(theme.secondary));
+}
+
+#[test]
+fn cover_split_keeps_red_when_the_channel_ranges_tie() {
+    let pixels = [0_u8, 100, 200, 255, 200, 0, 0, 255];
+    let colors = folia_visualizer::cover_colors(&pixels, 2);
+    assert_eq!(colors[0], folia_core::Rgb { r: 0, g: 100, b: 200 });
+}
+
+#[test]
+fn cover_palette_resamples_to_fifty_pixels_and_drops_stale_entries() {
+    let mut pixels = vec![0_u8; 100 * 100 * 4];
+    for (index, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+        if index % 100 < 50 {
+            pixel.copy_from_slice(&[220, 20, 20, 255]);
+        } else {
+            pixel.copy_from_slice(&[20, 40, 200, 255]);
+        }
+    }
+    let sampled = folia_visualizer::resample_cover(&pixels, 100, 100);
+    assert_eq!(sampled.len(), usize::try_from(folia_visualizer::SAMPLE_SIDE).unwrap().pow(2) * 4);
+    assert!(sampled[0] > 180 && sampled[2] < 80, "left sample {:?}", &sampled[..4]);
+    let right = (folia_visualizer::SAMPLE_SIDE as usize - 1) * 4;
+    assert!(sampled[right] < 80 && sampled[right + 2] > 150, "right sample {:?}", &sampled[right..right + 4]);
+    assert!(folia_visualizer::resample_cover(&pixels, 0, 100).is_empty());
+    assert!(folia_visualizer::cover_palette(&[], 10, 10, 4).is_empty());
+    let palette = folia_visualizer::cover_palette(&pixels, 100, 100, 2);
+    assert_eq!(palette.len(), 2);
+
+    let mut store = folia_visualizer::PaletteStore::new();
+    for id in 0..i64::from(u32::try_from(folia_visualizer::PALETTE_CAP).unwrap()) + 1 {
+        store.insert(id, vec![folia_core::Rgb { r: 1, g: 2, b: 3 }], Some(0));
+    }
+    assert_eq!(store.len(), folia_visualizer::PALETTE_CAP);
+    assert!(store.get(0).is_some(), "the playing song was evicted");
+    assert!(store.get(1).is_none(), "an older song stayed past the cap");
+    store.remove(7);
+    assert!(store.get(7).is_none());
+    assert!(!folia_visualizer::accept_art(Some((4, 2)), 4, 3));
+    assert!(folia_visualizer::accept_art(Some((4, 2)), 4, 2));
+    assert!(!folia_visualizer::accept_art(None, 4, 2));
+    assert!(store.get(99).is_none(), "a song with no cover has no palette");
+}
+
+#[test]
+fn shape_scale_follows_the_audio_spring() {
+    let mut current = 0.95;
+    let mut velocity = 0.0;
+    let target = 1.45;
+    for step in 0..180 {
+        (current, velocity) = folia_visualizer::follow_spring(current, velocity, target, 1.0 / 60.0);
+        assert!(current.is_finite() && velocity.is_finite());
+        if step == 1 {
+            assert!(current < 1.2, "sprang too far on the second step: {current}");
+        }
+    }
+    assert!((current - target).abs() < 0.02, "spring did not settle: {current}");
+
+    let (jumped, jumped_v) = folia_visualizer::follow_spring(0.95, 0.0, target, 0.1);
+    assert!(jumped.is_finite() && jumped_v.is_finite());
+    assert!((0.95..1.7).contains(&jumped), "100ms step diverged: {jumped}");
+    let mut recovered = jumped;
+    let mut recovered_v = jumped_v;
+    for _ in 0..180 {
+        (recovered, recovered_v) = folia_visualizer::follow_spring(recovered, recovered_v, target, 1.0 / 60.0);
+    }
+    assert!((recovered - target).abs() < 0.02, "did not recover after a dropped frame: {recovered}");
+
+    let mut stepped = 0.95;
+    let mut stepped_v = 0.0;
+    for _ in 0..6 {
+        (stepped, stepped_v) = folia_visualizer::follow_spring(stepped, stepped_v, target, 0.016);
+    }
+    let (once, once_v) = folia_visualizer::follow_spring(0.95, 0.0, target, 0.096);
+    assert!((stepped - once).abs() < 1.0e-3, "short steps {stepped} left the 96ms step {once}");
+    assert!((stepped_v - once_v).abs() < 1.0e-2, "velocity {stepped_v} left {once_v}");
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn common_geometry_moves_under_an_empty_classic_frame() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let mut picture = Picture::with_size(640, 360);
+    let cache = picture.frame(common_ground(true, true), Cache::default());
+    let early = picture.screenshot();
+    PinnedClock::at(1_250);
+    let _ = picture.frame(common_ground(true, true), cache);
+    let delta = diff_count(&early, &picture.screenshot());
+    assert!(delta > 2_000, "common geometry did not move: {delta}");
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn geometric_switches_change_the_picture() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let mut shapes = Picture::with_size(640, 360);
+    let cache = shapes.frame(common_ground(false, false), Cache::default());
+    let bare = shapes.screenshot();
+    PinnedClock::at(1_250);
+    let _ = shapes.frame(common_ground(false, false), cache);
+    assert_eq!(diff_count(&bare, &shapes.screenshot()), 0, "hidden shapes still moved");
+    let mut vignette = Picture::with_size(640, 360);
+    let _ = vignette.frame(common_ground(false, true), Cache::default());
+    let edge = diff_count(&bare, &vignette.screenshot());
+    assert!(edge > 1_000, "vignette did not darken the frame: {edge}");
+    let center = |pixels: &[u8]| {
+        let x = 320u32;
+        let y = 180u32;
+        let index = ((y * 640 + x) * 4) as usize;
+        [pixels[index], pixels[index + 1], pixels[index + 2]]
+    };
+    assert_eq!(center(&bare), center(&vignette.screenshot()), "vignette reached the middle");
+}
+
+#[test]
+fn latent_shader_budget_matches_the_paper_cap() {
+    let (ratio, width, height) = folia_visualizer::shader_budget(200.0, 120.0, 1.0);
+    assert!((ratio - 1.0).abs() < 1.0e-3);
+    assert_eq!((width, height), (200.0, 120.0));
+    let (ratio, width, height) = folia_visualizer::shader_budget(1920.0, 1080.0, 2.0);
+    assert!((width - 1280.0).abs() < 1.0, "width {width}");
+    assert!((height - 720.0).abs() < 1.0, "height {height}");
+    assert!((ratio - width / 1920.0).abs() < 1.0e-3);
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn latent_mesh_moves() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let mut picture = Picture::with_size(400, 120);
+    let mut cache = Cache::default();
+    let mut first = Vec::new();
+    let mut middle = Vec::new();
+    for step in 0..120 {
+        PinnedClock::at(step);
+        cache = picture.frame(latent_pair(), cache);
+        if step == 0 {
+            first = picture.screenshot();
+        } else if step == 60 {
+            middle = picture.screenshot();
+        }
+    }
+    let last = picture.screenshot();
+    assert!(!first.chunks_exact(4).all(|pixel| pixel == &first[..4]), "latent frame is one flat colour");
+    let left = region(&last, 400, 0, 0, 200, 120);
+    let right = region(&last, 400, 200, 0, 200, 120);
+    assert_eq!(diff_count(&left, &right), 0, "same-size latent scenes diverged by position");
+    assert!(diff_count(&first, &middle) > 200, "latent did not move across the first second");
+    assert!(diff_count(&middle, &last) > 200, "latent stopped after the first second");
+    assert_eq!(folia_visualizer::budget_texture_size(), (200, 120));
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn latent_preview_stays_still_and_layers_change_the_picture() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let mut still = Picture::with_size(200, 120);
+    let mut cache = Cache::default();
+    cache = still.frame(tuned_ground(folia_visualizer::LatentTuning::DEFAULT, false), cache);
+    let first = still.screenshot();
+    PinnedClock::at(60);
+    let _ = still.frame(tuned_ground(folia_visualizer::LatentTuning::DEFAULT, false), cache);
+    assert_eq!(diff_count(&first, &still.screenshot()), 0, "dynamic-only preview moved");
+
+    let mut mesh = Picture::with_size(200, 120);
+    let mut dither = Picture::with_size(200, 120);
+    let mut mesh_tuning = folia_visualizer::LatentTuning::DEFAULT;
+    mesh_tuning.layers = folia_visualizer::LatentLayers::Mesh;
+    mesh_tuning.dynamic_only = false;
+    let mut dither_tuning = mesh_tuning;
+    dither_tuning.layers = folia_visualizer::LatentLayers::Dither;
+    PinnedClock::at(0);
+    let _ = mesh.frame(tuned_ground(mesh_tuning, true), Cache::default());
+    let _ = dither.frame(tuned_ground(dither_tuning, true), Cache::default());
+    assert!(diff_count(&mesh.screenshot(), &dither.screenshot()) > 200, "mesh and pixel layers look the same");
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn latent_budget_texture_is_the_capped_size() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let mut full = Picture::with_size(1920, 1080);
+    let _ = full.frame(latent_ground(), Cache::default());
+    assert_eq!(folia_visualizer::budget_texture_size(), (1280, 720));
+    assert_eq!(full.screenshot().len(), 1920 * 1080 * 4);
+    assert!(full.screenshot().chunks_exact(4).any(|pixel| pixel != [0, 0, 0, 255]), "budget blit is blank");
+
+    let mut sharp = Picture::at_scale(800, 450, 1.0);
+    let _ = sharp.frame(latent_ground(), Cache::default());
+    assert_eq!(folia_visualizer::budget_texture_size(), (800, 450));
+    let mut retina = Picture::at_scale(800, 450, 2.0);
+    let _ = retina.frame(latent_ground(), Cache::default());
+    assert_eq!(folia_visualizer::budget_texture_size(), (1280, 720), "DPI still shaded every physical pixel");
+    assert_eq!(retina.screenshot().len(), 1600 * 900 * 4);
+    assert!(retina.screenshot().chunks_exact(4).any(|pixel| pixel != [0, 0, 0, 255]), "retina blit is blank");
+}
+
+fn latent_pair() -> Element<'static, Msg> {
+    row![container(latent_ground()).width(200.0).height(120.0), container(latent_ground()).width(200.0).height(120.0),]
+        .spacing(0)
+        .into()
+}
+
+fn blur_source(width: u32, height: u32, element: Element<'_, Msg>) -> (u32, u32, Vec<u8>) {
+    folia_render::release_backdrop();
+    PinnedClock::at(0);
+    let mut picture = Picture::with_size(width, height);
+    let _ = picture.frame(element, Cache::default());
+    let shot = folia_render::read_picture(&picture.device, &picture.queue).expect("glass blur source");
+    (shot.width, shot.height, shot.rgba)
 }

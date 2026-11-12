@@ -9,6 +9,7 @@ mod lyrics;
 mod queue;
 mod theme;
 mod track;
+mod word_color;
 
 pub use audio::AudioFrame;
 pub use audio_eq::{
@@ -18,7 +19,8 @@ pub use audio_eq::{
 pub use audio_input::{AudioInput, Download, DownloadReader, ReadRequest};
 pub use audio_quality::{AUDIO_QUALITY_LEVELS, AudioQuality, UNLISTED_AUDIO_QUALITY_LEVELS};
 pub use language::{Language, LanguagePreference};
-pub use lyrics::{ChorusRange, INTERLUDE_TEXT, Line, Lyrics, Word};
+pub use lyrics::{ChorusRange, INTERLUDE_TEXT, Line, Lyrics, SubtitleContentMode, Word};
 pub use queue::{Origin, Queue, Repeat};
 pub use theme::{AnimationIntensity, Rgb, Theme};
 pub use track::{OnlineId, OnlineTrackInfo, ReplayGain, Track};
+pub use word_color::{WordColor, WordColorRange, parse_color, word_color_ranges};

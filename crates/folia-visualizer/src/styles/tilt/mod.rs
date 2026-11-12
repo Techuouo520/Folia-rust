@@ -46,6 +46,7 @@ struct DrawnSegment {
 }
 
 struct Glyph {
+    font: Font,
     text: String,
     x: f32,
     width: f32,
@@ -98,9 +99,8 @@ fn paint(
         split_probability: f64::from(scene.tuning.number(manifest, "splitProbability")),
         tilt_style_probability: f64::from(scene.tuning.number(manifest, "tiltStyleProbability")),
     };
-    let layout = cache.get_or_insert(line, size, scene.font_scale, scene.tuning.fingerprint(), || {
-        Rc::new(build(line, scene, size, tuning))
-    });
+    let layout = cache
+        .get_or_insert(line, size, scene.font_scale, scene.layout_key(), || Rc::new(build(line, scene, size, tuning)));
     let gap = if size.width >= 640.0 { 16.0 } else { 12.0 };
     let total = layout.segments.iter().map(|segment| segment.height).sum::<f32>()
         + gap * layout.segments.len().saturating_sub(1) as f32;
@@ -167,7 +167,7 @@ fn draw_glyph(
     let y = if glyph.space || !segment.tilt { 0.0 } else { char_y(segment, glyph, elapsed) };
     let scale = pulse_scale(segment, glyph, moment.time);
     let x = center.x - segment.width / 2.0 + glyph.x + glyph.width / 2.0;
-    let font = glyph_font(&glyph.text, segment.tilt);
+    let font = glyph.font;
     frame.with_save(|frame| {
         frame.translate(Vector::new(x, center.y + y));
         frame.scale(scale);
@@ -260,10 +260,12 @@ fn build(line: &Line, scene: &Scene<'_>, size: Size, tuning: TiltTuning) -> Tilt
         if tilt {
             graphemes(text)
                 .iter()
-                .map(|grapheme| measure(grapheme, base, glyph_font(grapheme, true), f32::INFINITY).width)
+                .map(|grapheme| {
+                    measure(grapheme, base, scene.typography.font(glyph_font(grapheme, true)), f32::INFINITY).width
+                })
                 .sum()
         } else {
-            measure(text, base, font_normal(), f32::INFINITY).width
+            measure(text, base, scene.typography.font(font_normal()), f32::INFINITY).width
         }
     });
     let times = segment_times(line, &arrangement.segments);
@@ -273,7 +275,9 @@ fn build(line: &Line, scene: &Scene<'_>, size: Size, tuning: TiltTuning) -> Tilt
         .segments
         .iter()
         .zip(times)
-        .map(|(segment, (start, end))| drawn_segment(line, segment, start, end, viewport, base_scale, stagger))
+        .map(|(segment, (start, end))| {
+            drawn_segment(line, segment, start..end, viewport, base_scale, stagger, scene.typography)
+        })
         .collect();
     TiltLayout { segments }
 }
@@ -281,12 +285,13 @@ fn build(line: &Line, scene: &Scene<'_>, size: Size, tuning: TiltTuning) -> Tilt
 fn drawn_segment(
     line: &Line,
     segment: &Segment,
-    start: f64,
-    end: f64,
+    timing: std::ops::Range<f64>,
     viewport: f32,
     base_scale: f32,
     stagger: f32,
+    typography: crate::Typography,
 ) -> DrawnSegment {
+    let (start, end) = (timing.start, timing.end);
     let boost = if segment.short_last && !segment.tilt { 1.18 } else { 1.0 };
     let font_px = display_px(viewport, base_scale, boost);
     let spacing = font_px * if segment.tilt { 0.15 } else { 0.08 };
@@ -296,14 +301,17 @@ fn drawn_segment(
     let mut non_space = 0;
     for grapheme in graphemes(&segment.text) {
         let space = is_space(&grapheme);
-        let font = glyph_font(&grapheme, segment.tilt);
+        let font = typography.font(glyph_font(&grapheme, segment.tilt));
         let mut width = measure(&grapheme, font_px, font, f32::INFINITY).width;
         if space {
             width = width.max(min_space);
         }
-        let sheared =
-            if segment.tilt && needs_shear(&grapheme) { sheared_outlines(&grapheme, font_px) } else { Vec::new() };
-        glyphs.push(Glyph { text: grapheme, x, width, space, index: non_space, sheared });
+        let sheared = if segment.tilt && needs_shear(&grapheme) {
+            sheared_outlines(&grapheme, font_px, font)
+        } else {
+            Vec::new()
+        };
+        glyphs.push(Glyph { font, text: grapheme, x, width, space, index: non_space, sheared });
         if !space {
             non_space += 1;
         }
@@ -399,14 +407,14 @@ fn glyph_font(text: &str, tilt: bool) -> Font {
 }
 
 /// Outlines of `text` in the upright face, sheared around the origin so the top leans right.
-fn sheared_outlines(text: &str, font_px: f32) -> Vec<Path> {
+fn sheared_outlines(text: &str, font_px: f32, font: Font) -> Vec<Path> {
     let mut outlines = Vec::new();
     let sample = Text {
         content: text.to_owned(),
         position: Point::ORIGIN,
         color: iced::Color::WHITE,
         size: font_px.into(),
-        font: font_upright(),
+        font,
         align_x: iced::widget::text::Alignment::Center,
         align_y: iced::alignment::Vertical::Center,
         shaping: Shaping::Advanced,

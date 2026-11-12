@@ -145,12 +145,11 @@ fn picture_choices_round_trip_through_the_style_table() {
 #[test]
 fn a_background_mode_resolves_only_when_this_build_can_draw_it() {
     use folia_visualizer::Background;
-    assert_eq!(Background::resolve(None), Background::Common);
+    assert_eq!(Background::resolve(None), Background::Latent);
     assert_eq!(Background::resolve(Some("common")), Background::Common);
-    // The original default is latent, which this build cannot draw, so it follows the drawable default.
-    assert_eq!(Background::resolve(Some("latent")), Background::Common);
-    assert_eq!(Background::resolve(Some("nonsense")), Background::Common);
-    assert_eq!(Background::ALL.len(), 1);
+    assert_eq!(Background::resolve(Some("latent")), Background::Latent);
+    assert_eq!(Background::resolve(Some("nonsense")), Background::Latent);
+    assert_eq!(Background::ALL.len(), 2);
     assert_eq!(Background::Common.id(), "common");
     assert_eq!(Background::Common.label_key(), "options.visualizerBackgroundModeCommon");
 }

@@ -2,8 +2,10 @@
 
 mod album_wall;
 mod background;
+mod background_image;
 mod block_reflows;
 mod chrome;
+mod color_picker;
 mod cover_flight;
 mod design_size;
 pub mod developer;
@@ -36,6 +38,7 @@ mod playlist_dialog;
 mod positioner;
 mod poster;
 mod poster_motion;
+mod preview_stage;
 mod quality_select;
 mod queue_island;
 mod reorder;
@@ -48,6 +51,7 @@ mod smooth_scroll;
 mod sources;
 mod splash;
 mod status_toast;
+mod subtitle_text;
 mod timeline;
 mod typeface;
 mod wall;
@@ -69,9 +73,9 @@ pub use online::{AccountState, Online};
 pub use overlay::{
     CAPSULE_COLLAPSE_MS, CAPSULE_EXPAND_MS, CAPSULE_FADE_MS, CAPSULE_LAYOUT_SPRING, CAPSULE_SETTLE_MS, CHROME_HOLD_MS,
     CHROME_LEAVE_MS, CapsuleHover, ChromeClock, ChromeSpring, GLOW_BLUR_PX, GlowEllipse, SUBTITLE_CLEARANCE,
-    SUBTITLE_PRESENCE_SPRING, SpringParams, Subtitle, capsule_open, capsule_row, capsule_width, glow_coverage,
-    glow_ellipse, row_gap, subtitle_at, subtitle_bottom, subtitle_line_width, translation_px, upcoming_look,
-    upcoming_px,
+    SUBTITLE_PRESENCE_SPRING, SpringParams, Subtitle, SubtitleRow, SubtitleRows, capsule_open, capsule_row,
+    capsule_width, glow_coverage, glow_ellipse, row_gap, subtitle_at, subtitle_bottom, subtitle_line_width,
+    subtitle_rows_at, translation_px, upcoming_look, upcoming_px,
 };
 pub use panel::Tab as PanelTab;
 pub use panel::{LikeLook, Message as PanelMessage, PlayerPanel, Room as PanelRoom, View as PanelView, like_look};
@@ -101,7 +105,8 @@ pub use wall::{SEAM_ANCHOR, Seam, content_opacity, plan_opening, seam_geometry, 
 pub use wall_pan::{Glide as WallGlide, Inertia as WallInertia, Release as WallRelease};
 pub use wall_shift::{Kind as ShiftKind, Pose as ShiftPose, Shift as WallShift};
 pub use workbench::{
-    Hotspot, Look as WorkbenchLook, Message as WorkbenchMessage, Tab as WorkbenchTab, Workbench, hotspot_at,
+    Effect as WorkbenchEffect, Hotspot, Look as WorkbenchLook, Message as WorkbenchMessage, Tab as WorkbenchTab,
+    Workbench, hotspot_at, scheduled_saves,
 };
 
 use std::path::PathBuf;
@@ -167,6 +172,9 @@ pub enum Page {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    BackgroundPainted(u64, Option<iced::widget::image::Handle>),
+    BackgroundPicked(Option<std::path::PathBuf>),
+    BackgroundLoaded(u64, std::path::PathBuf, Result<std::sync::Arc<image::RgbaImage>, String>),
     Navigate(Page),
     OpenSettings,
     Settings(settings::Message),
@@ -192,6 +200,7 @@ pub enum Message {
     /// The capture is over; the page changes now if no picture of it came.
     PageShotDone,
     WindowResized(Size),
+    WindowScale(f32),
     Maximized(bool),
     ChromeTick,
     PointerHeld(bool),
@@ -227,7 +236,7 @@ pub enum Message {
     MatchedLyrics(u64, i64, Result<Option<folia_core::Lyrics>, String>),
     /// The playing song's lyrics were written to this file, or its failure.
     ExportedLyrics(Result<std::path::PathBuf, String>),
-    Art(i64, Option<folia_library::Cover>),
+    Art(i64, u64, crate::background::PanelArt),
     PortraitPicked(Option<std::path::PathBuf>),
     PortraitDecoded(String, Option<folia_library::Cover>),
     PortraitStored(std::path::PathBuf, folia_library::Cover),
@@ -319,6 +328,7 @@ pub struct Shell {
     subtitle_presence: ChromeSpring,
     bar: player_bar::PlayerBar,
     window_size: Size,
+    window_scale: f32,
     pointer_held: bool,
     /// Press on the drag strip, and the pointer position of the first move after it.
     drag_armed: bool,
@@ -327,7 +337,16 @@ pub struct Shell {
     home: home::HomeChrome,
     panel: panel::PlayerPanel,
     art: folia_library::CoverCache<i64, iced::widget::image::Handle>,
-    art_pending: Option<i64>,
+    art_pending: Option<(i64, u64)>,
+    art_task: Option<iced::task::Handle>,
+    art_request_full: bool,
+    art_generation: u64,
+    /// Cover colours keyed by track id, taken when the cover is decoded.
+    cover_palettes: folia_visualizer::PaletteStore,
+    background_cover: Option<(i64, std::sync::Arc<image::RgbaImage>)>,
+    background_poster: background_image::Poster,
+    background_upload: Option<std::sync::Arc<image::RgbaImage>>,
+    background_upload_generation: u64,
     titlebar: chrome::Titlebar,
     player: folia_store::PlayerSettings,
     positioning: Option<positioner::Positioning>,
@@ -427,6 +446,7 @@ impl Shell {
             subtitle_presence: ChromeSpring::settled(1.0, 0, SUBTITLE_PRESENCE_SPRING),
             bar: player_bar::PlayerBar::new(std::time::Instant::now()),
             window_size: INITIAL_WINDOW,
+            window_scale: 1.0,
             pointer_held: false,
             drag_armed: false,
             drag_from: None,
@@ -435,6 +455,14 @@ impl Shell {
             panel: panel::PlayerPanel::new(std::time::Instant::now()),
             art: folia_library::CoverCache::new(ART_BYTES),
             art_pending: None,
+            art_task: None,
+            art_request_full: false,
+            art_generation: 0,
+            cover_palettes: folia_visualizer::PaletteStore::new(),
+            background_cover: None,
+            background_poster: background_image::Poster::default(),
+            background_upload: None,
+            background_upload_generation: 0,
             titlebar: chrome::Titlebar::new(std::time::Instant::now()),
             player: init.player,
             positioning: None,
@@ -460,11 +488,15 @@ impl Shell {
         let open = if init.open_files.is_empty() { Task::none() } else { open_files(init.open_files) };
         let window = iced::window::oldest().map(Message::WindowReady);
         let portrait = shell.load_portrait();
+        let background = shell.load_background();
         let fonts = Task::perform(crate::background::blocking(fonts::installed_families), |fonts| {
             Message::FontsLoaded(fonts.unwrap_or_default())
         });
         let sources = shell.sources.restore(shell.omni.clone(), shell.store.clone(), shell.data_dir.clone());
-        (shell, Task::batch([load.map(Message::Library), open, window, portrait, playlists, fonts, sources]))
+        (
+            shell,
+            Task::batch([load.map(Message::Library), open, window, portrait, background, playlists, fonts, sources]),
+        )
     }
 
     fn portrait_handle(&self, id: Option<i64>) -> Option<&iced::widget::image::Handle> {
@@ -598,6 +630,7 @@ impl Shell {
             Message::Playback(playback::Message::Tick) | Message::Workbench(workbench::Message::Frame)
         );
         let task = self.handle(message);
+        let task = Task::batch([task, self.prepare_background()]);
         let task = Task::batch([task, self.playback.refresh_prefetch().map(Message::Playback)]);
         self.refresh_visualizer_seed();
         if self.page != before || self.playback.current().is_none() {
@@ -700,6 +733,81 @@ impl Shell {
             self.audio = self.playback.audio_frame(wall_ms());
         }
         task
+    }
+
+    fn load_background(&self) -> Task<Message> {
+        let Some(path) = self
+            .visualizer
+            .tables
+            .get("custom_background_image")
+            .and_then(|value| value.get("path"))
+            .and_then(toml::Value::as_str)
+            .map(std::path::PathBuf::from)
+        else {
+            return Task::none();
+        };
+        let request = path.clone();
+        let generation = self.background_upload_generation;
+        Task::perform(crate::background::blocking(move || background_image::load(&request)), move |result| {
+            Message::BackgroundLoaded(
+                generation,
+                path.clone(),
+                result.unwrap_or_else(|| Err("image worker stopped".to_owned())),
+            )
+        })
+    }
+
+    fn import_background(&mut self, source: std::path::PathBuf) -> Task<Message> {
+        self.background_upload_generation = self.background_upload_generation.wrapping_add(1);
+        let generation = self.background_upload_generation;
+        let stamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_nanos());
+        let path = self.data_dir.join("backgrounds").join(format!("image-{stamp}.png"));
+        let destination = path.clone();
+        Task::perform(
+            crate::background::blocking(move || background_image::import(&source, &destination)),
+            move |result| {
+                Message::BackgroundLoaded(
+                    generation,
+                    path.clone(),
+                    result.unwrap_or_else(|| Err("image worker stopped".to_owned())),
+                )
+            },
+        )
+    }
+
+    fn prepare_background(&mut self) -> Task<Message> {
+        let mode = folia_visualizer::Background::resolve(self.appearance.stored_background_mode());
+        if !matches!(mode, folia_visualizer::Background::Monet | folia_visualizer::Background::Nomand) {
+            self.background_cover = None;
+            self.background_poster.clear();
+            return Task::none();
+        }
+        let art = self.ensure_art();
+        let cover = self
+            .background_cover
+            .as_ref()
+            .filter(|(id, _)| self.playback.current().is_some_and(|track| track.id == *id))
+            .map(|(_, image)| image);
+        let tuning =
+            folia_visualizer::monet_background::Tuning::read(self.visualizer.tables.get("monet_background_tuning"));
+        let raw = mode == folia_visualizer::Background::Nomand;
+        let uploaded = if raw {
+            folia_visualizer::nomand::Tuning::read(self.visualizer.tables.get("nomand_background_tuning")).uploaded
+        } else {
+            tuning.uploaded
+        };
+        let source = if uploaded {
+            self.background_upload.as_ref().or(cover)
+        } else {
+            cover.or(self.background_upload.as_ref())
+        };
+        let Some(job) = self.background_poster.request(source, &self.theme, tuning, raw) else { return art };
+        let generation = job.generation;
+        let painting = Task::perform(crate::background::blocking(move || job.paint()), move |image| {
+            Message::BackgroundPainted(generation, image)
+        });
+        Task::batch([art, painting])
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -845,6 +953,10 @@ impl Shell {
             Message::OpenFiles(_) => Task::none(),
             Message::WindowReady(id) => {
                 self.window = id.or(self.window);
+                self.window.map_or_else(Task::none, |id| iced::window::scale_factor(id).map(Message::WindowScale))
+            }
+            Message::WindowScale(scale) => {
+                self.window_scale = scale.max(0.5);
                 Task::none()
             }
             Message::PageShot(shot) => {
@@ -868,7 +980,10 @@ impl Shell {
                 }
                 self.window_size = size;
                 match self.window {
-                    Some(id) => iced::window::is_maximized(id).map(Message::Maximized),
+                    Some(id) => Task::batch([
+                        iced::window::is_maximized(id).map(Message::Maximized),
+                        iced::window::scale_factor(id).map(Message::WindowScale),
+                    ]),
                     None => Task::none(),
                 }
             }
@@ -896,12 +1011,12 @@ impl Shell {
                 if self.page == Page::NowPlaying {
                     self.reveal_chrome();
                 }
-                Task::none()
+                if held { Task::none() } else { self.finish_slider() }
             }
             Message::WindowUnfocused => {
                 self.drag_armed = false;
                 self.drag_from = None;
-                Task::none()
+                self.finish_slider()
             }
             Message::RevealChrome => {
                 if self.page == Page::NowPlaying {
@@ -1053,16 +1168,76 @@ impl Shell {
                     self.status(false, err)
                 }
             },
-            Message::Art(id, cover) => {
-                if self.art_pending == Some(id) {
-                    self.art_pending = None;
+            Message::Art(id, generation, art) => {
+                if !folia_visualizer::accept_art(self.art_pending, id, generation) {
+                    tracing::debug!(id, generation, "dropped a stale cover");
+                    return Task::none();
                 }
-                let bytes = cover.as_ref().map_or(0, |cover| cover.rgba.len());
-                tracing::debug!(bytes, held = self.art.used_bytes() + bytes, "panel cover decoded");
-                let handle =
-                    cover.map(|cover| iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba));
-                self.art.insert(id, handle, bytes);
+                self.art_pending = None;
+                self.art_task = None;
+                if self.playback.current().is_some_and(|track| track.id == id) {
+                    self.background_cover = art.background.map(|image| (id, image));
+                }
+                let keep = self.playback.current().map(|track| track.id);
+                match art.image {
+                    Some(cover) => {
+                        let bytes = cover.rgba.len();
+                        tracing::debug!(bytes, held = self.art.used_bytes() + bytes, "panel cover decoded");
+                        self.cover_palettes.insert(id, art.colors, keep);
+                        let handle = iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba);
+                        self.art.insert(id, Some(handle), bytes);
+                    }
+                    None => {
+                        tracing::debug!(id, "panel cover missing");
+                        self.cover_palettes.remove(id);
+                        self.art.insert(id, None, 0);
+                    }
+                }
                 Task::none()
+            }
+            Message::BackgroundPainted(generation, image) => {
+                self.background_poster.finish(generation, image);
+                Task::none()
+            }
+            Message::BackgroundPicked(Some(path)) => self.import_background(path),
+            Message::BackgroundPicked(None) => Task::none(),
+            Message::BackgroundLoaded(generation, path, result) => {
+                if generation != self.background_upload_generation {
+                    return Task::none();
+                }
+                match result {
+                    Ok(image) => {
+                        self.background_upload = Some(image);
+                        let mut table = toml::map::Map::new();
+                        table.insert("path".to_owned(), toml::Value::String(path.to_string_lossy().into_owned()));
+                        self.visualizer.insert_style("custom_background_image", table, &[]);
+                        if generation > 0 {
+                            match folia_visualizer::Background::resolve(self.appearance.stored_background_mode()) {
+                                folia_visualizer::Background::Monet => {
+                                    let mut tuning = folia_visualizer::monet_background::Tuning::read(
+                                        self.visualizer.tables.get("monet_background_tuning"),
+                                    );
+                                    tuning.uploaded = true;
+                                    self.visualizer.insert_style("monet_background_tuning", tuning.table(), &[]);
+                                }
+                                folia_visualizer::Background::Nomand => {
+                                    let mut tuning = folia_visualizer::nomand::Tuning::read(
+                                        self.visualizer.tables.get("nomand_background_tuning"),
+                                    );
+                                    tuning.uploaded = true;
+                                    self.visualizer.insert_style("nomand_background_tuning", tuning.table(), &[]);
+                                }
+                                _ => {}
+                            }
+                        }
+                        save(&self.store, &self.visualizer)
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "custom background unavailable");
+                        let text = self.i18n.t("notifications.unsupportedImageFormat").to_owned();
+                        self.status(false, text)
+                    }
+                }
             }
             Message::MonetOffset(offset) => self.store_monet_offset(offset),
             Message::SeekTo(position) => {
@@ -1458,6 +1633,7 @@ impl Shell {
                     artist,
                     album,
                     portrait,
+                    typography: fonts::typography(&self.appearance),
                     preview: false,
                     audio: &self.audio,
                 };
@@ -1483,12 +1659,39 @@ impl Shell {
                         window: self.window_size,
                         vignette,
                         subtitle_opacity: self.appearance.subtitle.opacity,
+                        subtitle_background: self.appearance.subtitle.background,
+                        subtitle_blur: self.appearance.subtitle.upcoming_blur,
+                        dpi: self.window_scale,
+                        opacity: self.appearance.visualizer_opacity,
                         subtitle_scale: self.appearance.subtitle.font_scale,
                         subtitle_font: fonts::resolve(if self.appearance.subtitle.font_inherits_lyrics {
                             &self.appearance.lyrics_font
                         } else {
                             &self.appearance.subtitle.font
                         }),
+                        shared: now_playing::Backdrop {
+                            mode: folia_visualizer::Background::resolve(self.appearance.stored_background_mode()),
+                            shapes: !self.appearance.disable_visualizer_geometric_background,
+                            vignette: !self.appearance.disable_visualizer_vignette,
+                            paused: !self.playback.is_playing(),
+                        },
+                        cover: self
+                            .playback
+                            .current()
+                            .and_then(|track| self.cover_palettes.get(track.id))
+                            .unwrap_or(&[]),
+                        latent: folia_visualizer::LatentTuning::read(
+                            self.visualizer.tables.get("latent_background_tuning"),
+                        ),
+                        daylight,
+                        sora: folia_visualizer::SoraTuning::read(self.visualizer.tables.get("sora_background_tuning")),
+                        monet: folia_visualizer::monet_background::Tuning::read(
+                            self.visualizer.tables.get("monet_background_tuning"),
+                        ),
+                        picture: self.background_poster.image(),
+                        nomand: folia_visualizer::nomand::Tuning::read(
+                            self.visualizer.tables.get("nomand_background_tuning"),
+                        ),
                     },
                     subtitle,
                     foot,
@@ -1639,6 +1842,15 @@ impl Shell {
                 has_custom_theme: self.theme_settings.custom_dual_theme.is_some(),
                 random_pool: self.theme_settings.random_pool.as_deref(),
                 all_styles: &Style::ALL,
+                background: folia_visualizer::Background::resolve(self.appearance.stored_background_mode()),
+                sora: folia_visualizer::SoraTuning::read(self.visualizer.tables.get("sora_background_tuning")),
+                monet: folia_visualizer::monet_background::Tuning::read(
+                    self.visualizer.tables.get("monet_background_tuning"),
+                ),
+                picture: self.background_poster.image(),
+                nomand: folia_visualizer::nomand::Tuning::read(self.visualizer.tables.get("nomand_background_tuning")),
+                background_shapes: !self.appearance.disable_visualizer_geometric_background,
+                background_vignette: !self.appearance.disable_visualizer_vignette,
                 equalizer_on: self.audio_settings.equalizer.enabled,
                 replay_gain: self.audio_settings.replay_gain_mode,
                 gain: self.playback_gain(),
@@ -1693,6 +1905,16 @@ impl Shell {
                 audio: &self.audio,
                 appearance: &self.appearance,
                 fonts: &self.system_fonts,
+                dpi: self.window_scale,
+                latent: folia_visualizer::LatentTuning::read(self.visualizer.tables.get("latent_background_tuning")),
+                sora: folia_visualizer::SoraTuning::read(self.visualizer.tables.get("sora_background_tuning")),
+                monet: folia_visualizer::monet_background::Tuning::read(
+                    self.visualizer.tables.get("monet_background_tuning"),
+                ),
+                picture: self.background_poster.image(),
+                nomand: folia_visualizer::nomand::Tuning::read(self.visualizer.tables.get("nomand_background_tuning")),
+                cover: self.playback.current().and_then(|track| self.cover_palettes.get(track.id)).unwrap_or(&[]),
+                has_background_upload: self.background_upload.is_some(),
             }));
         }
         if let Some(window) = &self.settings {
@@ -1894,16 +2116,14 @@ impl Shell {
             || self.library.online.sync_notice(now).is_some_and(|(_, _, _, opacity, _)| opacity > 0.0)
     }
 
-    fn subtitle(&self) -> overlay::Subtitle<'_> {
-        let hidden = self.appearance.subtitle.hide_translation
-            || self.appearance.subtitle.content_mode == folia_store::SubtitleContentMode::None;
-        if hidden || !self.style().shared_subtitle() {
-            return overlay::Subtitle { translation: None, upcoming: None };
+    fn subtitle(&self) -> overlay::SubtitleRows<'_> {
+        if !self.style().shared_subtitle() {
+            return overlay::SubtitleRows::default();
         }
         let Some(lyrics) = self.playback.lyrics.as_ref() else {
-            return overlay::Subtitle { translation: None, upcoming: None };
+            return overlay::SubtitleRows::default();
         };
-        overlay::subtitle_at(&lyrics.lines, self.playback.lyric_time())
+        overlay::subtitle_rows_at(&lyrics.lines, self.playback.lyric_time(), &self.appearance.subtitle)
     }
 
     /// Ticks only while music plays: every frame on the visualizer page, a few times a second elsewhere.
@@ -2245,43 +2465,103 @@ impl Shell {
         let style = self.style();
         let manifest = style.manifest();
         let Some(window) = self.workbench.as_mut() else { return Task::none() };
-        let update = window.update(message, manifest, &self.appearance);
+        let latent = folia_visualizer::LatentTuning::read(self.visualizer.tables.get("latent_background_tuning"));
+        let update = window.update(message, manifest, &self.appearance, latent);
         let scroll = window.scroll_frame(std::time::Instant::now()).map(Message::Workbench);
         let values = window.values.clone();
+        let appearance_changed = update.appearance.is_some();
         if let Some(appearance) = update.appearance {
             self.appearance = appearance;
         }
-        let task = match update.effect {
-            workbench::Effect::None => Task::none(),
-            workbench::Effect::Close => {
-                self.workbench = None;
-                Task::none()
-            }
-            workbench::Effect::Draft => {
-                self.hold_tuning(style, values);
-                Task::none()
-            }
-            workbench::Effect::Appearance => Task::none(),
-            workbench::Effect::ScrollTop => iced::widget::operation::snap_to(
-                workbench::settings_scroll_id(),
-                iced::widget::operation::RelativeOffset { x: Some(0.0), y: Some(0.0) },
-            ),
-            workbench::Effect::Save => {
-                let tuning = self.store_tuning(style, values);
-                Task::batch([tuning, save(&self.store, &self.appearance)])
-            }
+        if let Some(tuning) = update.latent {
+            self.visualizer.insert_style("latent_background_tuning", tuning.table(), &[]);
+        }
+        if let Some(tuning) = update.monet {
+            self.visualizer.insert_style("monet_background_tuning", tuning.table(), &[]);
+        }
+        if let Some(tuning) = update.sora {
+            self.visualizer.insert_style("sora_background_tuning", tuning.table(), &[]);
+        }
+        if let Some(tuning) = update.nomand {
+            self.visualizer.insert_style("nomand_background_tuning", tuning.table(), &[]);
+        }
+        let (write_visualizer, write_appearance) =
+            workbench::scheduled_saves(&update.effect, appearance_changed, update.flush_visualizer);
+        let mut tasks = vec![scroll];
+        if write_visualizer && matches!(update.effect, workbench::Effect::Style(_)) {
+            tasks.push(self.store_tuning(style, values.clone()));
+        }
+        match update.effect {
+            workbench::Effect::None
+            | workbench::Effect::Save
+            | workbench::Effect::SaveAppearance
+            | workbench::Effect::Appearance => {}
+            workbench::Effect::Close => self.workbench = None,
+            workbench::Effect::Draft => self.hold_tuning(style, values.clone()),
+            workbench::Effect::ScrollTop => tasks.push(self.snap_settings()),
             workbench::Effect::Style(next) => {
                 self.appearance.visualizer = next.id().to_owned();
                 if let Some(window) = self.workbench.as_mut() {
                     window.values = next.load(&self.visualizer.tables);
                 }
-                save(&self.store, &self.appearance)
             }
-            workbench::Effect::Button("uploadPortrait") => self.pick_portrait(),
-            workbench::Effect::Button("clearPortrait") => self.clear_portrait(),
-            workbench::Effect::Button(_) => Task::none(),
-        };
-        Task::batch([task, scroll])
+            workbench::Effect::Button("uploadPortrait") => tasks.push(self.pick_portrait()),
+            workbench::Effect::Button("clearPortrait") => tasks.push(self.clear_portrait()),
+            workbench::Effect::Button("uploadBackground") => tasks.push(Task::perform(
+                crate::background::blocking(|| {
+                    rfd::FileDialog::new().add_filter("Image", &["png", "jpg", "jpeg", "webp"]).pick_file()
+                }),
+                |path| Message::BackgroundPicked(path.flatten()),
+            )),
+            workbench::Effect::Button("clearBackground") => {
+                self.background_upload_generation = self.background_upload_generation.wrapping_add(1);
+                self.background_upload = None;
+                self.visualizer.tables.remove("custom_background_image");
+                let mut tuning = folia_visualizer::monet_background::Tuning::read(
+                    self.visualizer.tables.get("monet_background_tuning"),
+                );
+                tuning.uploaded = false;
+                self.visualizer.insert_style("monet_background_tuning", tuning.table(), &[]);
+                let mut nomand =
+                    folia_visualizer::nomand::Tuning::read(self.visualizer.tables.get("nomand_background_tuning"));
+                nomand.uploaded = false;
+                self.visualizer.insert_style("nomand_background_tuning", nomand.table(), &[]);
+                tasks.push(save(&self.store, &self.visualizer));
+            }
+            workbench::Effect::Button(_) => {}
+        }
+        if update.scroll_top {
+            tasks.push(self.snap_settings());
+        }
+        if update.close {
+            self.workbench = None;
+        }
+        if write_visualizer && !matches!(update.effect, workbench::Effect::Style(_)) {
+            tasks.push(self.store_tuning(style, values));
+        }
+        if write_appearance {
+            tasks.push(save(&self.store, &self.appearance));
+        }
+        Task::batch(tasks)
+    }
+
+    fn snap_settings(&self) -> Task<Message> {
+        iced::widget::operation::snap_to(
+            workbench::settings_scroll_id(),
+            iced::widget::operation::RelativeOffset { x: Some(0.0), y: Some(0.0) },
+        )
+    }
+
+    /// Writes the file for a slider that is still down. A second call in the same gesture does nothing.
+    fn finish_slider(&mut self) -> Task<Message> {
+        let outcome = self.workbench.as_mut().map(|window| (window.release_drag(), window.values.clone()));
+        let Some((effect, values)) = outcome else { return Task::none() };
+        let style = self.style();
+        match effect {
+            workbench::Effect::Save => self.store_tuning(style, values),
+            workbench::Effect::SaveAppearance => save(&self.store, &self.appearance),
+            _ => Task::none(),
+        }
     }
 
     fn hold_tuning(&mut self, style: Style, values: Values) {
@@ -2499,35 +2779,69 @@ impl Shell {
 
     /// Decodes the playing song's cover for the panel in the background, unless it is cached or on its way.
     fn ensure_art(&mut self) -> Task<Message> {
-        let Some(track) = self.playback.current() else { return Task::none() };
+        let Some(track) = self.playback.current() else {
+            self.art_task = None;
+            self.art_pending = None;
+            self.background_cover = None;
+            return Task::none();
+        };
         let id = track.id;
-        if self.art_pending == Some(id) {
+        if self.art_pending.is_some_and(|(pending, _)| pending != id) {
+            self.art_task = None;
+            self.art_pending = None;
+        }
+        let mode = folia_visualizer::Background::resolve(self.appearance.stored_background_mode());
+        let full = matches!(mode, folia_visualizer::Background::Monet | folia_visualizer::Background::Nomand);
+        if self.art_pending.is_some_and(|(pending, _)| pending == id) && (!full || self.art_request_full) {
             return Task::none();
         }
-        if self.art.peek(&id).is_some() {
+        if self.art.peek(&id).is_some_and(|cover| {
+            cover.is_none() || !full || self.background_cover.as_ref().is_some_and(|(source, _)| *source == id)
+        }) {
             self.art.touch(&id);
             return Task::none();
         }
+        self.art_task = None;
+        self.art_request_full = full;
         if let Some(url) = track.cover_url.clone() {
             let Some(omni) = self.omni.clone() else {
+                self.cover_palettes.remove(id);
                 self.art.insert(id, None, 0);
                 return Task::none();
             };
-            self.art_pending = Some(id);
-            return Task::perform(crate::background::online_cover(omni, url, ART_PX), move |cover| {
-                Message::Art(id, cover)
-            });
+            let generation = self.begin_art(id);
+            let (task, handle) =
+                Task::perform(crate::background::panel_art_online(omni, url, ART_PX, full), move |art| {
+                    Message::Art(id, generation, art)
+                })
+                .abortable();
+            self.art_task = Some(handle.abort_on_drop());
+            return task;
         }
         if track.path.as_os_str().is_empty() {
+            self.cover_palettes.remove(id);
             self.art.insert(id, None, 0);
             return Task::none();
         }
-        self.art_pending = Some(id);
         let path = track.path.clone();
-        Task::perform(
-            crate::background::blocking(move || folia_library::cover_for(&path, ART_PX, ART_PX)),
-            move |cover| Message::Art(id, cover.flatten()),
-        )
+        let generation = self.begin_art(id);
+        let (task, handle) =
+            Task::perform(
+                async move {
+                    crate::background::blocking(move || crate::background::panel_art_file(path, ART_PX, full)).await
+                },
+                move |art| Message::Art(id, generation, art.unwrap_or_else(crate::background::PanelArt::missing)),
+            )
+            .abortable();
+        self.art_task = Some(handle.abort_on_drop());
+        task
+    }
+
+    fn begin_art(&mut self, id: i64) -> u64 {
+        self.art_generation = self.art_generation.wrapping_add(1);
+        let generation = self.art_generation;
+        self.art_pending = Some((id, generation));
+        generation
     }
 
     fn positioner(&mut self, message: positioner::Message) -> Task<Message> {

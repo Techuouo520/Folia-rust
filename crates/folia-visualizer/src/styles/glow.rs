@@ -182,13 +182,15 @@ pub fn breathing(time: f64, intensity: AnimationIntensity, multiplier: f64) -> (
 /// Draws one word at `at` with its pose: a soft enlarged halo while it glows, then the body.
 pub fn draw_word(
     frame: &mut Frame,
-    theme: &Theme,
+    scene: &crate::Scene<'_>,
     text: &str,
     at: Point,
     pose: &Pose,
     line_opacity: f64,
     font_px: f32,
 ) {
+    let theme = scene.theme;
+    let font = scene.typography.font(crate::BOLD);
     let alpha = (pose.opacity * line_opacity) as f32;
     if alpha <= 0.002 {
         return;
@@ -202,20 +204,20 @@ pub fn draw_word(
         if glow > 0.01 {
             frame.with_save(|frame| {
                 frame.scale(1.06_f32);
-                frame.fill_text(word_text(text, font_px, color(theme.accent, glow)));
+                frame.fill_text(word_text(text, font_px, color(theme.accent, glow), font));
             });
         }
-        frame.fill_text(word_text(text, font_px, body));
+        frame.fill_text(word_text(text, font_px, body, font));
     });
 }
 
-fn word_text(content: &str, size: f32, color: iced::Color) -> Text {
+fn word_text(content: &str, size: f32, color: iced::Color, font: iced::Font) -> Text {
     Text {
         content: content.to_owned(),
         position: Point::ORIGIN,
         color,
         size: size.into(),
-        font: crate::BOLD,
+        font,
         align_x: iced::widget::text::Alignment::Center,
         align_y: iced::alignment::Vertical::Center,
         ..Text::default()

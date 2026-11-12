@@ -84,6 +84,7 @@ struct Track {
 
 /// A line's reserved box, measured once per layout (`measureMonetLineLayout`).
 struct Measured {
+    keywords: Vec<folia_core::WordColorRange>,
     shaped: Shaped,
     /// Each glyph's ink, `(top, bottom)` from the baseline, for the glow halo.
     ink: Vec<(f32, f32)>,
@@ -123,6 +124,9 @@ pub struct Rail {
 }
 
 struct Ctx<'a> {
+    theme: &'a folia_core::Theme,
+    keywords: bool,
+    typography: crate::Typography,
     lines: &'a [Line],
     lyric_px: f32,
     translation_px: f32,
@@ -134,6 +138,9 @@ struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     fn new(scene: &'a Scene<'_>, layout: &Layout) -> Self {
         Ctx {
+            theme: scene.theme,
+            keywords: scene.tuning.flag(super::tuning::manifest(), "keywordColoringEnabled"),
+            typography: scene.typography,
             lines: &scene.lyrics.lines,
             lyric_px: layout.lyric_px,
             translation_px: layout.translation_px,
@@ -237,7 +244,7 @@ fn tokens(line: &Line) -> Vec<Token> {
 
 /// Rows the way the DOM sets the tokens: each is an `inline-block`, so a row only breaks between them, and a token
 /// wider than the column wraps inside itself.
-fn wrap_tokens(text: &str, shaped: &Shaped, tokens: &[Token], px: f32, width: f32) -> Vec<Span> {
+fn wrap_tokens(text: &str, shaped: &Shaped, tokens: &[Token], px: f32, width: f32, font: iced::Font) -> Vec<Span> {
     let mut rows = Vec::new();
     let mut open: Option<(usize, f32)> = None;
     for token in tokens {
@@ -248,7 +255,7 @@ fn wrap_tokens(text: &str, shaped: &Shaped, tokens: &[Token], px: f32, width: f3
             }
             let piece = text.get(token.start..token.end).unwrap_or_default();
             rows.extend(
-                text::wrap(piece, px, SEMIBOLD, width)
+                text::wrap(piece, px, font, width)
                     .into_iter()
                     .map(|row| Span { start: token.start + row.start, end: token.start + row.end }),
             );
@@ -279,42 +286,56 @@ fn readable(text: &str) -> bool {
 
 fn measure(line: &Line, active: bool, ctx: &Ctx<'_>) -> Measured {
     let px = ctx.lyric_px;
-    let shaped = text::shape(&line.text, px, SEMIBOLD);
+    let shaped = text::shape(&line.text, px, ctx.typography.font(SEMIBOLD));
     if shaped.missing > 0 {
         tracing::warn!(missing = shaped.missing, "monet lyric has glyphs no font covers");
     }
     let tokens = tokens(line);
-    let rows = wrap_tokens(&line.text, &shaped, &tokens, px, ctx.width);
+    let rows = wrap_tokens(&line.text, &shaped, &tokens, px, ctx.width, ctx.typography.font(SEMIBOLD));
     let limit = if active { ACTIVE_ROWS } else { INACTIVE_ROWS };
     let visible = rows.len().min(limit);
     let line_height = px * 1.18;
     let pad_top = (px * 0.16).max(8.0);
     let pad_bottom = (px * 0.34).max(14.0);
     let text_height = visible as f32 * line_height + pad_top + pad_bottom;
-    // `subtitleContentMode` resolves to 'translation': Folia-rust has no romanization switch yet.
-    let track = line.translation.as_deref().filter(|text| active && readable(text)).map(|translation| {
-        let px = ctx.translation_px;
-        let rows: Vec<Span> = text::wrap(translation, px, MEDIUM, ctx.width)
+    let track = ctx
+        .typography
+        .subtitle_mode
+        .single(line)
+        .filter(|text| active && !ctx.typography.hide_subtitle && readable(text))
+        .map(|translation| {
+            let px = ctx.translation_px * ctx.typography.subtitle_scale;
+            let rows: Vec<Span> = text::wrap(
+                translation,
+                px,
+                ctx.typography.subtitle.unwrap_or_else(|| ctx.typography.font(MEDIUM)),
+                ctx.width,
+            )
             .into_iter()
             .map(|row| Span { start: row.start, end: row.end })
             .collect();
-        let shown = rows.len().clamp(1, TRACK_ROWS);
-        let line_height = px * 1.28;
-        let pad_top = (px * 0.45).max(7.0);
-        let height = shown as f32 * line_height + pad_top + (px * 0.18).max(5.0);
-        Track {
-            text: translation.to_owned(),
-            clipped: rows.len() > shown,
-            rows: rows.into_iter().take(shown).collect(),
-            px,
-            line_height,
-            pad_top,
-            height,
-        }
-    });
+            let shown = rows.len().clamp(1, TRACK_ROWS);
+            let line_height = px * 1.28;
+            let pad_top = (px * 0.45).max(7.0);
+            let height = shown as f32 * line_height + pad_top + (px * 0.18).max(5.0);
+            Track {
+                text: translation.to_owned(),
+                clipped: rows.len() > shown,
+                rows: rows.into_iter().take(shown).collect(),
+                px,
+                line_height,
+                pad_top,
+                height,
+            }
+        });
     let height = text_height + track.as_ref().map_or(0.0, |track| track.height);
     let ink = text::ink(&shaped);
     Measured {
+        keywords: if ctx.keywords {
+            folia_core::word_color_ranges(&line.text, &ctx.theme.word_colors)
+        } else {
+            Vec::new()
+        },
         shaped,
         ink,
         tokens,
@@ -333,6 +354,8 @@ impl Rail {
     fn measured(&mut self, ctx: &Ctx<'_>, index: usize, active: bool) -> Rc<Measured> {
         let line = &ctx.lines[index];
         let mut hasher = DefaultHasher::new();
+        ctx.typography.fingerprint().hash(&mut hasher);
+        (&ctx.theme.word_colors, ctx.keywords).hash(&mut hasher);
         (index, line.start.to_bits(), line.end.to_bits(), &line.text, &line.translation, active).hash(&mut hasher);
         (ctx.lyric_px.to_bits(), ctx.translation_px.to_bits(), ctx.width.to_bits()).hash(&mut hasher);
         let key = hasher.finish();
@@ -639,6 +662,14 @@ struct RowInk<'a> {
     opacity: f32,
 }
 
+fn keyword_ink(measured: &Measured, token: &Token, fallback: Color) -> Color {
+    measured
+        .keywords
+        .iter()
+        .find(|entry| entry.range.start < token.end && token.start < entry.range.end)
+        .map_or(fallback, |entry| color(entry.color, fallback.a))
+}
+
 /// A line placed on the rail this frame.
 #[derive(Clone, Copy)]
 struct Placed<'a> {
@@ -706,7 +737,7 @@ impl Paint<'_> {
             let content = line.text.get(row.start..row.end).unwrap_or_default();
             let at =
                 Point::new(origin.x, origin.y + (measured.pad_top + row_index as f32 * measured.line_height) * scale);
-            let pen = ink::Line { content, at, px, line_height, font: SEMIBOLD };
+            let pen = ink::Line { content, at, px, line_height, font: self.scene.typography.font(SEMIBOLD) };
             let band = clip_to(
                 Rectangle { x: block.x, y: at.y - line_height * 0.3, width: block.width, height: line_height * 1.6 },
                 block,
@@ -748,6 +779,7 @@ impl Paint<'_> {
         let time = self.scene.time;
         let mut runs: Vec<(f32, f32, Color)> = Vec::new();
         for token in measured.tokens.iter().filter(|token| token.end > row.start && token.start < row.end) {
+            let word = keyword_ink(measured, token, word);
             let tint = match (token.timing, status) {
                 (Some(_), _) if still => word,
                 (Some(_), Status::Passed) => word,
@@ -779,6 +811,7 @@ impl Paint<'_> {
         let tint = Color { a: if chorus { 1.0 } else { 0.88 }, ..word };
         for token in measured.tokens.iter().filter(|token| token.end > row.start && token.start < row.end) {
             let Some((start, end)) = token.timing else { continue };
+            let tint = keyword_ink(measured, token, tint);
             let lit = motion::glow(time, start, end, render_end) * opacity;
             if lit <= 0.01 {
                 continue;
@@ -817,6 +850,7 @@ impl Paint<'_> {
         let scale = pen.px / self.ctx.lyric_px.max(1.0);
         for token in measured.tokens.iter().filter(|token| token.end > row.start && token.start < row.end) {
             let Some((start, end)) = token.timing else { continue };
+            let word = keyword_ink(measured, token, word);
             if time <= start || time >= end {
                 continue;
             }
@@ -901,8 +935,13 @@ impl Paint<'_> {
         for (index, row) in track.rows.iter().enumerate() {
             let content = track.text.get(row.start..row.end).unwrap_or_default();
             let at = Point::new(origin.x, box_top + (track.pad_top + index as f32 * track.line_height) * scale);
-            let pen =
-                ink::Line { content, at, px: track.px * scale, line_height: track.line_height * scale, font: MEDIUM };
+            let pen = ink::Line {
+                content,
+                at,
+                px: track.px * scale,
+                line_height: track.line_height * scale,
+                font: self.scene.typography.subtitle.unwrap_or_else(|| self.scene.typography.font(MEDIUM)),
+            };
             ink::masked(frame, self.place, pen, tint, region, &mask);
         }
     }

@@ -710,6 +710,15 @@ pub struct View<'a> {
     /// The random pool (style ids), or every style when `None`.
     pub random_pool: Option<&'a [String]>,
     pub all_styles: &'a [Style],
+    pub background: folia_visualizer::Background,
+    pub sora: folia_visualizer::SoraTuning,
+    pub monet: folia_visualizer::monet_background::Tuning,
+    pub nomand: folia_visualizer::nomand::Tuning,
+    pub picture: Option<&'a iced::widget::image::Handle>,
+    /// Geometric shapes of the common background.
+    pub background_shapes: bool,
+    /// Geometric edge vignette of the common background.
+    pub background_vignette: bool,
     pub equalizer_on: bool,
     pub replay_gain: ReplayGainMode,
     pub gain: Option<folia_core::ReplayGain>,
@@ -795,6 +804,14 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
             style_id: view.style_id,
             open,
             audio: view.audio,
+            background: view.background,
+            shapes: view.background_shapes,
+            vignette: view.background_vignette,
+            daylight: view.daylight,
+            sora: view.sora,
+            monet: view.monet,
+            picture: view.picture,
+            nomand: view.nomand,
         };
         let mut place = picker_place(&view, panel.pickers.drawn(), Size::new(panel_w, visual_h), header_h);
         place.origin = (visual_left - x0, visual_top - y0);
@@ -1264,6 +1281,14 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
         style_id: view.style_id,
         open: ink.a,
         audio: view.audio,
+        background: view.background,
+        shapes: view.background_shapes,
+        vignette: view.background_vignette,
+        daylight: view.daylight,
+        sora: view.sora,
+        monet: view.monet,
+        picture: view.picture,
+        nomand: view.nomand,
     };
     let intensity = view.i18n.t(intensity_key(view.theme.intensity));
     let intensity_tip = format!("{}: {}", view.i18n.t("ui.animationIntensity"), intensity);

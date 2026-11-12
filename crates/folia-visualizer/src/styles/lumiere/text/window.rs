@@ -61,6 +61,8 @@ pub struct Decay {
 
 /// What the window is laid out for: one scene unit at one size.
 pub struct Setup {
+    pub font: iced::Font,
+    pub keywords: Vec<folia_core::WordColor>,
     pub width: f32,
     pub height: f32,
     pub region: Region,
@@ -92,6 +94,7 @@ struct Flight {
 }
 
 struct GlyphView {
+    keyword: Option<folia_core::Rgb>,
     timing: GraphemeTiming,
     blank: bool,
     v_rotation: f32,
@@ -319,6 +322,10 @@ impl Window {
         Some([world[0], world[1], self.setup.hero_px * transform.scale * local.scale])
     }
 
+    pub fn keyword(&self, line: usize, glyph: usize) -> Option<folia_core::Rgb> {
+        self.views.get(line)?.as_ref()?.glyphs.get(glyph)?.keyword
+    }
+
     fn prepare_frame(&mut self, lines: &[Line], time: f64) -> Option<(usize, usize, i64)> {
         if lines.len() != self.metas.len() || lines.is_empty() {
             return None;
@@ -479,11 +486,16 @@ impl Window {
         let glyph_alpha = line_alpha * passed_dim * dissolve * (0.35 + 0.65 * local.gather) * guard;
         let revealed = (light.unlit_alpha + illumination * 0.45 + local.flying * 0.4).min(1.0);
         let alpha = glyph_alpha * (revealed * (1.0 - lit) + lit * (0.55 + 0.4 * heat + 0.3 * local.flying).min(1.0));
-        let hot = mix3(light.lit, WHITE, (0.08 * illumination + 0.1 * flash + 0.25 * local.flying).clamp(0.0, 1.0));
+        let keyword_light = glyph.keyword.map_or(light.lit, |keyword| super::keyword_light(light.lit, keyword, 0.6));
+        let hot = mix3(keyword_light, WHITE, (0.08 * illumination + 0.1 * flash + 0.25 * local.flying).clamp(0.0, 1.0));
         let cold = mix3(light.unlit, light.lit, illumination * 0.35);
         let tint = mix3(cold, hot, lit);
         let camera = camera_axes(light.camera);
-        let halo_alpha = glyph_alpha * lit * (0.03 + 0.14 * illumination + 0.08 * flash);
+        let halo_alpha = glyph_alpha
+            * lit
+            * (0.03 + 0.14 * illumination + 0.08 * flash)
+            * if glyph.keyword.is_some() { 1.25 } else { 1.0 };
+        let halo_color = glyph.keyword.map_or(light.lit, |keyword| super::keyword_light(light.lit, keyword, 0.75));
         let halo = if halo_alpha > 0.003 {
             let size = font_px * (2.2 + 0.8 * illumination);
             Sprite {
@@ -491,7 +503,7 @@ impl Window {
                 anchor: through(light.camera, world),
                 pen: [0.0, 0.0],
                 axes: mul(camera, [size, 0.0, 0.0, size * 0.9]),
-                color: [light.lit[0], light.lit[1], light.lit[2], halo_alpha],
+                color: [halo_color[0], halo_color[1], halo_color[2], halo_alpha],
             }
         } else {
             ZERO
@@ -501,7 +513,10 @@ impl Window {
             let at = [world[0] + font_px * glyph.star[0], world[1] + font_px * glyph.star[1]];
             let size = font_px * glyph.star[3] * (0.8 + 0.5 * flash);
             let rotation = glyph.star[2] * (1.0 + (1.0 - flash) * 0.6);
-            let color = mix3(light.lit, WHITE, 0.5);
+            let color = glyph.keyword.map_or_else(
+                || mix3(light.lit, WHITE, 0.5),
+                |keyword| mix3(super::keyword_light(light.lit, keyword, 0.55), WHITE, 0.35),
+            );
             Sprite {
                 mark: Mark::Image(STAR),
                 anchor: through(light.camera, at),
@@ -944,7 +959,7 @@ impl Window {
     fn build_line(&self, index: usize, line: &Line) -> LineView {
         let hero = self.setup.hero_px;
         let meta = &self.metas[index];
-        let glyph_line = glyph_line::build(&line.text, hero * MAX_WORD_SCALE, LETTER_SPACING);
+        let glyph_line = glyph_line::build(&line.text, hero * MAX_WORD_SCALE, LETTER_SPACING, self.setup.font);
         let words = folia_lyrics::word_spans(&line.text);
         let word_seed = format!("{}:{}:{}", self.setup.seed, index, line.text);
         let word_text = |word: &folia_lyrics::WordSpan| {
@@ -973,9 +988,10 @@ impl Window {
             })
             .collect();
         let limits = [self.max_width_of(Type::Horizontal), self.column_cap];
-        let flow = wrap::flow_line(&flow_glyphs, &words, hero, LETTER_SPACING, limits);
+        let flow = wrap::flow_line(&flow_glyphs, &words, hero, LETTER_SPACING, limits, self.setup.font);
         let seed = hash_text(FNV, &format!("{}:window", self.setup.seed));
         let mut rng = Rng(seed.wrapping_add(meta.random_offset.wrapping_mul(0x6d2b_79f5)));
+        let keywords = folia_core::word_color_ranges(&line.text, &self.setup.keywords);
         let glyphs = glyph_line
             .graphemes
             .iter()
@@ -983,7 +999,13 @@ impl Window {
             .map(|(at, grapheme)| {
                 let timing =
                     meta.timings.get(at).copied().unwrap_or(GraphemeTiming { start: line.start, end: line.end });
-                glyph_view(&mut rng, hero, timing, grapheme.blank, grapheme.upright, flow_glyphs[at].scale)
+                let mut glyph =
+                    glyph_view(&mut rng, hero, timing, grapheme.blank, grapheme.upright, flow_glyphs[at].scale);
+                glyph.keyword = keywords
+                    .iter()
+                    .find(|entry| entry.range.start < grapheme.text.end && grapheme.text.start < entry.range.end)
+                    .map(|entry| entry.color);
+                glyph
             })
             .collect();
         let jitter = (rng.next() - 0.5) * 0.16;
@@ -1042,6 +1064,7 @@ fn glyph_view(rng: &mut Rng, hero: f32, timing: GraphemeTiming, blank: bool, upr
     ];
     let drift = [angle.cos(), angle.sin(), 0.6 + rng.next() * 0.9, (rng.next() - 0.5) * 2.0];
     GlyphView {
+        keyword: None,
         timing,
         blank,
         v_rotation: if upright { 0.0 } else { PI / 2.0 },

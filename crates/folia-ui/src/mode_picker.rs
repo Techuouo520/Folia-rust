@@ -6,7 +6,7 @@ use std::time::Instant;
 use folia_core::{Lyrics, Theme};
 use folia_i18n::I18n;
 use folia_render::Plate;
-use folia_visualizer::{Ease, Scene, Style};
+use folia_visualizer::{Ease, Ground, Scene, Style, background_view};
 use iced::widget::{button, canvas, column, container, mouse_area, row, scrollable, shader, space, stack, svg};
 use iced::{Alignment, Background, Border, Color, Element, Length, Size};
 use lucide_static_svg::Icon;
@@ -95,6 +95,14 @@ pub struct Look<'a> {
     /// Panel opacity while it opens and closes.
     pub open: f32,
     pub audio: &'a folia_core::AudioFrame,
+    pub background: folia_visualizer::Background,
+    pub shapes: bool,
+    pub vignette: bool,
+    pub daylight: bool,
+    pub sora: folia_visualizer::SoraTuning,
+    pub monet: folia_visualizer::monet_background::Tuning,
+    pub nomand: folia_visualizer::nomand::Tuning,
+    pub picture: Option<&'a iced::widget::image::Handle>,
 }
 
 impl Pickers {
@@ -365,6 +373,7 @@ impl Pickers {
                 } else {
                     folia_visualizer::POSTER_TIME
                 };
+                let show = style.shows_shared_background();
                 let scene = Scene {
                     style: *style,
                     lyrics: &self.preview,
@@ -374,18 +383,43 @@ impl Pickers {
                     seed: "style-picture-lumiere",
                     stage: Some(Size::new(folia_visualizer::STAGE_WIDTH, folia_visualizer::STAGE_HEIGHT)),
                     tuning: folia_visualizer::Values::default(),
-                    backdrop: true,
+                    backdrop: !show,
                     title: self.preview.title.clone().unwrap_or_default(),
                     artist: self.preview.artist.clone().unwrap_or_default(),
                     album: String::new(),
                     portrait: None,
+                    typography: folia_visualizer::Typography::default(),
                     preview: true,
                     audio: look.audio,
                 };
-                if hovered {
+                let lyric: Element<'a, crate::panel::Message> = if hovered {
                     canvas(folia_visualizer::Playing(scene)).width(Length::Fill).height(Length::Fill).into()
                 } else {
                     canvas(self.pictures.frozen(scene)).width(Length::Fill).height(Length::Fill).into()
+                };
+                if show {
+                    let ground = Ground {
+                        mode: look.background,
+                        seed: "style-picture-lumiere",
+                        time,
+                        theme: look.theme,
+                        audio: look.audio,
+                        shapes: look.shapes,
+                        vignette: look.vignette,
+                        publish: false,
+                        paused: !hovered,
+                        player: false,
+                        cover: &[],
+                        latent: folia_visualizer::LatentTuning::DEFAULT,
+                        daylight: look.daylight,
+                        sora: look.sora,
+                        monet: look.monet,
+                        picture: look.picture,
+                        nomand: look.nomand,
+                    };
+                    stack![background_view(ground), lyric].into()
+                } else {
+                    lyric
                 }
             }
             (Row::Style, None) => container(icon(Icon::Shuffle, 28.0, fade(tokens.accent))).center(Length::Fill).into(),

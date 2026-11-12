@@ -30,6 +30,9 @@ const RANK_AREA_WEIGHT: f32 = 0.35;
 /// Pixel budget of the decoded tile covers: three 1920×1080 screens of tiles at the 0.76 wall scale
 /// (about 14 MB of RGBA each), so panning back and forth does not decode again.
 const COVER_BYTES: usize = 48 * 1024 * 1024;
+const THUMBNAIL_BYTES: usize = 32 * 1024 * 1024;
+const THUMBNAIL_SIDE: u32 = 64;
+const COVER_JOBS: usize = 6;
 /// `COVER_SIZE_STEPS`: covers are asked for and decoded at the smallest step that covers the tile.
 const COVER_STEPS: [u32; 3] = [256, 512, 1024];
 /// `FIELD_ASPECT`: the repeat period of the edgeless wall is about this much wider than tall.
@@ -211,7 +214,20 @@ pub enum Message {
     Settled(Release),
     /// A click at a point on the untilted wall: on a tile (`activate`), or where no tile is.
     Press(Option<(usize, SlotId)>, Point),
-    CoversLoaded(Vec<(i64, Option<Cover>)>),
+    CoverLoaded {
+        id: i64,
+        ticket: u64,
+        source: CoverSource,
+        px: u32,
+        cover: Option<Cover>,
+    },
+    RetryCovers(u64),
+}
+
+struct CoverRequest {
+    ticket: u64,
+    px: u32,
+    _handle: iced::task::Handle,
 }
 
 pub struct Wall {
@@ -224,9 +240,12 @@ pub struct Wall {
     viewport: Size,
     pan: Vector,
     covers: CoverCache<i64, Handle>,
-    pending: HashSet<i64>,
-    /// Remote cover downloads in flight; a new layout aborts them.
-    downloads: Vec<iced::task::Handle>,
+    thumbnails: CoverCache<i64, Handle>,
+    cover_sources: HashMap<i64, CoverSource>,
+    cover_failures: HashMap<i64, (Instant, u32)>,
+    cover_retry: Option<(u64, Instant, iced::task::Handle)>,
+    pending: HashMap<i64, CoverRequest>,
+    next_cover_ticket: u64,
     seam_open: f32,
     anchor_x: f32,
     anchor_y: f32,
@@ -325,8 +344,12 @@ impl Wall {
             viewport: Size::ZERO,
             pan: Vector::ZERO,
             covers: CoverCache::new(COVER_BYTES),
-            pending: HashSet::new(),
-            downloads: Vec::new(),
+            thumbnails: CoverCache::new(THUMBNAIL_BYTES),
+            cover_sources: HashMap::new(),
+            cover_failures: HashMap::new(),
+            cover_retry: None,
+            pending: HashMap::new(),
+            next_cover_ticket: 0,
             seam_open: 0.0,
             anchor_x: SEAM_ANCHOR,
             anchor_y: SEAM_ANCHOR,
@@ -410,9 +433,20 @@ impl Wall {
         self.glide = None;
         self.labels.clear();
         self.pending.clear();
-        for download in self.downloads.drain(..) {
-            download.abort();
+        self.cover_retry = None;
+        for tile in tiles {
+            if self.cover_sources.get(&tile.id).is_some_and(|source| source != &tile.cover) {
+                self.covers.remove(&tile.id);
+                self.thumbnails.remove(&tile.id);
+                self.cover_failures.remove(&tile.id);
+            }
+            self.cover_sources.insert(tile.id, tile.cover.clone());
         }
+        let current: HashSet<_> = tiles.iter().map(|tile| tile.id).collect();
+        self.cover_sources.retain(|id, _| {
+            current.contains(id) || self.covers.peek(id).is_some() || self.thumbnails.peek(id).is_some()
+        });
+        self.cover_failures.retain(|id, _| current.contains(id));
         self.refresh();
         let task = self.show_visible(tiles, omni);
         self.start_shift(tiles);
@@ -446,7 +480,7 @@ impl Wall {
                 continue;
             }
             let Some(tile) = tiles.get(placement.track) else { continue };
-            let loaded = self.covers.peek(&tile.id);
+            let loaded = self.cover_ref(tile.id);
             ghosts.push(Ghost {
                 rect,
                 index: placement.track,
@@ -563,15 +597,48 @@ impl Wall {
                 self.pressed = at;
                 (Task::none(), Some(hit))
             }
-            Message::CoversLoaded(covers) => {
-                for (id, cover) in covers {
-                    self.pending.remove(&id);
-                    let bytes = cover.as_ref().map_or(0, |cover| cover.rgba.len());
-                    let handle = cover.map(|cover| Handle::from_rgba(cover.width, cover.height, cover.rgba));
-                    self.covers.insert(id, handle, bytes);
+            Message::CoverLoaded { id, ticket, source, px, cover } => {
+                if self.cover_sources.get(&id) != Some(&source) {
+                    return (Task::none(), None);
                 }
-                self.downloads.retain(|download| !download.is_aborted());
-                (Task::none(), None)
+                let current = self.pending.get(&id).is_some_and(|request| request.ticket == ticket);
+                if current {
+                    self.pending.remove(&id);
+                }
+                match cover {
+                    Some(cover) if px == THUMBNAIL_SIDE => {
+                        self.cover_failures.remove(&id);
+                        let bytes = cover.rgba.len();
+                        self.thumbnails.insert(
+                            id,
+                            Some(Handle::from_rgba(cover.width, cover.height, cover.rgba)),
+                            bytes,
+                        );
+                    }
+                    Some(cover) if current => {
+                        self.cover_failures.remove(&id);
+                        let bytes = cover.rgba.len();
+                        self.covers.insert(id, Some(Handle::from_rgba(cover.width, cover.height, cover.rgba)), bytes);
+                    }
+                    None if current && matches!(source, CoverSource::Remote(_)) => {
+                        let attempts = self.cover_failures.get(&id).map_or(0, |(_, attempts)| *attempts);
+                        let seconds = (5u64 << attempts.min(4)).min(60);
+                        self.cover_failures.insert(
+                            id,
+                            (Instant::now() + std::time::Duration::from_secs(seconds), attempts.saturating_add(1)),
+                        );
+                    }
+                    None if current => self.covers.insert(id, None, 0),
+                    _ => {}
+                }
+                (self.load_visible(tiles, omni), None)
+            }
+            Message::RetryCovers(ticket) => {
+                if self.cover_retry.as_ref().is_none_or(|(current, ..)| *current != ticket) {
+                    return (Task::none(), None);
+                }
+                self.cover_retry = None;
+                (self.load_visible(tiles, omni), None)
             }
         }
     }
@@ -617,54 +684,105 @@ impl Wall {
     /// Fetches covers for the tiles on screen that have none yet, nearest the middle of the window first.
     /// A cover is decoded square at a size step and cropped to each slot as it is drawn.
     fn load_visible(&mut self, tiles: &[Tile], omni: Option<&Omni>) -> Task<Message> {
+        let now = Instant::now();
         let scale = wall_scale(self.viewport.width);
         let middle = Point::new(self.viewport.width / 2.0, self.viewport.height / 2.0);
         let mut wanted: Vec<(f32, i64, CoverSource, u32)> = Vec::new();
+        let visible: HashSet<_> =
+            self.shown.iter().filter_map(|placement| tiles.get(placement.track)).map(|tile| tile.id).collect();
+        // Let one small offscreen request finish and populate the persistent cache during fast panning.
+        let mut completing = false;
+        self.pending.retain(|id, request| {
+            if request.px == THUMBNAIL_SIDE && self.thumbnails.peek(id).is_some() {
+                return false;
+            }
+            if visible.contains(id) {
+                return true;
+            }
+            if request.px == THUMBNAIL_SIDE && !completing {
+                completing = true;
+                return true;
+            }
+            false
+        });
         self.covers.begin_pass();
         for placement in &self.shown {
             let Some(tile) = tiles.get(placement.track) else { continue };
             self.covers.touch(&tile.id);
-            if tile.heading || self.covers.peek(&tile.id).is_some() || self.pending.contains(&tile.id) {
+            self.thumbnails.touch(&tile.id);
+            if tile.heading || self.covers.peek(&tile.id).is_some() || self.pending.contains_key(&tile.id) {
+                continue;
+            }
+            if self.cover_failures.get(&tile.id).is_some_and(|(until, _)| *until > now) {
                 continue;
             }
             if let Some(entry) = wanted.iter_mut().find(|entry| entry.1 == tile.id) {
-                entry.3 = entry.3.max(cover_step(placement.rect.width.max(placement.rect.height) * scale));
+                if entry.3 != THUMBNAIL_SIDE {
+                    entry.3 = entry.3.max(cover_step(placement.rect.width.max(placement.rect.height) * scale));
+                }
                 continue;
             }
             let distance = self.screen(placement.rect).center().distance(middle);
-            let px = cover_step(placement.rect.width.max(placement.rect.height) * scale);
+            let px = if self.thumbnails.peek(&tile.id).is_some() {
+                cover_step(placement.rect.width.max(placement.rect.height) * scale)
+            } else {
+                THUMBNAIL_SIDE
+            };
             wanted.push((distance, tile.id, tile.cover.clone(), px));
         }
-        wanted.sort_by(|a, b| a.0.total_cmp(&b.0));
+        wanted.sort_by(|a, b| (a.3 != THUMBNAIL_SIDE).cmp(&(b.3 != THUMBNAIL_SIDE)).then_with(|| a.0.total_cmp(&b.0)));
+        self.covers.end_pass();
         let mut tasks = Vec::new();
-        let mut local = Vec::new();
         for (_, id, cover, px) in wanted {
-            match cover {
-                CoverSource::Local(path) => {
-                    self.pending.insert(id);
-                    local.push((id, path, px));
-                }
-                CoverSource::Remote(url) => {
-                    let Some(omni) = omni.cloned() else {
+            if self.pending.len() >= COVER_JOBS {
+                break;
+            }
+            self.next_cover_ticket = self.next_cover_ticket.wrapping_add(1);
+            let ticket = self.next_cover_ticket;
+            let source = cover.clone();
+            let task =
+                match cover {
+                    CoverSource::Local(path) => Task::perform(
+                        async move { blocking(move || folia_library::cover_for(&path, px, px)).await.flatten() },
+                        move |cover| Message::CoverLoaded { id, ticket, source: source.clone(), px, cover },
+                    ),
+                    CoverSource::Remote(url) => {
+                        let Some(omni) = omni.cloned() else {
+                            self.covers.insert(id, None, 0);
+                            continue;
+                        };
+                        Task::perform(crate::background::online_cover(omni, url, px), move |cover| {
+                            Message::CoverLoaded { id, ticket, source: source.clone(), px, cover }
+                        })
+                    }
+                    CoverSource::None => {
                         self.covers.insert(id, None, 0);
                         continue;
-                    };
-                    self.pending.insert(id);
-                    let (task, handle) = Task::perform(crate::background::online_cover(omni, url, px), move |cover| {
-                        Message::CoversLoaded(vec![(id, cover)])
+                    }
+                };
+            let (task, handle) = task.abortable();
+            self.pending.insert(id, CoverRequest { ticket, px, _handle: handle.abort_on_drop() });
+            tasks.push(task);
+        }
+        let retry = self
+            .cover_failures
+            .iter()
+            .filter(|(id, (until, _))| visible.contains(id) && *until > now)
+            .map(|(_, (until, _))| *until)
+            .min();
+        if self.cover_retry.as_ref().map(|(_, until, _)| *until) != retry {
+            self.cover_retry = None;
+            if let Some(until) = retry {
+                self.next_cover_ticket = self.next_cover_ticket.wrapping_add(1);
+                let ticket = self.next_cover_ticket;
+                let (task, handle) =
+                    Task::perform(async move { tokio::time::sleep_until(until.into()).await }, move |()| {
+                        Message::RetryCovers(ticket)
                     })
                     .abortable();
-                    self.downloads.push(handle);
-                    tasks.push(task);
-                }
-                CoverSource::None => self.covers.insert(id, None, 0),
+                self.cover_retry = Some((ticket, until, handle.abort_on_drop()));
+                tasks.push(task);
             }
-        }
-        if !local.is_empty() {
-            let work = blocking(move || {
-                local.into_iter().map(|(id, path, px)| (id, folia_library::cover_for(&path, px, px))).collect()
-            });
-            tasks.push(Task::perform(work, |covers| Message::CoversLoaded(covers.unwrap_or_default())));
         }
         Task::batch(tasks)
     }
@@ -1043,7 +1161,7 @@ impl canvas::Program<Message> for WallProgram<'_> {
             } else {
                 self.wall.art(placement, item, rect, Some(placement.slot) == keyboard || self.playing == Some(item.id))
             };
-            let loaded = self.wall.covers.peek(&item.id);
+            let loaded = self.wall.cover_ref(item.id);
             let tile = Drawn {
                 rect,
                 index: placement.track,
@@ -1160,16 +1278,9 @@ fn color_of(color: Color) -> [f32; 4] {
     [color.r, color.g, color.b, 1.0]
 }
 
-/// `fallbackBackground` is painted only for an item without a cover address. A cover still loading, or one that
-/// would not load, leaves the bare poster ground (`--lattice-poster-background`) under the shade and the copy, and
-/// is swapped in at once when decoded, as a CSS background image is. A local file whose tags hold no picture has no
-/// cover address in the original.
-fn shows_fallback(tile: &Tile, loaded: Option<&Option<Handle>>) -> bool {
-    match tile.cover {
-        CoverSource::None => true,
-        CoverSource::Local(_) => matches!(loaded, Some(None)),
-        CoverSource::Remote(_) => false,
-    }
+// Keep the tile's seeded gradient visible until its cover is available.
+fn shows_fallback(_tile: &Tile, loaded: Option<&Option<Handle>>) -> bool {
+    loaded.and_then(Option::as_ref).is_none()
 }
 
 fn same_place(a: Rectangle, b: Rectangle) -> bool {
@@ -1795,7 +1906,16 @@ impl Wall {
 
     /// A tile's cover once it has arrived.
     pub fn cover(&self, id: i64) -> Option<Handle> {
-        self.covers.peek(&id).and_then(Option::as_ref).cloned()
+        self.cover_ref(id).and_then(Option::as_ref).cloned()
+    }
+
+    fn cover_ref(&self, id: i64) -> Option<&Option<Handle>> {
+        self.covers.peek(&id).filter(|cover| cover.is_some()).or_else(|| self.thumbnails.peek(&id))
+    }
+
+    /// CPU-side decoded cover bytes, for the wall's memory budget diagnostics.
+    pub fn cover_memory(&self) -> usize {
+        self.covers.used_bytes() + self.thumbnails.used_bytes()
     }
 
     /// `page`: 85% of the window up or down.
@@ -1844,7 +1964,7 @@ impl Wall {
             } else {
                 self.art(placement, item, rect, Some(placement.slot) == self.focus.keyboard())
             };
-            let loaded = self.covers.peek(&item.id);
+            let loaded = self.cover_ref(item.id);
             let (image, uv, shade_kind) = glass_art(&art, loaded.and_then(Option::as_ref), rect, item.heading);
             let index = image.map(|handle| push_cover(&mut images, handle)).unwrap_or(u32::MAX);
             let (color0, color1) = if index == u32::MAX && shows_fallback(item, loaded) {

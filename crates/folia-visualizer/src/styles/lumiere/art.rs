@@ -145,6 +145,79 @@ pub fn art_seed(program: &super::program::Program, index: usize, kind: &str) -> 
     super::program::shot_stream(program, index, kind, b":art")
 }
 
+/// Places the theme's Lucide outlines outside the lyric region, following `themeIcons.ts`.
+pub fn icons(aspect: f32, seed: u32, offset: usize, avoid: &Profile, names: &[String], mesh: &mut Mesh) {
+    let outlines: Vec<_> = names.iter().filter_map(|name| crate::theme_icons::outline(name)).collect();
+    if outlines.is_empty() {
+        return;
+    }
+    let mut rng = Rng(seed);
+    let count = 2 + usize::from(rng.next() < 0.5);
+    let mut placed: Vec<(f32, f32, f32, f32, usize)> = Vec::new();
+    for index in 0..count {
+        let size = 0.085 + rng.next() * 0.045;
+        let rotation = (rng.next() - 0.5) * 0.3;
+        let half = size * 0.72;
+        for _ in 0..48 {
+            let x = 0.05 + half + rng.next() * (aspect - 2.0 * (0.05 + half)).max(0.0);
+            let y = 0.05 + half + rng.next() * (1.0 - 2.0 * (0.05 + half)).max(0.0);
+            if (x - avoid.region_cx * aspect).abs() < half + avoid.region_w * aspect / 2.0 + 0.05
+                && (y - avoid.region_cy).abs() < half + avoid.region_h / 2.0 + 0.05
+            {
+                continue;
+            }
+            if placed.iter().any(|(px, py, ps, _, _)| (x - px).hypot(y - py) < (size + ps) * 0.9) {
+                continue;
+            }
+            placed.push((x, y, size, rotation, (offset + index) % outlines.len()));
+            break;
+        }
+    }
+    for (index, (x, y, size, rotation, icon)) in placed.into_iter().enumerate() {
+        let start = 0.18 + index as f32 * 0.12;
+        let strokes: Vec<Vec<[f32; 2]>> = outlines[icon]
+            .iter()
+            .map(|stroke| {
+                stroke
+                    .iter()
+                    .map(|point| {
+                        let px = (point[0] - 12.0) * size / 24.0;
+                        let py = (point[1] - 12.0) * size / 24.0;
+                        [x + px * rotation.cos() - py * rotation.sin(), y + px * rotation.sin() + py * rotation.cos()]
+                    })
+                    .collect()
+            })
+            .collect();
+        for (n, points) in strokes.iter().enumerate() {
+            mesh.path(
+                points,
+                Pen {
+                    width: 0.0013,
+                    alpha: 0.5,
+                    delay: start + n.min(8) as f32 * 0.035,
+                    span: 0.32,
+                    dash_on: 0.0,
+                    dash_off: 0.0,
+                },
+            );
+        }
+        let length = |points: &Vec<[f32; 2]>| {
+            points.windows(2).map(|pair| (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1])).sum::<f32>()
+        };
+        if let Some(at) =
+            strokes.iter().max_by(|a, b| length(a).total_cmp(&length(b))).and_then(|points| points.first())
+        {
+            mesh.nodes.push(Node { x: at[0], y: at[1], size: 0.02, delay: start + 0.08, phase: rng.next() * TAU });
+        }
+        if strokes.len() > 1 {
+            let other = (rng.next() * strokes.len() as f32) as usize;
+            if let Some(at) = strokes.get(other).and_then(|points| points.last()) {
+                mesh.nodes.push(Node { x: at[0], y: at[1], size: 0.015, delay: start + 0.3, phase: rng.next() * TAU });
+            }
+        }
+    }
+}
+
 /// The diagram for this shot. `seed` is the art stream, separate from the light stream.
 pub fn build(profile: &Profile, aspect: f32, seed: u32, mesh: &mut Mesh) {
     mesh.clear();

@@ -17,10 +17,13 @@ folia-store.workspace = true
 folia-render.workspace = true
 folia-visualizer.workspace = true
 iced.workspace = true
+image.workspace = true
 lucide-static-svg.workspace = true
 open.workspace = true
 rfd.workspace = true
 tracing.workspace = true
+toml.workspace = true
+tokio.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 device_query.workspace = true

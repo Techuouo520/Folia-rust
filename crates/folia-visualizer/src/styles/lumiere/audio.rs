@@ -49,8 +49,5 @@ fn smooth(current: f32, target: f32, dt: f64) -> f32 {
 }
 
 pub fn wall_ms() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs_f64() * 1000.0)
-        .unwrap_or(0.0)
+    crate::clock::wall_ms()
 }

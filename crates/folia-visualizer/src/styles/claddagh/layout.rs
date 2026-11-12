@@ -35,16 +35,33 @@ pub struct Glyph {
 }
 
 pub fn placed(line: &Line, font_px: f32, radius: f32, spacing_scale: f64, letter_offset: f32) -> Vec<Placed> {
-    let mut marks = timeline::line_marks(line);
-    timeline::adjust(&mut marks, line.start, line.end);
-    place_marks(&marks, font_px, radius, spacing_scale, letter_offset)
+    placed_with_font(line, font_px, radius, spacing_scale, letter_offset, crate::BOLD)
 }
 
-pub fn place_marks(marks: &[Mark], font_px: f32, radius: f32, spacing_scale: f64, letter_offset: f32) -> Vec<Placed> {
+pub fn placed_with_font(
+    line: &Line,
+    font_px: f32,
+    radius: f32,
+    spacing_scale: f64,
+    letter_offset: f32,
+    font: iced::Font,
+) -> Vec<Placed> {
+    let mut marks = timeline::line_marks(line);
+    timeline::adjust(&mut marks, line.start, line.end);
+    place_marks(&marks, font_px, radius, spacing_scale, letter_offset, font)
+}
+
+pub fn place_marks(
+    marks: &[Mark],
+    font_px: f32,
+    radius: f32,
+    spacing_scale: f64,
+    letter_offset: f32,
+    font: iced::Font,
+) -> Vec<Placed> {
     if marks.is_empty() {
         return Vec::new();
     }
-    let font = iced::Font { weight: iced::font::Weight::Bold, ..iced::Font::DEFAULT };
     let mut offsets = Vec::with_capacity(marks.len() + 1);
     offsets.push(0.0);
     let mut prefix = String::new();

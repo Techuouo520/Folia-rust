@@ -43,6 +43,50 @@ pub fn cover_rgba(bytes: &[u8], width: u32, height: u32) -> Result<Cover, image:
     Ok(Cover { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
 }
 
+/// A small decoded preview cached beside an image in the application's cover cache directory.
+pub fn cached_cover_thumbnail(path: &Path, side: u32) -> Result<Cover, image::ImageError> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let cached = path.with_extension(format!("thumb-{side}-v1.png"));
+    if let Ok(bytes) = std::fs::read(&cached)
+        && let Ok(cover) = cover_rgba(&bytes, side, side)
+    {
+        return Ok(cover);
+    }
+    let bytes = std::fs::read(path)?;
+    let cover = cover_rgba(&bytes, side, side)?;
+    let temporary =
+        cached.with_extension(format!("{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let save = image::save_buffer_with_format(
+        &temporary,
+        &cover.rgba,
+        cover.width,
+        cover.height,
+        image::ColorType::Rgba8,
+        image::ImageFormat::Png,
+    )
+    .and_then(|()| std::fs::rename(&temporary, &cached).map_err(image::ImageError::IoError));
+    if let Err(err) = save {
+        tracing::warn!(error = &err as &dyn std::error::Error, "cover thumbnail cache write failed");
+        if let Err(err) = std::fs::remove_file(&temporary)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(error = &err as &dyn std::error::Error, "cover thumbnail temporary file cleanup failed");
+        }
+    }
+    Ok(cover)
+}
+
+/// Decodes the whole cover without cropping, limiting its longest edge for full-window backgrounds.
+pub fn cover_uncropped(bytes: &[u8], max_edge: u32) -> Result<Cover, image::ImageError> {
+    let image = image::load_from_memory(bytes)?;
+    let edge = max_edge.max(1);
+    let image =
+        if image.width().max(image.height()) > edge { image.resize(edge, edge, FilterType::Triangle) } else { image };
+    let rgba = image.into_rgba8();
+    Ok(Cover { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+}
+
 /// Crops the centre to the target's aspect ratio, then shrinks it to the target; never enlarges.
 fn fill(image: DynamicImage, width: u32, height: u32) -> DynamicImage {
     let (source_width, source_height) = (image.width(), image.height());
@@ -105,6 +149,18 @@ impl<K: PartialEq, V> CoverCache<K, V> {
         self.pass = Some(self.pass.map_or(1, |pass| pass + 1));
     }
 
+    /// Finishes marking visible images and releases old pixels even if no new image arrives.
+    pub fn end_pass(&mut self) {
+        while self.used > self.limit {
+            let Some(index) = self.entries.iter().position(|entry| self.pass.is_none_or(|pass| entry.3 != pass)) else {
+                break;
+            };
+            if let Some((_, _, bytes, _)) = self.entries.remove(index) {
+                self.used -= bytes;
+            }
+        }
+    }
+
     /// Marks `key` as just used so it is kept longest.
     pub fn touch(&mut self, key: &K) {
         if let Some(at) = self.entries.iter().position(|(k, ..)| k == key)
@@ -137,6 +193,14 @@ impl<K: PartialEq, V> CoverCache<K, V> {
     pub fn clear(&mut self) {
         self.entries.clear();
         self.used = 0;
+    }
+
+    pub fn remove(&mut self, key: &K) {
+        if let Some(index) = self.entries.iter().position(|(id, ..)| id == key)
+            && let Some((_, _, bytes, _)) = self.entries.remove(index)
+        {
+            self.used -= bytes;
+        }
     }
 
     /// Bytes of pixels held now.

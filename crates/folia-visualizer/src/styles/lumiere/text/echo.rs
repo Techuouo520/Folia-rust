@@ -23,6 +23,7 @@ const MAX_SCALE: f32 = 1.5;
 const FNV: u32 = 2_166_136_261;
 
 struct Piece {
+    keyword: Option<folia_core::Rgb>,
     grapheme: usize,
     blank: bool,
     /// Center offset in the word, set once the line is shaped.
@@ -56,6 +57,7 @@ struct EchoLine {
 }
 
 pub struct Echo {
+    font: iced::Font,
     fragments: Vec<Fragment>,
     lines: Vec<EchoLine>,
     font_px: f32,
@@ -65,12 +67,22 @@ pub struct Echo {
 
 impl Echo {
     /// Draws every random value at once, in the original order; nothing is shaped yet.
-    pub fn new(lines: &[Line], seed: &str, font_px: f32, opacity: f32, aspect: f32) -> Self {
+    pub fn new(
+        lines: &[Line],
+        seed: &str,
+        font_px: f32,
+        opacity: f32,
+        aspect: f32,
+        keywords: &[folia_core::WordColor],
+        font: iced::Font,
+    ) -> Self {
         let mut rng = Rng(hash_text(FNV, &format!("{seed}:echo")));
         let mut fragments = Vec::new();
         let mut echo_lines = Vec::new();
         for (index, line) in lines.iter().enumerate() {
-            let count = folia_lyrics::graphemes(&line.text).len();
+            let ranges = folia_lyrics::graphemes(&line.text);
+            let count = ranges.len();
+            let colors = folia_core::word_color_ranges(&line.text, keywords);
             let timings = folia_lyrics::grapheme_timeline(line);
             let first = fragments.len();
             for word in folia_lyrics::word_spans(&line.text) {
@@ -93,6 +105,14 @@ impl Echo {
                 for grapheme in word.start..end {
                     let angle = rng.next() * std::f32::consts::TAU;
                     fragment.pieces.push(Piece {
+                        keyword: ranges
+                            .get(grapheme)
+                            .and_then(|range| {
+                                colors
+                                    .iter()
+                                    .find(|color| color.range.start < range.end && range.start < color.range.end)
+                            })
+                            .map(|color| color.color),
                         grapheme,
                         blank: false,
                         offset: 0.0,
@@ -109,7 +129,7 @@ impl Echo {
             let to = births.reduce(f64::max).unwrap_or(from);
             echo_lines.push(EchoLine { index, fragments: first..fragments.len(), from, to, layout: None });
         }
-        Self { fragments, lines: echo_lines, font_px, opacity, aspect }
+        Self { font, fragments, lines: echo_lines, font_px, opacity, aspect }
     }
 
     /// Shapes lines whose fragments are showing (one line a frame ahead of time) and drops lines that are done.
@@ -130,7 +150,7 @@ impl Echo {
                 budget -= 1;
             }
             let Some(line) = lines.get(echo_line.index) else { continue };
-            let layout = glyph_line::build(&line.text, self.font_px, LETTER_SPACING);
+            let layout = glyph_line::build(&line.text, self.font_px, LETTER_SPACING, self.font);
             for fragment in &mut self.fragments[echo_line.fragments.clone()] {
                 place(fragment, &layout);
             }
@@ -171,6 +191,8 @@ impl Echo {
             let lit = beams::compress(beams::light_at(light.beams, x / height, y / height));
             let color = [light.light[0], light.light[1], light.light[2], alpha * (0.05 + 0.4 * lit)];
             for piece in &fragment.pieces {
+                let rgb = piece.keyword.map_or(light.light, |keyword| super::keyword_light(light.light, keyword, 0.3));
+                let color = [rgb[0], rgb[1], rgb[2], color[3]];
                 if piece.blank {
                     continue;
                 }

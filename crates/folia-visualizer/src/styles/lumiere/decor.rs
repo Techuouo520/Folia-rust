@@ -67,6 +67,7 @@ pub(super) struct BurstRef {
 
 #[derive(Default)]
 pub(super) struct Store {
+    icons: Vec<String>,
     mesh: Mesh,
     lines: Vec<f32>,
     particles: Vec<f32>,
@@ -81,6 +82,11 @@ pub(super) struct Store {
 }
 
 impl Store {
+    pub(super) fn invalidate(&mut self) {
+        self.key = None;
+        self.front_key = None;
+    }
+
     pub(super) fn ensure(&mut self, lyric: u32, lyrics: &Lyrics, program: &Program) {
         let key = lyric ^ program::hash_text(2_166_136_261, &program.seed);
         if self.burst_seed == Some(key) {
@@ -122,7 +128,12 @@ impl Store {
         view: &View,
         time: f64,
         tuning: Tuning,
+        icons: &[String],
     ) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+        if self.icons != icons {
+            self.icons = icons.to_vec();
+            self.key = None;
+        }
         let key = geo_key(program, view, time, tuning);
         if self.key == Some(key) {
             return (None, None);
@@ -134,7 +145,7 @@ impl Store {
             fill_stars(&mut self.particles, program, view, time, tuning);
             fill_rain(&mut self.particles, program, view, time);
             self.split[0] = (self.particles.len() / 12) as u32;
-            if tuning.line_art {
+            if tuning.line_art || tuning.theme_icons {
                 self.append_art(program, view, time, tuning);
             }
             self.split[1] = (self.particles.len() / 12) as u32;
@@ -193,7 +204,26 @@ impl Store {
         let profile = &PROFILES[shot.profile];
         let Some(window) = art_window(program, index, tuning) else { return };
         self.mesh.clear();
-        art::build(profile, aspect, art::art_seed(program, index, profile.kind), &mut self.mesh);
+        if tuning.line_art {
+            art::build(profile, aspect, art::art_seed(program, index, profile.kind), &mut self.mesh);
+            self.append_mesh(&window);
+        }
+        if tuning.theme_icons {
+            self.mesh.clear();
+            let lead = &PROFILES[unit_lead(program, shot.start)];
+            art::icons(
+                aspect,
+                program::shot_stream(program, index, profile.kind, b":icons"),
+                index * 2,
+                lead,
+                &self.icons,
+                &mut self.mesh,
+            );
+            self.append_mesh(&Window { gain: 1.0, ..window });
+        }
+    }
+
+    fn append_mesh(&mut self, window: &Window) {
         art::write_lines(&self.mesh, window.begin, window.end, window.gain, &mut self.lines);
         for node in &self.mesh.nodes {
             if self.particles.len() / 12 >= MAX_PARTICLES as usize {
@@ -524,7 +554,10 @@ fn geo_key(program: &Program, view: &View, time: f64, tuning: Tuning) -> GeoKey 
         seed: program::hash_text(2_166_136_261, &program.seed),
         amount: tuning.mote_amount.to_bits(),
         opening: clock.opening.to_bits(),
-        flags: u32::from(tuning.line_art) | (u32::from(tuning.text_only) << 1) | (u32::from(clock.on) << 2),
+        flags: u32::from(tuning.line_art)
+            | (u32::from(tuning.text_only) << 1)
+            | (u32::from(clock.on) << 2)
+            | (u32::from(tuning.theme_icons) << 3),
     }
 }
 

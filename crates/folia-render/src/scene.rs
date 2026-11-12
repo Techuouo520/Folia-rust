@@ -163,6 +163,11 @@ static SCENE: Mutex<SceneData> = Mutex::new(SceneData::new());
 
 /// Records the geometry iced is about to draw for a canvas style, for the glass blur of the same frame.
 pub fn capture(geometries: &[Geometry]) {
+    capture_layers(&[geometries]);
+}
+
+/// Records `layers` from back to front. A later capture replaces the whole picture.
+pub fn capture_layers(layers: &[&[Geometry]]) {
     let mut data = SCENE.lock();
     clear(&mut data);
     data.valid = false;
@@ -171,16 +176,18 @@ pub fn capture(geometries: &[Geometry]) {
     }
     data.frame = data.frame.wrapping_add(1);
     let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
-    for geometry in geometries {
-        let iced_wgpu::geometry::Geometry::Live { meshes, images, text } = geometry else { continue };
-        for mesh in meshes {
-            capture_mesh(&mut data, mesh, &mut hash);
-        }
-        for image in images {
-            capture_image(&mut data, image, &mut hash);
-        }
-        for text in text {
-            capture_text(&mut data, text, &mut hash);
+    for geometries in layers {
+        for geometry in *geometries {
+            let iced_wgpu::geometry::Geometry::Live { meshes, images, text } = geometry else { continue };
+            for mesh in meshes {
+                capture_mesh(&mut data, mesh, &mut hash);
+            }
+            for image in images {
+                capture_image(&mut data, image, &mut hash);
+            }
+            for text in text {
+                capture_text(&mut data, text, &mut hash);
+            }
         }
     }
     data.hash = hash.finish();
@@ -733,6 +740,8 @@ impl ShaderPrimitive for Pass {
         }
         let gpu = pipeline;
         let Some(targets) = gpu.targets.as_ref() else { return };
+        let under =
+            backdrop::paint_underlay(&gpu.device, encoder, gpu.format, &targets.view, targets.width, targets.height);
         let data = SCENE.lock();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -741,7 +750,7 @@ impl ShaderPrimitive for Pass {
                     view: &targets.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load: if under { wgpu::LoadOp::Load } else { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) },
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,

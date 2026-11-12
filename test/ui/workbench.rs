@@ -4,8 +4,10 @@ use std::collections::BTreeMap;
 
 use folia_core::{Language, Lyrics, Theme};
 use folia_i18n::I18n;
-use folia_store::{AppearanceSettings, FontStyle, RowSource, SubtitleContentMode};
-use folia_ui::{Hotspot, Workbench, WorkbenchLook, WorkbenchMessage, WorkbenchTab, hotspot_at};
+use folia_store::{AppearanceSettings, FontStyle, RowSource, Store, SubtitleContentMode, VisualizerSettings};
+use folia_ui::{
+    Hotspot, Workbench, WorkbenchEffect, WorkbenchLook, WorkbenchMessage, WorkbenchTab, hotspot_at, scheduled_saves,
+};
 use folia_visualizer::{Background, Item, Style};
 use iced::advanced::renderer::{Headless, Style as DrawStyle};
 use iced::{Color, Element, Pixels, Point, Size, Theme as IcedTheme};
@@ -49,7 +51,12 @@ fn workbench_tabs_render() {
         (WorkbenchTab::Subtitle, "4-subtitle", Style::Monet),
         (WorkbenchTab::Global, "5-global", Style::Monet),
     ] {
-        let _ = workbench.update(WorkbenchMessage::Tab(tab), style.manifest(), &appearance);
+        let _ = workbench.update(
+            WorkbenchMessage::Tab(tab),
+            style.manifest(),
+            &appearance,
+            folia_visualizer::LatentTuning::DEFAULT,
+        );
         if tab == WorkbenchTab::Lyrics {
             workbench.values = Style::Monet.load(&BTreeMap::new());
         }
@@ -64,6 +71,8 @@ fn workbench_tabs_render() {
             audio: &folia_core::AudioFrame::SILENT,
             appearance: &appearance,
             fonts: &[],
+            cover: &[],
+            latent: folia_visualizer::LatentTuning::DEFAULT,
         };
         let rgba = if tab == WorkbenchTab::Lyrics {
             // Scrolled to the spectrum group, so the shot holds Monet's bars/line pictures too.
@@ -144,4 +153,114 @@ fn sample_choices_are_drawn() {
     assert!(pictures.contains(&"portraitStyle"));
     assert!(Style::Tilt.manifest().items().any(|item| matches!(item, Item::Picture { key: "colorScheme", .. })));
     let _ = (RowSource::Next, Lyrics::default());
+}
+
+fn writes(effect: &WorkbenchEffect, appearance_changed: bool, flush_visualizer: bool) -> (bool, bool) {
+    scheduled_saves(effect, appearance_changed, flush_visualizer)
+}
+
+/// Dragging keeps the draft in memory. Release, blur, and leaving the tab each write `visualizer.toml` once.
+#[test]
+fn latent_slider_drag_commits_the_last_value_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path());
+    let manifest = Style::Classic.manifest();
+    let appearance = AppearanceSettings::default();
+    let mut bench = Workbench::open();
+    let mut latent = folia_visualizer::LatentTuning::DEFAULT;
+    let mut visualizer = VisualizerSettings::default();
+    let file = dir.path().join("visualizer.toml");
+
+    for value in [0.4_f32, 0.9, 1.6] {
+        let update = bench.update(WorkbenchMessage::LatentMeshSpeed(value), manifest, &appearance, latent);
+        let (visualizer_write, appearance_write) =
+            writes(&update.effect, update.appearance.is_some(), update.flush_visualizer);
+        assert!(matches!(update.effect, WorkbenchEffect::Draft), "a drag tick scheduled a save");
+        assert!(!visualizer_write && !appearance_write);
+        latent = update.latent.expect("draft tuning");
+        visualizer.insert_style("latent_background_tuning", latent.table(), &[]);
+        assert!(!file.exists(), "visualizer.toml was written during the drag");
+    }
+    assert!((latent.mesh_speed - 1.6).abs() < 1.0e-4);
+
+    let update = bench.update(WorkbenchMessage::Commit, manifest, &appearance, latent);
+    let (visualizer_write, appearance_write) =
+        writes(&update.effect, update.appearance.is_some(), update.flush_visualizer);
+    assert!(matches!(update.effect, WorkbenchEffect::Save));
+    assert!(visualizer_write && !appearance_write, "one commit wrote more than visualizer.toml");
+    store.save(&visualizer).unwrap();
+    let restored = LatentSpeed::read(&store);
+    assert!((restored - 1.6).abs() < 1.0e-4, "stored {restored}");
+
+    let again = bench.update(WorkbenchMessage::Commit, manifest, &appearance, latent);
+    let (visualizer_write, appearance_write) =
+        writes(&again.effect, again.appearance.is_some(), again.flush_visualizer);
+    assert!(matches!(again.effect, WorkbenchEffect::None));
+    assert!(!visualizer_write && !appearance_write);
+
+    let update = bench.update(WorkbenchMessage::Tab(WorkbenchTab::Background), manifest, &appearance, latent);
+    let (visualizer_write, _) = writes(&update.effect, update.appearance.is_some(), update.flush_visualizer);
+    assert!(update.scroll_top && !visualizer_write, "changing tabs with no drag still wrote");
+    let update = bench.update(WorkbenchMessage::LatentMeshSpeed(0.2), manifest, &appearance, latent);
+    assert!(matches!(update.effect, WorkbenchEffect::Draft));
+    latent = update.latent.expect("draft");
+    visualizer.insert_style("latent_background_tuning", latent.table(), &[]);
+    let update = bench.update(WorkbenchMessage::Tab(WorkbenchTab::Lyrics), manifest, &appearance, latent);
+    let (visualizer_write, appearance_write) =
+        writes(&update.effect, update.appearance.is_some(), update.flush_visualizer);
+    assert!(update.scroll_top);
+    assert!(visualizer_write && !appearance_write);
+    store.save(&visualizer).unwrap();
+    let restored = LatentSpeed::read(&store);
+    assert!((restored - 0.2).abs() < 1.0e-4, "tab left the previous value {restored}");
+
+    let update = bench.update(WorkbenchMessage::LatentMeshSpeed(1.3), manifest, &appearance, latent);
+    latent = update.latent.expect("draft");
+    visualizer.insert_style("latent_background_tuning", latent.table(), &[]);
+    assert!(matches!(bench.release_drag(), WorkbenchEffect::Save));
+    let late = bench.update(WorkbenchMessage::Commit, manifest, &appearance, latent);
+    let (visualizer_write, _) = writes(&late.effect, late.appearance.is_some(), late.flush_visualizer);
+    assert!(!visualizer_write, "pointer-up and the slider release both saved");
+    store.save(&visualizer).unwrap();
+    let restored = LatentSpeed::read(&store);
+    assert!((restored - 1.3).abs() < 1.0e-4, "blur stored {restored}");
+    assert!(matches!(bench.release_drag(), WorkbenchEffect::None));
+
+    let update = bench.update(WorkbenchMessage::LatentMeshSpeed(0.5), manifest, &appearance, latent);
+    latent = update.latent.expect("draft");
+    let update = bench.update(WorkbenchMessage::Close, manifest, &appearance, latent);
+    let (visualizer_write, appearance_write) =
+        writes(&update.effect, update.appearance.is_some(), update.flush_visualizer);
+    assert!(update.close);
+    assert!(visualizer_write && !appearance_write);
+    visualizer.insert_style("latent_background_tuning", latent.table(), &[]);
+    store.save(&visualizer).unwrap();
+    assert!((LatentSpeed::read(&store) - 0.5).abs() < 1.0e-4);
+}
+
+#[test]
+fn appearance_slider_release_saves_only_appearance() {
+    let manifest = Style::Classic.manifest();
+    let appearance = AppearanceSettings::default();
+    let mut bench = Workbench::open();
+    let latent = folia_visualizer::LatentTuning::DEFAULT;
+    let update = bench.update(WorkbenchMessage::Opacity(0.45), manifest, &appearance, latent);
+    let (visualizer_write, appearance_write) =
+        writes(&update.effect, update.appearance.is_some(), update.flush_visualizer);
+    assert!(matches!(update.effect, WorkbenchEffect::Appearance));
+    assert!(!visualizer_write && !appearance_write);
+    let update = bench.update(WorkbenchMessage::Commit, manifest, &appearance, latent);
+    let (visualizer_write, appearance_write) =
+        writes(&update.effect, update.appearance.is_some(), update.flush_visualizer);
+    assert!(matches!(update.effect, WorkbenchEffect::SaveAppearance));
+    assert!(!visualizer_write && appearance_write);
+}
+
+struct LatentSpeed;
+
+impl LatentSpeed {
+    fn read(store: &Store) -> f32 {
+        let loaded = store.load::<VisualizerSettings>().unwrap();
+        folia_visualizer::LatentTuning::read(loaded.tables.get("latent_background_tuning")).mesh_speed
+    }
 }

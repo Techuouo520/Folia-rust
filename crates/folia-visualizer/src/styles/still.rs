@@ -17,7 +17,7 @@ const EMPTY_HEIGHT: f32 = 80.0;
 const VIGNETTE_RINGS: usize = 48;
 
 /// What a frame showed: the line index, canvas size and font scale (as bits).
-type FrameKey = (Option<usize>, u32, u32, u32);
+type FrameKey = (Option<usize>, u32, u32, u32, u64);
 
 /// Geometry of the last drawn frame and what it showed.
 #[derive(Default)]
@@ -30,7 +30,7 @@ pub struct StillCache {
 struct Block<'a> {
     content: &'a str,
     size: f32,
-    weight: Weight,
+    font: Font,
     color: Color,
     gap_above: f32,
 }
@@ -38,7 +38,8 @@ struct Block<'a> {
 /// Draws into `target`, redrawing only when the line, the size or the font scale changes.
 pub fn draw(scene: &Scene<'_>, state: &SceneState, renderer: &Renderer, target: Size) -> Geometry {
     let index = current_index(scene.lyrics, scene.time);
-    let key = Some((index, target.width.to_bits(), target.height.to_bits(), scene.font_scale.to_bits()));
+    let key =
+        Some((index, target.width.to_bits(), target.height.to_bits(), scene.font_scale.to_bits(), scene.layout_key()));
     if state.still.key.replace(key) != key {
         state.still.cache.clear();
     }
@@ -80,7 +81,7 @@ fn draw_lines(frame: &mut Frame, scene: &Scene<'_>, index: Option<usize>, size: 
             }
             group
                 .iter()
-                .map(|block| block.gap_above + measure(block.content, block.size, font(block.weight), max_width).height)
+                .map(|block| block.gap_above + measure(block.content, block.size, block.font, max_width).height)
                 .sum()
         })
         .collect();
@@ -97,12 +98,12 @@ fn draw_lines(frame: &mut Frame, scene: &Scene<'_>, index: Option<usize>, size: 
                 max_width,
                 color: block.color,
                 size: block.size.into(),
-                font: font(block.weight),
+                font: block.font,
                 align_x: iced::widget::text::Alignment::Center,
                 align_y: iced::alignment::Vertical::Top,
                 ..Text::default()
             });
-            block_y += measure(block.content, block.size, font(block.weight), max_width).height;
+            block_y += measure(block.content, block.size, block.font, max_width).height;
         }
         y += height + GAP;
     }
@@ -120,14 +121,20 @@ fn blocks<'a>(line: &'a Line, current: bool, scene: &Scene<'_>) -> Vec<Block<'a>
     let mut blocks = Vec::with_capacity(2);
     if !line.text.is_empty() {
         let color = color(theme.primary, text_alpha);
-        blocks.push(Block { content: &line.text, size: text_size * scale, weight: text_weight, color, gap_above: 0.0 });
+        blocks.push(Block {
+            content: &line.text,
+            size: text_size * scale,
+            font: scene.typography.font(font(text_weight)),
+            color,
+            gap_above: 0.0,
+        });
     }
-    if let Some(translation) = &line.translation {
+    if let Some(translation) = scene.typography.subtitle_mode.single(line).filter(|_| !scene.typography.hide_subtitle) {
         let color = color(theme.secondary, sub_alpha);
         blocks.push(Block {
             content: translation,
-            size: sub_size * scale,
-            weight: sub_weight,
+            size: sub_size * scale * scene.typography.subtitle_scale,
+            font: scene.typography.subtitle.unwrap_or_else(|| scene.typography.font(font(sub_weight))),
             color,
             gap_above: sub_gap,
         });

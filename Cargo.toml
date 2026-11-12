@@ -38,6 +38,7 @@ flate2 = "=1.1.10"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 icu_segmenter = { version = "2.4.0", default-features = false, features = ["compiled_data"] }
 lyon_path = "1.0.19"
+svgtypes = "0.16.2"
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "image-without-codecs", "linux-theme-detection", "svg", "thread-pool", "tokio", "wayland", "web-colors", "wgpu", "x11"] }
 iced_wgpu = "=0.14.0"
 keyring = "=4.2.0"

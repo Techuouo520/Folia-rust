@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+dev = ["folia-render/dev"]
+
 [dependencies]
 bytemuck = { workspace = true, features = ["derive"] }
 flate2.workspace = true
@@ -16,6 +19,8 @@ iced.workspace = true
 icu_segmenter.workspace = true
 image.workspace = true
 lyon_path.workspace = true
+svgtypes.workspace = true
+lucide-static-svg = { workspace = true, features = ["path-data"] }
 toml.workspace = true
 tracing.workspace = true
 wgpu.workspace = true

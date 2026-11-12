@@ -5,7 +5,18 @@ use bytemuck::{Pod, Zeroable};
 use iced::widget::shader::{self, Primitive as ShaderPrimitive};
 use iced::{Rectangle, Size};
 use std::sync::Weak;
+#[cfg(feature = "dev")]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(feature = "dev")]
+static LIVE_SLOTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Renderers owned by widgets that are still alive. Release builds omit the counter.
+#[cfg(feature = "dev")]
+pub fn live_slots() -> usize {
+    LIVE_SLOTS.load(Ordering::Relaxed)
+}
 
 use folia_core::Theme;
 
@@ -42,10 +53,25 @@ pub struct Uniforms {
     pub lobe_sd: [[f32; 4]; 4],
 }
 
-/// One frame for the window shader. The segments and drops it draws wait in `place`'s buffers.
-#[derive(Clone, Copy, Debug)]
+/// One frame for the window shader. Segments and drops belong to this frame, not a process-wide buffer.
+#[derive(Clone, Debug)]
 pub struct Pass {
     pub uniforms: Uniforms,
+    pub segments: Vec<super::place::Segment>,
+    pub drops: Vec<super::place::Drop>,
+    /// The playing page publishes into the shared glass source. A second scene must not replace it.
+    pub publish_blur: bool,
+}
+
+pub(super) struct FrameIn<'a> {
+    pub lyrics: &'a folia_core::Lyrics,
+    pub time: f64,
+    pub size: Size,
+    pub theme: &'a Theme,
+    pub font_scale: f32,
+    pub tuning: &'a crate::tuning::Values,
+    pub energy: f32,
+    pub publish_blur: bool,
 }
 
 /// One frame: lays out the song (cached), collects this frame's wipes and drops, fills the uniforms.
@@ -58,6 +84,12 @@ pub fn frame(
     tuning: &crate::tuning::Values,
     energy: f32,
 ) -> Pass {
+    let mut paint = place::Paint::default();
+    frame_in(FrameIn { lyrics, time, size, theme, font_scale, tuning, energy, publish_blur: false }, &mut paint)
+}
+
+pub(super) fn frame_in(frame: FrameIn<'_>, paint: &mut place::Paint) -> Pass {
+    let FrameIn { lyrics, time, size, theme, font_scale, tuning, energy, publish_blur } = frame;
     super::ink::warm(lyrics);
     let list = super::tuning::manifest();
     let (width, height) = (size.width.max(1.0), size.height.max(1.0));
@@ -69,7 +101,8 @@ pub fn frame(
         rain_hit: tuning.number(list, "rainHit"),
         rain_big: tuning.number(list, "rainBig"),
     };
-    let drive = place::paint(&scene, time, width, height, &knobs, energy);
+    let drive = place::paint(&scene, time, width, height, &knobs, energy, paint);
+    let (segments, drops) = paint.take_sprites();
     let colors = palette(theme);
     let aspect = width / height;
     let spot_x = tuning.number(list, "spotX");
@@ -105,6 +138,9 @@ pub fn frame(
             lobes: drive.lobes,
             lobe_sd: drive.lobe_sd,
         },
+        segments,
+        drops,
+        publish_blur,
     }
 }
 
@@ -325,10 +361,8 @@ impl Renderer {
         if let Some(targets) = &mut self.targets {
             targets.buildings.prepare(queue, &uniforms);
         }
-        place::with_paint(|paint| {
-            self.segments.write(device, queue, &paint.segments);
-            self.drops.write(device, queue, &paint.drops);
-        });
+        self.segments.write(device, queue, &pass.segments);
+        self.drops.write(device, queue, &pass.drops);
         let field = &mut self.field;
         self.field_key = super::drops::field(width, height, self.field_key, |drops| field.write(device, queue, drops));
     }
@@ -661,7 +695,20 @@ fn sprite_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView 
 #[derive(Debug)]
 pub struct LivePass {
     pub(super) frame: Pass,
-    pub(super) owner: Weak<()>,
+    pub(super) owner: Weak<std::sync::atomic::AtomicBool>,
+    pub(super) pool: std::sync::Arc<std::sync::Mutex<place::Paint>>,
+}
+
+impl Drop for LivePass {
+    fn drop(&mut self) {
+        let mut pooled = self.pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.frame.segments.capacity() > pooled.segments.capacity() {
+            std::mem::swap(&mut pooled.segments, &mut self.frame.segments);
+        }
+        if self.frame.drops.capacity() > pooled.drops.capacity() {
+            std::mem::swap(&mut pooled.drops, &mut self.frame.drops);
+        }
+    }
 }
 
 impl ShaderPrimitive for LivePass {
@@ -677,8 +724,8 @@ impl ShaderPrimitive for LivePass {
     ) {
         let scale = viewport.scale_factor();
         let physical = [bounds.x * scale, bounds.y * scale, bounds.width * scale, bounds.height * scale];
-        pipeline.owner = self.owner.clone();
-        let renderer = pipeline.renderer.get_or_insert_with(|| Renderer::new(device, queue, pipeline.format));
+        let key = self.owner.as_ptr() as usize;
+        let Some(renderer) = pipeline.slot(key, self.owner.clone(), device, queue) else { return };
         renderer.prepare(device, queue, &self.frame, physical, scale);
     }
 
@@ -689,28 +736,68 @@ impl ShaderPrimitive for LivePass {
         target: &wgpu::TextureView,
         clip_bounds: &Rectangle<u32>,
     ) {
-        let Some(renderer) = &pipeline.renderer else { return };
+        let key = self.owner.as_ptr() as usize;
+        let Some(renderer) = pipeline.renderer(key) else { return };
         renderer.render(encoder, target, [clip_bounds.x, clip_bounds.y, clip_bounds.width, clip_bounds.height]);
-        let window = self.frame.uniforms.resolution;
-        renderer.paint_blur(encoder, self.frame.uniforms.time, window);
+        if self.frame.publish_blur {
+            let window = self.frame.uniforms.resolution;
+            renderer.paint_blur(encoder, self.frame.uniforms.time, window);
+        }
     }
 }
 
+struct SceneSlot {
+    key: usize,
+    owner: Weak<std::sync::atomic::AtomicBool>,
+    renderer: folia_render::Prepared<Renderer>,
+}
+
+impl Drop for SceneSlot {
+    fn drop(&mut self) {
+        #[cfg(feature = "dev")]
+        LIVE_SLOTS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Shared pipelines would also share the only uniforms and textures. Each live widget keeps its own renderer.
 pub struct NebbiaGpu {
-    renderer: Option<Renderer>,
+    slots: Vec<SceneSlot>,
     format: wgpu::TextureFormat,
-    owner: Weak<()>,
+}
+
+impl NebbiaGpu {
+    fn slot(
+        &mut self,
+        key: usize,
+        owner: Weak<std::sync::atomic::AtomicBool>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Option<&mut Renderer> {
+        if let Some(index) = self.slots.iter().position(|slot| slot.key == key) {
+            self.slots[index].owner = owner;
+            return self.slots[index].renderer.poll();
+        }
+        #[cfg(feature = "dev")]
+        LIVE_SLOTS.fetch_add(1, Ordering::Relaxed);
+        let (device, queue, format) = (device.clone(), queue.clone(), self.format);
+        let renderer = folia_render::Prepared::new(owner.clone(), move || Renderer::new(&device, &queue, format));
+        self.slots.push(SceneSlot { key, owner, renderer });
+        let index = self.slots.len() - 1;
+        self.slots[index].renderer.poll()
+    }
+
+    fn renderer(&self, key: usize) -> Option<&Renderer> {
+        self.slots.iter().find(|slot| slot.key == key).and_then(|slot| slot.renderer.get())
+    }
 }
 
 impl shader::Pipeline for NebbiaGpu {
     fn new(_device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        Self { renderer: None, format, owner: Weak::new() }
+        Self { slots: Vec::new(), format }
     }
 
     fn trim(&mut self) {
         // The widget owns the lifetime, so another window's present cannot evict an active style.
-        if self.owner.strong_count() == 0 {
-            self.renderer = None;
-        }
+        self.slots.retain(|slot| slot.owner.strong_count() > 0);
     }
 }

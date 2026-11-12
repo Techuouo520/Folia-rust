@@ -8,9 +8,7 @@ use std::time::{Duration, Instant};
 use folia_core::{Lyrics, Theme};
 use folia_i18n::I18n;
 use folia_store::{AppearanceSettings, FontSettings, FontStyle, RowSource, SubtitleContentMode};
-use folia_visualizer::{
-    Background, Item, Manifest, PREVIEW_LOOP, Pictures, RESERVED_LOOP, Scene, Style, Values, lyric_view,
-};
+use folia_visualizer::{Background, Item, Manifest, PREVIEW_LOOP, Pictures, RESERVED_LOOP, Scene, Style, Values};
 use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::widget::scrollable::Viewport;
 use iced::widget::{
@@ -109,6 +107,15 @@ pub enum Message {
     Opacity(f32),
     BackgroundMode(Background),
     Vignette(bool),
+    Geometric(bool),
+    LatentMeshSpeed(f32),
+    LatentDraft(folia_visualizer::LatentTuning),
+    LatentSet(folia_visualizer::LatentTuning),
+    MonetDraft(folia_visualizer::monet_background::Tuning),
+    MonetSet(folia_visualizer::monet_background::Tuning),
+    NomandDraft(folia_visualizer::nomand::Tuning),
+    NomandSet(folia_visualizer::nomand::Tuning),
+    SoraBlank(bool),
     SubtitleRows(u8),
     SubtitleRow(usize, RowSource),
     SubtitleMode(SubtitleContentMode),
@@ -129,8 +136,10 @@ pub enum Effect {
     Close,
     /// Keep the tuning for the preview, and write the file on [`Effect::Save`].
     Draft,
-    /// Write the lyric style's tuning and the appearance settings.
+    /// Write the lyric style's tuning, and the appearance when this message changed it.
     Save,
+    /// Write only the appearance file. A slider release that did not touch `visualizer.toml`.
+    SaveAppearance,
     /// Keep the appearance for the preview; the file waits for release.
     Appearance,
     /// The settings body scrolled back to the top.
@@ -143,16 +152,64 @@ pub enum Effect {
 pub struct Update {
     pub effect: Effect,
     pub appearance: Option<AppearanceSettings>,
+    pub latent: Option<folia_visualizer::LatentTuning>,
+    pub sora: Option<folia_visualizer::SoraTuning>,
+    pub monet: Option<folia_visualizer::monet_background::Tuning>,
+    pub nomand: Option<folia_visualizer::nomand::Tuning>,
+    /// The settings body goes back to the top, as well as whatever `effect` does.
+    pub scroll_top: bool,
+    /// Close the workbench after the effect's save.
+    pub close: bool,
+    /// Write `visualizer.toml` for a drag that ended on a style change.
+    pub flush_visualizer: bool,
 }
 
 impl Update {
     fn effect(effect: Effect) -> Self {
-        Self { effect, appearance: None }
+        Self {
+            effect,
+            appearance: None,
+            latent: None,
+            sora: None,
+            monet: None,
+            nomand: None,
+            scroll_top: false,
+            close: false,
+            flush_visualizer: false,
+        }
     }
 
     fn appearance(effect: Effect, appearance: &AppearanceSettings) -> Self {
-        Self { effect, appearance: Some(appearance.clone()) }
+        Self { appearance: Some(appearance.clone()), ..Self::effect(effect) }
     }
+
+    fn latent(tuning: folia_visualizer::LatentTuning) -> Self {
+        Self { effect: Effect::Draft, latent: Some(tuning), ..Self::effect(Effect::Draft) }
+    }
+}
+
+/// Which file a slider drag will write when it ends. Empty until the pointer moves a slider.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pending {
+    None,
+    Visualizer,
+    Appearance,
+}
+
+/// Files one workbench commit may schedule. Each flag is at most one task.
+pub fn scheduled_saves(effect: &Effect, appearance_changed: bool, flush_visualizer: bool) -> (bool, bool) {
+    let mut visualizer = flush_visualizer;
+    let mut appearance = false;
+    match effect {
+        Effect::Save => {
+            visualizer = true;
+            appearance = appearance_changed;
+        }
+        Effect::SaveAppearance => appearance = true,
+        Effect::Style(_) => appearance = true,
+        Effect::None | Effect::Close | Effect::Draft | Effect::Appearance | Effect::ScrollTop | Effect::Button(_) => {}
+    }
+    (visualizer, appearance)
 }
 
 /// What the open workbench draws from the shell.
@@ -168,6 +225,14 @@ pub struct Look<'a> {
     pub audio: &'a folia_core::AudioFrame,
     pub appearance: &'a AppearanceSettings,
     pub fonts: &'a [String],
+    pub dpi: f32,
+    pub cover: &'a [folia_core::Rgb],
+    pub latent: folia_visualizer::LatentTuning,
+    pub sora: folia_visualizer::SoraTuning,
+    pub monet: folia_visualizer::monet_background::Tuning,
+    pub nomand: folia_visualizer::nomand::Tuning,
+    pub picture: Option<&'a iced::widget::image::Handle>,
+    pub has_background_upload: bool,
 }
 
 /// The font picker opened over the workbench.
@@ -192,6 +257,8 @@ pub struct Workbench {
     /// A wheel set an offset this update; the scrollables need the new offset now.
     scroll_dirty: bool,
     picker: Option<Picker>,
+    /// Set while a slider is down. Release, blur, and leaving the page write the file once.
+    pending: Pending,
 }
 
 impl Workbench {
@@ -214,18 +281,51 @@ impl Workbench {
             page: Scroll::default(),
             scroll_dirty: false,
             picker: None,
+            pending: Pending::None,
         }
     }
 
-    pub fn update(&mut self, message: Message, manifest: Manifest, current: &AppearanceSettings) -> Update {
+    /// Ends an open slider drag. The first call returns the save; another call in the same gesture does not.
+    pub fn release_drag(&mut self) -> Effect {
+        let pending = self.pending;
+        self.pending = Pending::None;
+        match pending {
+            Pending::None => Effect::None,
+            Pending::Visualizer => Effect::Save,
+            Pending::Appearance => Effect::SaveAppearance,
+        }
+    }
+
+    fn hold(&mut self, pending: Pending) {
+        self.pending = pending;
+    }
+
+    pub fn update(
+        &mut self,
+        message: Message,
+        manifest: Manifest,
+        current: &AppearanceSettings,
+        latent: folia_visualizer::LatentTuning,
+    ) -> Update {
         let mut appearance = current.clone();
         let mut changed = false;
         let result = match message {
-            Message::Close => Update::effect(Effect::Close),
+            Message::Close => {
+                let released = self.release_drag();
+                if matches!(released, Effect::None) {
+                    Update::effect(Effect::Close)
+                } else {
+                    let mut update = Update::effect(released);
+                    update.close = true;
+                    update
+                }
+            }
             Message::Tab(tab) => {
-                let changed = self.tab != tab;
+                let scroll_top = self.tab != tab;
                 self.tab = tab;
-                if changed { Update::effect(Effect::ScrollTop) } else { Update::effect(Effect::None) }
+                let mut update = Update::effect(self.release_drag());
+                update.scroll_top = scroll_top;
+                update
             }
             Message::Source(source) => {
                 self.frozen = self.clock(Instant::now());
@@ -249,17 +349,21 @@ impl Workbench {
                 Update::effect(Effect::None)
             }
             Message::Style(style) => {
+                let released = self.release_drag();
                 self.tab = Tab::Lyrics;
-                Update::effect(Effect::Style(style))
+                let mut update = Update::effect(Effect::Style(style));
+                update.flush_visualizer = matches!(released, Effect::Save);
+                update
             }
             Message::Slider(key, value) => {
                 if manifest.locked(key) {
                     return Update::effect(Effect::None);
                 }
+                self.hold(Pending::Visualizer);
                 self.values.set_number(manifest, key, value);
                 Update::effect(Effect::Draft)
             }
-            Message::Commit => Update::effect(Effect::Save),
+            Message::Commit => Update::effect(self.release_drag()),
             Message::Toggle(key, on) => {
                 if manifest.locked(key) {
                     return Update::effect(Effect::None);
@@ -309,8 +413,13 @@ impl Workbench {
                 Tab::Background => {
                     appearance.set_background_mode(None);
                     appearance.disable_visualizer_vignette = false;
-                    changed = true;
-                    Update::effect(Effect::Save)
+                    appearance.disable_visualizer_geometric_background = false;
+                    let mut update = Update::appearance(Effect::Save, &appearance);
+                    update.latent = Some(folia_visualizer::LatentTuning::DEFAULT);
+                    update.sora = Some(folia_visualizer::SoraTuning::DEFAULT);
+                    update.monet = Some(folia_visualizer::monet_background::Tuning::DEFAULT);
+                    update.nomand = Some(folia_visualizer::nomand::Tuning::default());
+                    return update;
                 }
                 Tab::Font => {
                     self.sample = Sample::Default;
@@ -351,6 +460,7 @@ impl Workbench {
                     FontTarget::Lyrics => appearance.lyrics_font_scale = value.clamp(0.85, 1.4),
                     FontTarget::Subtitle => appearance.subtitle.font_scale = value.clamp(0.85, 1.4),
                 }
+                self.hold(Pending::Appearance);
                 changed = true;
                 Update::effect(Effect::Appearance)
             }
@@ -438,11 +548,13 @@ impl Workbench {
                     FontTarget::Subtitle => &mut appearance.subtitle.font,
                 };
                 font.weight = Some(fonts::stored_weight(value));
+                self.hold(Pending::Appearance);
                 changed = true;
                 Update::effect(Effect::Appearance)
             }
             Message::Opacity(value) => {
                 appearance.visualizer_opacity = value.clamp(0.2, 1.0);
+                self.hold(Pending::Appearance);
                 changed = true;
                 Update::effect(Effect::Appearance)
             }
@@ -455,6 +567,56 @@ impl Workbench {
                 appearance.disable_visualizer_vignette = off;
                 changed = true;
                 Update::effect(Effect::Save)
+            }
+            Message::Geometric(off) => {
+                appearance.disable_visualizer_geometric_background = off;
+                changed = true;
+                Update::effect(Effect::Save)
+            }
+            Message::LatentMeshSpeed(value) => {
+                self.hold(Pending::Visualizer);
+                let mut tuning = latent;
+                tuning.mesh_speed = value.clamp(0.0, 2.0);
+                return Update::latent(tuning);
+            }
+            Message::LatentDraft(tuning) => {
+                self.hold(Pending::Visualizer);
+                return Update::latent(tuning.clamped());
+            }
+            Message::MonetDraft(tuning) => {
+                self.hold(Pending::Visualizer);
+                let mut update = Update::effect(Effect::Draft);
+                update.monet = Some(tuning);
+                return update;
+            }
+            Message::MonetSet(tuning) => {
+                self.pending = Pending::None;
+                let mut update = Update::effect(Effect::Save);
+                update.monet = Some(tuning);
+                return update;
+            }
+            Message::NomandDraft(tuning) => {
+                self.hold(Pending::Visualizer);
+                let mut update = Update::effect(Effect::Draft);
+                update.nomand = Some(tuning);
+                return update;
+            }
+            Message::NomandSet(tuning) => {
+                self.pending = Pending::None;
+                let mut update = Update::effect(Effect::Save);
+                update.nomand = Some(tuning);
+                return update;
+            }
+            Message::LatentSet(tuning) => {
+                self.pending = Pending::None;
+                let mut update = Update::effect(Effect::Save);
+                update.latent = Some(tuning.clamped());
+                return update;
+            }
+            Message::SoraBlank(blank) => {
+                let mut update = Update::effect(Effect::Save);
+                update.sora = Some(folia_visualizer::SoraTuning { blank });
+                return update;
             }
             Message::SubtitleRows(count) => {
                 appearance.subtitle.layout = appearance.subtitle.layout.with_count(count);
@@ -473,6 +635,7 @@ impl Workbench {
             }
             Message::SubtitleOpacity(value) => {
                 appearance.subtitle.opacity = value.clamp(0.2, 1.0);
+                self.hold(Pending::Appearance);
                 changed = true;
                 Update::effect(Effect::Appearance)
             }
@@ -533,13 +696,13 @@ impl Workbench {
     }
 
     pub fn view<'a>(&'a self, look: Look<'a>) -> Element<'a, crate::Message> {
-        let Look { i18n, theme, daylight, window, style, font_scale, live, appearance, .. } = look;
+        let Look { i18n, theme, daylight, window, live, appearance, .. } = look;
         let tokens = Tokens::new(theme, daylight);
         let now = Instant::now();
         let (lyrics, time, empty) = self.shown(now, live);
         let header = self.header(i18n, tokens);
         let stage = self.stage(look, tokens, lyrics, time, empty);
-        let column = self.column(i18n, tokens, theme, style, font_scale, appearance);
+        let column = self.column(look, tokens);
         let body = row![stage, container(column).width(COLUMN).height(Length::Fill)].height(Length::Fill);
         let inner = column![header, body].width(Length::Fill).height(Length::Fill);
         let width = WINDOW_W.min(window.width - 24.0).max(360.0);
@@ -625,6 +788,7 @@ impl Workbench {
         empty: bool,
     ) -> Element<'a, crate::Message> {
         let Look { i18n, theme, style, font_scale, .. } = look;
+        let show = style.shows_shared_background();
         let scene = Scene {
             style,
             lyrics,
@@ -634,21 +798,63 @@ impl Workbench {
             seed: "lumiere",
             stage: None,
             tuning: self.values.clone(),
-            backdrop: true,
+            backdrop: !show,
             title: lyrics.title.clone().unwrap_or_default(),
             artist: lyrics.artist.clone().unwrap_or_default(),
             album: String::new(),
             portrait: None,
+            typography: fonts::typography(look.appearance),
             preview: true,
             audio: look.audio,
         };
+        let subtitle = if style.shared_subtitle() {
+            crate::overlay::subtitle_rows_at(&lyrics.lines, time, &look.appearance.subtitle)
+        } else {
+            crate::overlay::SubtitleRows::default()
+        };
+        let font = if look.appearance.subtitle.font_inherits_lyrics {
+            &look.appearance.lyrics_font
+        } else {
+            &look.appearance.subtitle.font
+        };
+        let picture = crate::now_playing::view(
+            scene,
+            i18n,
+            folia_visualizer::color(theme.secondary, 1.0),
+            folia_visualizer::color(theme.background, 1.0),
+            crate::now_playing::Screen {
+                window: look.window,
+                dpi: look.dpi,
+                opacity: look.appearance.visualizer_opacity,
+                vignette: if look.appearance.disable_visualizer_vignette { 0.0 } else { 0.28 },
+                subtitle_opacity: look.appearance.subtitle.opacity,
+                subtitle_background: look.appearance.subtitle.background,
+                subtitle_blur: look.appearance.subtitle.upcoming_blur,
+                subtitle_scale: look.appearance.subtitle.font_scale,
+                subtitle_font: fonts::resolve(font),
+                shared: crate::now_playing::Backdrop {
+                    mode: Background::resolve(look.appearance.stored_background_mode()),
+                    shapes: !look.appearance.disable_visualizer_geometric_background,
+                    vignette: !look.appearance.disable_visualizer_vignette,
+                    paused: self.paused,
+                },
+                cover: look.cover,
+                latent: look.latent,
+                daylight: look.daylight,
+                sora: look.sora,
+                monet: look.monet,
+                nomand: look.nomand,
+                picture: look.picture,
+            },
+            subtitle,
+            crate::now_playing::Foot { bottom: 24.0, glass: false },
+        );
+        let picture = container(crate::preview_stage::view(picture, look.window)).center(Length::Fill);
         let preview =
-            container(lyric_view(scene)).width(Length::Fill).height(Length::Fill).clip(true).style(move |_| {
-                container::Style {
-                    background: Some(IcedBackground::Color(folia_visualizer::color(theme.background, 1.0))),
-                    border: Border { color: tokens.line, width: 1.0, radius: 12.0.into() },
-                    ..container::Style::default()
-                }
+            container(picture).width(Length::Fill).height(Length::Fill).clip(true).style(move |_| container::Style {
+                background: Some(IcedBackground::Color(folia_visualizer::color(theme.background, 1.0))),
+                border: Border { color: tokens.line, width: 1.0, radius: 12.0.into() },
+                ..container::Style::default()
             });
         let note = empty.then(|| -> Element<'a, crate::Message> {
             container(
@@ -775,15 +981,8 @@ impl Workbench {
         column![heading, grid].spacing(8).into()
     }
 
-    fn column<'a>(
-        &'a self,
-        i18n: &'a I18n,
-        tokens: Tokens,
-        theme: &'a Theme,
-        style: Style,
-        font_scale: f32,
-        appearance: &'a AppearanceSettings,
-    ) -> Element<'a, crate::Message> {
+    fn column<'a>(&'a self, look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
+        let Look { i18n, .. } = look;
         let tabs = Tab::ALL
             .into_iter()
             .map(|tab| (i18n.t(tab.key()).to_owned(), crate::Message::Workbench(Message::Tab(tab))))
@@ -800,7 +999,7 @@ impl Workbench {
         let reset = if reset_on { reset.on_press(crate::Message::Workbench(Message::Reset)) } else { reset };
         let tabs = row![kit::tabs(tokens, tabs, chosen, chosen.map(|index| index as f32), 8.0, 16.0), reset]
             .align_y(Alignment::Center);
-        let page = self.page(i18n, tokens, theme, style, font_scale, appearance);
+        let page = self.page(look, tokens);
         let page = scrollable(page)
             .id(settings_scroll_id())
             .height(Length::Fill)
@@ -815,18 +1014,11 @@ impl Workbench {
         column.push(page).into()
     }
 
-    fn page<'a>(
-        &'a self,
-        i18n: &'a I18n,
-        tokens: Tokens,
-        theme: &'a Theme,
-        style: Style,
-        font_scale: f32,
-        appearance: &'a AppearanceSettings,
-    ) -> Element<'a, crate::Message> {
+    fn page<'a>(&'a self, look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
+        let Look { i18n, theme, style, font_scale, appearance, .. } = look;
         match self.tab {
             Tab::Lyrics => style_page(i18n, tokens, theme, style.manifest(), &self.values),
-            Tab::Background => background_page(i18n, tokens, theme, appearance),
+            Tab::Background => background_page(look, tokens),
             Tab::Font => font_page(i18n, tokens, theme, style, self.sample, font_scale, appearance),
             Tab::Subtitle => subtitle_page(i18n, tokens, theme, appearance),
             Tab::Global => global_page(i18n, tokens),
@@ -1045,17 +1237,15 @@ fn item_row<'a>(
         Item::Slider { key, min, max, step, .. } => {
             let value = values.number(manifest, key);
             let shown = format_value(value, step);
-            row![
+            below = Some(
                 slider(min..=max, value, move |next| crate::Message::Workbench(Message::Slider(key, next)))
                     .step(step)
-                    .width(160)
+                    .width(Length::Fill)
                     .on_release(crate::Message::Workbench(Message::Commit))
-                    .style(move |_, _| kit::slider_style(tokens)),
-                kit::value(tokens, shown),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into()
+                    .style(move |_, _| kit::slider_style(tokens))
+                    .into(),
+            );
+            kit::value(tokens, shown)
         }
         Item::Switch { key, .. } if locked => {
             kit::toggle_fixed(tokens, if values.flag(manifest, key) { 1.0 } else { 0.0 })
@@ -1124,12 +1314,8 @@ fn item_row<'a>(
     Row { label, hint, sub: false, below, control }
 }
 
-fn background_page<'a>(
-    i18n: &'a I18n,
-    tokens: Tokens,
-    theme: &'a Theme,
-    appearance: &AppearanceSettings,
-) -> Element<'a, crate::Message> {
+fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
+    let Look { i18n, theme, appearance, latent, sora, monet, nomand, has_background_upload, .. } = look;
     let current = Background::resolve(appearance.stored_background_mode());
     let choices: Vec<PictureOption> = Background::ALL
         .iter()
@@ -1160,40 +1346,769 @@ fn background_page<'a>(
             crate::Message::Workbench(Message::Vignette(!appearance.disable_visualizer_vignette)),
         ),
     };
-    column![
-        kit::group(
+    let geometric = Row {
+        label: i18n.t("options.disableVisualizerGeometricBackground").to_owned(),
+        hint: Some(i18n.t("options.disableVisualizerGeometricBackgroundDesc").to_owned()),
+        sub: false,
+        below: None,
+        control: kit::toggle(
+            tokens,
+            if appearance.disable_visualizer_geometric_background { 1.0 } else { 0.0 },
+            crate::Message::Workbench(Message::Geometric(!appearance.disable_visualizer_geometric_background)),
+        ),
+    };
+    let mut page = column![kit::group(
+        tokens,
+        Group {
+            title: i18n.t("options.visualizerBackgroundMode").to_owned(),
+            bare: false,
+            rows: vec![mode],
+            foot: None
+        },
+        true,
+    )];
+    if current == Background::Latent {
+        for (title, rows) in latent_groups(i18n, tokens, latent) {
+            page = page.push(kit::group(tokens, Group { title, bare: false, rows, foot: None }, false));
+        }
+    }
+    if current == Background::Monet {
+        for (title, rows) in monet_groups(i18n, tokens, monet, has_background_upload) {
+            page = page.push(kit::group(tokens, Group { title, rows, bare: false, foot: None }, false));
+        }
+    }
+    if current == Background::Nomand {
+        for (title, rows) in nomand_groups(i18n, tokens, theme, nomand, has_background_upload) {
+            page = page.push(kit::group(tokens, Group { title, rows, bare: false, foot: None }, false));
+        }
+    }
+    if current == Background::Sora {
+        page = page.push(kit::group(
             tokens,
             Group {
-                title: i18n.t("options.visualizerBackgroundMode").to_owned(),
+                title: i18n.t("options.soraBackgroundSettings").to_owned(),
                 bare: false,
-                rows: vec![mode],
-                foot: None
+                rows: vec![Row {
+                    label: i18n.t("options.soraBlank").to_owned(),
+                    hint: Some(i18n.t("options.soraBlankDesc").to_owned()),
+                    sub: false,
+                    below: None,
+                    control: kit::toggle(
+                        tokens,
+                        if sora.blank { 1.0 } else { 0.0 },
+                        crate::Message::Workbench(Message::SoraBlank(!sora.blank)),
+                    ),
+                }],
+                foot: None,
             },
-            true,
-        ),
-        kit::group(
+            false,
+        ));
+    }
+    if current == Background::Common {
+        page = page.push(kit::group(
             tokens,
             Group {
                 title: i18n.t("options.visualizerBackgroundModeCommon").to_owned(),
                 bare: false,
-                rows: vec![vignette],
+                rows: vec![vignette, geometric],
                 foot: None,
             },
             false,
-        ),
-    ]
-    .padding(Padding { left: 24.0, right: 12.0, bottom: 40.0, top: 0.0 })
-    .into()
+        ));
+    }
+    page.padding(Padding { left: 24.0, right: 12.0, bottom: 40.0, top: 0.0 }).into()
 }
 
 fn background_picture(mode: Background) -> fn(&mut Frame, Rectangle, &Theme) {
     match mode {
         Background::Common => draw_common_picture,
+        Background::Latent => draw_latent_picture,
+        Background::Sora => draw_sora_picture,
+        Background::Monet => draw_monet_background_picture,
+        Background::Nomand => draw_nomand_picture,
     }
+}
+
+fn draw_sora_picture(frame: &mut Frame, rect: Rectangle, theme: &Theme) {
+    Background::Sora.picture(frame, rect, theme);
+}
+
+fn draw_monet_background_picture(frame: &mut Frame, rect: Rectangle, theme: &Theme) {
+    Background::Monet.picture(frame, rect, theme);
+}
+
+fn draw_nomand_picture(frame: &mut Frame, rect: Rectangle, theme: &Theme) {
+    Background::Nomand.picture(frame, rect, theme);
 }
 
 fn draw_common_picture(frame: &mut Frame, rect: Rectangle, theme: &Theme) {
     Background::Common.picture(frame, rect, theme);
+}
+
+fn draw_latent_picture(frame: &mut Frame, rect: Rectangle, theme: &Theme) {
+    Background::Latent.picture(frame, rect, theme);
+}
+
+fn background_upload_row<'a>(i18n: &'a I18n, tokens: Tokens, has_image: bool) -> Row<'a, crate::Message> {
+    let action = |key, label, icon, enabled| {
+        let alpha = if enabled { 1.0 } else { 0.4 };
+        let ink = Color { a: tokens.t1.a * alpha, ..tokens.t1 };
+        button(
+            row![crate::icons::icon(icon, 14.0, ink), text(i18n.t(label)).size(13).color(ink)]
+                .height(32)
+                .spacing(6)
+                .align_y(Alignment::Center),
+        )
+        .height(32)
+        .padding([0, 12])
+        .style(move |_, status| {
+            let fill = if status == button::Status::Hovered { tokens.fill2 } else { tokens.fill };
+            kit::rounded_button(Color { a: fill.a * alpha, ..fill }, 8.0)
+        })
+        .on_press_maybe(enabled.then_some(crate::Message::Workbench(Message::Button(key))))
+    };
+    Row {
+        label: i18n.t("options.monetUploadBackground").to_owned(),
+        hint: None,
+        sub: false,
+        below: None,
+        control: row![
+            action("uploadBackground", "options.monetUploadBackground", Icon::ImagePlus, true),
+            action("clearBackground", "options.monetClearBackground", Icon::Trash, has_image),
+        ]
+        .spacing(8)
+        .into(),
+    }
+}
+
+fn nomand_groups<'a>(
+    i18n: &'a I18n,
+    tokens: Tokens,
+    theme: &'a Theme,
+    tuning: folia_visualizer::nomand::Tuning,
+    has_background_upload: bool,
+) -> Vec<(String, Vec<Row<'a, crate::Message>>)> {
+    use folia_visualizer::nomand::{Effect, Number};
+    let flag = |key: &str, value: bool, change: fn(&mut folia_visualizer::nomand::Tuning, bool)| Row {
+        label: i18n.t(key).to_owned(),
+        hint: None,
+        sub: false,
+        below: None,
+        control: kit::toggle(tokens, f32::from(value), {
+            let mut next = tuning;
+            change(&mut next, !value);
+            crate::Message::Workbench(Message::NomandSet(next))
+        }),
+    };
+    let mut basic = vec![
+        Row {
+            label: i18n.t("options.nomandBackgroundSource").to_owned(),
+            hint: None,
+            sub: false,
+            below: None,
+            control: kit::segmented(
+                tokens,
+                vec![
+                    (false, i18n.t("options.monetBackgroundSourceCover").to_owned()),
+                    (true, i18n.t("options.monetBackgroundSourceUploaded").to_owned()),
+                ],
+                tuning.uploaded,
+                None,
+                move |uploaded| {
+                    let mut next = tuning;
+                    next.uploaded = uploaded;
+                    crate::Message::Workbench(Message::NomandSet(next))
+                },
+            ),
+        },
+        background_upload_row(i18n, tokens, has_background_upload),
+        flag("options.nomandBackgroundOverlay", tuning.overlay, |t, v| t.overlay = v),
+    ];
+    let number = |field: Number| {
+        let spec = &folia_visualizer::nomand::NUMBERS[field as usize];
+        let value = tuning.number(field);
+        let label = format!("options.nomandBackground{}{}", spec.key[..1].to_uppercase(), &spec.key[1..]);
+        let shown = if field == Number::Overlay {
+            format!("{}%", (value * 100.0).round())
+        } else if field == Number::ColorSteps {
+            format!("{value:.0}")
+        } else {
+            format!("{value:.2}")
+        };
+        Row {
+            label: i18n.t(&label).to_owned(),
+            hint: None,
+            sub: field == Number::Overlay,
+            control: kit::value(tokens, shown),
+            below: Some(
+                slider(spec.min..=spec.max, value, move |value| {
+                    let mut next = tuning;
+                    next.set(field, value);
+                    crate::Message::Workbench(Message::NomandDraft(next))
+                })
+                .step(spec.step)
+                .on_release(crate::Message::Workbench(Message::Commit))
+                .style(move |_, _| kit::slider_style(tokens))
+                .into(),
+            ),
+        }
+    };
+    if tuning.overlay {
+        basic.push(number(Number::Overlay));
+    }
+    let labels = [
+        "options.nomandBackgroundEffectDithering",
+        "options.nomandBackgroundEffectFlutedGlass",
+        "options.nomandBackgroundEffectPaperTexture",
+        "options.nomandBackgroundEffectHalftoneDots",
+        "options.nomandBackgroundEffectLensDistortion",
+    ];
+    let choices = Effect::ALL
+        .into_iter()
+        .map(|effect| {
+            let picture: fn(&mut Frame, Rectangle, &Theme) = match effect {
+                Effect::Dithering => |f, r, t| nomand_pattern(f, r, t, 0),
+                Effect::FlutedGlass => |f, r, t| nomand_pattern(f, r, t, 1),
+                Effect::PaperTexture => |f, r, t| nomand_pattern(f, r, t, 2),
+                Effect::HalftoneDots => |f, r, t| nomand_pattern(f, r, t, 3),
+                Effect::LensDistortion => |f, r, t| nomand_pattern(f, r, t, 4),
+            };
+            PictureOption { value: effect.id(), label: i18n.t(labels[effect.index()]).to_owned(), picture }
+        })
+        .collect();
+    let mut effects = vec![Row {
+        label: String::new(),
+        hint: None,
+        sub: false,
+        control: space().into(),
+        below: Some(picture_grid(tokens, theme, choices, tuning.effect.id(), 3, move |id| {
+            let mut next = tuning;
+            next.effect = Effect::ALL.into_iter().find(|effect| effect.id() == id).unwrap_or(Effect::Dithering);
+            crate::Message::Workbench(Message::NomandSet(next))
+        })),
+    }];
+    if tuning.effect == Effect::Dithering {
+        effects.push(Row {
+            label: i18n.t("options.nomandBackgroundDitheringType").to_owned(),
+            hint: None,
+            sub: false,
+            below: None,
+            control: kit::segmented(
+                tokens,
+                vec![(2u8, "2×2".to_owned()), (4, "4×4".to_owned()), (8, "8×8".to_owned())],
+                tuning.dither,
+                None,
+                move |dither| {
+                    let mut next = tuning;
+                    next.dither = dither;
+                    crate::Message::Workbench(Message::NomandSet(next))
+                },
+            ),
+        });
+    }
+    let fields: &[Number] = match tuning.effect {
+        Effect::Dithering => &[Number::Size, Number::ColorSteps],
+        Effect::FlutedGlass => &[Number::GlassSize, Number::GlassDistortion, Number::GlassBlur],
+        Effect::PaperTexture => &[Number::PaperContrast, Number::PaperRoughness, Number::PaperFiber],
+        Effect::HalftoneDots => &[Number::DotsSize, Number::DotsRadius, Number::DotsContrast],
+        Effect::LensDistortion => &[Number::LensSpread, Number::LensBulge, Number::LensDispersion],
+    };
+    effects.extend(fields.iter().copied().map(number));
+    match tuning.effect {
+        Effect::Dithering => {
+            effects.push(flag("options.nomandBackgroundOriginalColors", tuning.original, |t, v| t.original = v));
+            effects.push(flag("options.nomandBackgroundInverted", tuning.inverted, |t, v| t.inverted = v));
+        }
+        Effect::HalftoneDots => {
+            effects
+                .push(flag("options.nomandBackgroundOriginalColors", tuning.dots_original, |t, v| t.dots_original = v));
+            effects.push(flag("options.nomandBackgroundInverted", tuning.dots_inverted, |t, v| t.dots_inverted = v));
+        }
+        _ => {}
+    }
+    vec![
+        (i18n.t("options.nomandBackgroundSettings").to_owned(), basic),
+        (i18n.t("options.nomandBackgroundEffect").to_owned(), effects),
+    ]
+}
+
+fn nomand_pattern(frame: &mut Frame, rect: Rectangle, theme: &Theme, kind: u8) {
+    use iced::widget::canvas::{Path, Stroke};
+    let ink = folia_visualizer::color(theme.primary, 0.42);
+    if kind == 4 {
+        for ratio in [0.26, 0.50] {
+            frame.stroke(
+                &Path::circle(rect.center(), rect.height * ratio),
+                Stroke::default().with_color(ink).with_width(3.0),
+            );
+        }
+        return;
+    }
+    for x in (0..rect.width as u32).step_by(8) {
+        if kind == 1 {
+            frame.fill_rectangle(Point::new(rect.x + x as f32 + 3.0, rect.y), Size::new(2.0, rect.height), ink);
+            continue;
+        }
+        for y in (0..rect.height as u32).step_by(8) {
+            let point = Point::new(rect.x + x as f32, rect.y + y as f32);
+            match kind {
+                0 => {
+                    frame.fill_rectangle(point, Size::new(4.0, 4.0), ink);
+                    frame.fill_rectangle(Point::new(point.x + 4.0, point.y + 4.0), Size::new(4.0, 4.0), ink);
+                }
+                2 => frame.stroke(
+                    &Path::line(point, Point::new(point.x + 6.0, point.y + 8.0)),
+                    Stroke::default().with_color(ink),
+                ),
+                _ => frame.fill(&Path::circle(Point::new(point.x + 4.0, point.y + 4.0), 2.56), ink),
+            }
+        }
+    }
+}
+
+fn monet_groups<'a>(
+    i18n: &'a I18n,
+    tokens: Tokens,
+    tuning: folia_visualizer::monet_background::Tuning,
+    has_background_upload: bool,
+) -> Vec<(String, Vec<Row<'a, crate::Message>>)> {
+    let select = |label: &str,
+                  selected,
+                  labels: [&str; 2],
+                  change: fn(&mut folia_visualizer::monet_background::Tuning, bool)| Row {
+        label: i18n.t(label).to_owned(),
+        hint: None,
+        sub: false,
+        below: None,
+        control: kit::segmented(
+            tokens,
+            vec![(false, i18n.t(labels[0]).to_owned()), (true, i18n.t(labels[1]).to_owned())],
+            selected,
+            None,
+            move |value| {
+                let mut next = tuning;
+                change(&mut next, value);
+                crate::Message::Workbench(Message::MonetSet(next))
+            },
+        ),
+    };
+    let toggle = |label: &str, value: bool, change: fn(&mut folia_visualizer::monet_background::Tuning, bool)| Row {
+        label: i18n.t(label).to_owned(),
+        hint: None,
+        sub: false,
+        below: None,
+        control: kit::toggle(tokens, f32::from(value), {
+            let mut next = tuning;
+            change(&mut next, !value);
+            crate::Message::Workbench(Message::MonetSet(next))
+        }),
+    };
+    let source = vec![
+        select(
+            "options.monetBackgroundSource",
+            tuning.uploaded,
+            ["options.monetBackgroundSourceCover", "options.monetBackgroundSourceUploaded"],
+            |t, value| t.uploaded = value,
+        ),
+        background_upload_row(i18n, tokens, has_background_upload),
+    ];
+    let mut layout = vec![select(
+        "options.monetBackgroundLayout",
+        tuning.half,
+        ["options.monetLayoutFullOverlay", "options.monetLayoutHalfPane"],
+        |t, value| t.half = value,
+    )];
+    if tuning.half {
+        layout.push(monet_number(
+            i18n,
+            tokens,
+            tuning,
+            "options.monetHalfPaneOffsetX",
+            tuning.offset,
+            (-40.0..=40.0, 1.0, false),
+            |t, v| t.offset = v,
+        ));
+    }
+    layout.push(toggle("options.monetBackgroundDriftEnabled", tuning.drift, |t, v| t.drift = v));
+    if tuning.drift {
+        layout.push(monet_number(
+            i18n,
+            tokens,
+            tuning,
+            "options.monetBackgroundDriftStrength",
+            tuning.drift_strength,
+            (0.0..=1.0, 0.05, true),
+            |t, v| t.drift_strength = v,
+        ));
+    }
+    let filters = vec![
+        monet_number(
+            i18n,
+            tokens,
+            tuning,
+            "options.monetBackgroundBlur",
+            tuning.blur,
+            (0.0..=60.0, 1.0, false),
+            |t, v| t.blur = v,
+        ),
+        monet_number(
+            i18n,
+            tokens,
+            tuning,
+            "options.monetBackgroundSaturation",
+            tuning.saturation,
+            (0.0..=2.0, 0.05, true),
+            |t, v| t.saturation = v,
+        ),
+        monet_number(
+            i18n,
+            tokens,
+            tuning,
+            "options.monetBackgroundGrayscale",
+            tuning.grayscale,
+            (0.0..=1.0, 0.05, true),
+            |t, v| t.grayscale = v,
+        ),
+    ];
+    let mut tint = vec![
+        monet_number(
+            i18n,
+            tokens,
+            tuning,
+            "options.monetBackgroundOverlayOpacity",
+            tuning.overlay,
+            (0.0..=1.0, 0.05, true),
+            |t, v| t.overlay = v,
+        ),
+        monet_number(
+            i18n,
+            tokens,
+            tuning,
+            "options.monetBackgroundWash",
+            tuning.wash,
+            (0.0..=1.0, 0.05, true),
+            |t, v| t.wash = v,
+        ),
+        toggle("options.monetBackgroundStreaksEnabled", tuning.streaks, |t, v| t.streaks = v),
+        select(
+            "options.monetBackgroundWashColorMode",
+            tuning.custom_wash,
+            ["options.monetBackgroundWashTheme", "options.monetBackgroundWashCustom"],
+            |t, v| t.custom_wash = v,
+        ),
+    ];
+    if tuning.custom_wash {
+        let color = tuning.wash_color;
+        tint.push(Row {
+            label: i18n.t("options.monetBackgroundWashCustomColor").to_owned(),
+            hint: None,
+            sub: true,
+            control: kit::value(tokens, format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)),
+            below: Some(crate::color_picker::view(
+                color,
+                move |color| {
+                    let mut next = tuning;
+                    next.wash_color = color;
+                    crate::Message::Workbench(Message::MonetDraft(next))
+                },
+                crate::Message::Workbench(Message::Commit),
+            )),
+        });
+    }
+    vec![
+        (i18n.t("options.monetGroupBackgroundSource").to_owned(), source),
+        (i18n.t("options.monetGroupLayoutPosition").to_owned(), layout),
+        (i18n.t("options.monetGroupFiltersPostProcessing").to_owned(), filters),
+        (i18n.t("options.monetGroupColorTintWash").to_owned(), tint),
+    ]
+}
+
+fn monet_number<'a>(
+    i18n: &'a I18n,
+    tokens: Tokens,
+    tuning: folia_visualizer::monet_background::Tuning,
+    key: &'static str,
+    value: f32,
+    scale: (std::ops::RangeInclusive<f32>, f32, bool),
+    change: fn(&mut folia_visualizer::monet_background::Tuning, f32),
+) -> Row<'a, crate::Message> {
+    let (range, step, percent) = scale;
+    let shown = if percent {
+        format!("{}%", (value * 100.0).round())
+    } else if key == "options.monetBackgroundBlur" {
+        format!("{value:.0}px")
+    } else {
+        format!("{value:.0}%")
+    };
+    Row {
+        label: i18n.t(key).to_owned(),
+        hint: None,
+        sub: false,
+        control: kit::value(tokens, shown),
+        below: Some(
+            slider(range, value, move |value| {
+                let mut next = tuning;
+                change(&mut next, value);
+                crate::Message::Workbench(Message::MonetDraft(next))
+            })
+            .step(step)
+            .width(Length::Fill)
+            .on_release(crate::Message::Workbench(Message::Commit))
+            .style(move |_, _| kit::slider_style(tokens))
+            .into(),
+        ),
+    }
+}
+
+fn latent_groups<'a>(
+    i18n: &'a I18n,
+    tokens: Tokens,
+    latent: folia_visualizer::LatentTuning,
+) -> Vec<(String, Vec<Row<'a, crate::Message>>)> {
+    use folia_visualizer::{LatentColors, LatentLayers};
+    let layers = vec![
+        (LatentLayers::Dither, i18n.t("options.latentDisplayDithering").to_owned()),
+        (LatentLayers::Mesh, i18n.t("options.latentDisplayMesh").to_owned()),
+        (LatentLayers::Both, i18n.t("options.latentDisplayBoth").to_owned()),
+    ];
+    let sources = vec![
+        (LatentColors::CoverTheme, i18n.t("options.latentColorSourceCoverTheme").to_owned()),
+        (LatentColors::CoverOnly, i18n.t("options.latentColorSourceCoverOnly").to_owned()),
+    ];
+    let mut head = vec![
+        Row {
+            label: i18n.t("options.latentDisplayMode").to_owned(),
+            hint: None,
+            sub: false,
+            below: None,
+            control: kit::segmented(tokens, layers, latent.layers, None, move |layers| {
+                let mut next = latent;
+                next.layers = layers;
+                crate::Message::Workbench(Message::LatentSet(next))
+            }),
+        },
+        Row {
+            label: i18n.t("options.latentColorSource").to_owned(),
+            hint: None,
+            sub: false,
+            below: None,
+            control: kit::segmented(tokens, sources, latent.colors, None, move |colors| {
+                let mut next = latent;
+                next.colors = colors;
+                crate::Message::Workbench(Message::LatentSet(next))
+            }),
+        },
+        latent_flag(
+            i18n,
+            tokens,
+            latent,
+            "options.latentDynamicOnlyInPlayer",
+            "options.latentDynamicOnlyInPlayerDesc",
+            latent.dynamic_only,
+            |tuning, on| {
+                tuning.dynamic_only = on;
+            },
+        ),
+        latent_flag(
+            i18n,
+            tokens,
+            latent,
+            "options.latentEnhancedBeatResponse",
+            "options.latentEnhancedBeatResponseDesc",
+            latent.enhanced,
+            |tuning, on| {
+                tuning.enhanced = on;
+            },
+        ),
+        latent_flag(
+            i18n,
+            tokens,
+            latent,
+            "options.nomandBackgroundOverlay",
+            "options.nomandBackgroundOverlayDesc",
+            latent.overlay_on,
+            |tuning, on| {
+                tuning.overlay_on = on;
+            },
+        ),
+    ];
+    if latent.overlay_on {
+        let mut opacity = latent_number(
+            tokens,
+            i18n.t("options.nomandBackgroundOverlayOpacity").to_owned(),
+            latent.overlay,
+            0.0..=1.0,
+            0.05,
+            format!("{}%", (latent.overlay * 100.0).round()),
+            move |value| {
+                let mut next = latent;
+                next.overlay = value;
+                next
+            },
+        );
+        opacity.sub = true;
+        head.push(opacity);
+    }
+    let dither = vec![
+        latent_number(
+            tokens,
+            i18n.t("options.latentBaseSpeed").to_owned(),
+            latent.dither_speed,
+            0.0..=2.0,
+            0.1,
+            format!("{:.1}", latent.dither_speed),
+            move |value| {
+                let mut next = latent;
+                next.dither_speed = value;
+                next
+            },
+        ),
+        latent_number(
+            tokens,
+            i18n.t("options.latentAudioSpeed").to_owned(),
+            latent.dither_audio,
+            0.0..=2.0,
+            0.1,
+            format!("{:.1}", latent.dither_audio),
+            move |value| {
+                let mut next = latent;
+                next.dither_audio = value;
+                next
+            },
+        ),
+        latent_number(
+            tokens,
+            i18n.t("options.latentDitheringSize").to_owned(),
+            latent.dither_size,
+            0.5..=8.0,
+            0.25,
+            format!("{:.2}", latent.dither_size),
+            move |value| {
+                let mut next = latent;
+                next.dither_size = value;
+                next
+            },
+        ),
+        latent_number(
+            tokens,
+            i18n.t("options.latentDitheringOpacity").to_owned(),
+            latent.dither_opacity,
+            0.0..=1.0,
+            0.05,
+            format!("{}%", (latent.dither_opacity * 100.0).round()),
+            move |value| {
+                let mut next = latent;
+                next.dither_opacity = value;
+                next
+            },
+        ),
+    ];
+    let mesh = vec![
+        latent_number(
+            tokens,
+            i18n.t("options.latentBaseSpeed").to_owned(),
+            latent.mesh_speed,
+            0.0..=2.0,
+            0.1,
+            format!("{:.1}", latent.mesh_speed),
+            move |value| {
+                let mut next = latent;
+                next.mesh_speed = value;
+                next
+            },
+        ),
+        latent_number(
+            tokens,
+            i18n.t("options.latentAudioSpeed").to_owned(),
+            latent.mesh_audio,
+            0.0..=2.0,
+            0.1,
+            format!("{:.1}", latent.mesh_audio),
+            move |value| {
+                let mut next = latent;
+                next.mesh_audio = value;
+                next
+            },
+        ),
+        latent_number(
+            tokens,
+            i18n.t("options.latentMeshDistortion").to_owned(),
+            latent.distortion,
+            0.0..=2.0,
+            0.05,
+            format!("{:.2}", latent.distortion),
+            move |value| {
+                let mut next = latent;
+                next.distortion = value;
+                next
+            },
+        ),
+        latent_number(
+            tokens,
+            i18n.t("options.latentMeshSwirl").to_owned(),
+            latent.swirl,
+            0.0..=1.0,
+            0.05,
+            format!("{:.2}", latent.swirl),
+            move |value| {
+                let mut next = latent;
+                next.swirl = value;
+                next
+            },
+        ),
+    ];
+    vec![
+        (i18n.t("options.latentBackgroundSettings").to_owned(), head),
+        (i18n.t("options.latentDitheringGroup").to_owned(), dither),
+        (i18n.t("options.latentMeshGroup").to_owned(), mesh),
+    ]
+}
+
+fn latent_flag<'a>(
+    i18n: &'a I18n,
+    tokens: Tokens,
+    latent: folia_visualizer::LatentTuning,
+    label: &'static str,
+    hint: &'static str,
+    on: bool,
+    write: impl Fn(&mut folia_visualizer::LatentTuning, bool) + 'static,
+) -> Row<'a, crate::Message> {
+    Row {
+        label: i18n.t(label).to_owned(),
+        hint: Some(i18n.t(hint).to_owned()),
+        sub: false,
+        below: None,
+        control: kit::toggle(tokens, if on { 1.0 } else { 0.0 }, {
+            let mut next = latent;
+            write(&mut next, !on);
+            crate::Message::Workbench(Message::LatentSet(next))
+        }),
+    }
+}
+
+fn latent_number<'a>(
+    tokens: Tokens,
+    label: String,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    text: String,
+    change: impl Fn(f32) -> folia_visualizer::LatentTuning + 'a,
+) -> Row<'a, crate::Message> {
+    Row {
+        label,
+        hint: None,
+        sub: false,
+        below: Some(
+            slider(range, value, move |next| crate::Message::Workbench(Message::LatentDraft(change(next))))
+                .step(step)
+                .width(Length::Fill)
+                .on_release(crate::Message::Workbench(Message::Commit))
+                .style(move |_, _| kit::slider_style(tokens))
+                .into(),
+        ),
+        control: kit::value(tokens, text),
+    }
 }
 
 fn font_page<'a>(
@@ -1681,6 +2596,7 @@ fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
         artist: lyrics.artist.clone().unwrap_or_default(),
         album: String::new(),
         portrait: None,
+        typography: folia_visualizer::Typography::default(),
         preview: true,
         audio,
     };

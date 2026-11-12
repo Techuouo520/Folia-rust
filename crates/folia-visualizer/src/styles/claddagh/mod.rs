@@ -78,7 +78,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
         tilt_deg,
         letter,
         power,
-        salt: scene.tuning.fingerprint(),
+        salt: scene.layout_key(),
     };
     for index in first..=last {
         draw_line(&ctx, cache, frame, index);
@@ -134,10 +134,28 @@ fn draw_line(ctx: &DrawCtx<'_>, cache: &mut Cache, frame: &mut Frame, index: usi
     let line = &scene.lyrics.lines[index];
     let spacing = f64::from((1.0 + focus) / (1.0 + crate::Values::default().number(manifest(), "focusScaleRatio")));
     let layout = cache.layout.get_or_insert(line, size, scene.font_scale, salt, || {
-        Rc::new(LineLayout { placed: layout::placed(line, font_px, base_rx, spacing, letter) })
+        Rc::new(LineLayout {
+            placed: layout::placed_with_font(
+                line,
+                font_px,
+                base_rx,
+                spacing,
+                letter,
+                scene.typography.font(crate::BOLD),
+            ),
+        })
     });
     let active = cache.layout.get_or_insert(&scene.lyrics.lines[center], size, scene.font_scale, salt, || {
-        Rc::new(LineLayout { placed: layout::placed(&scene.lyrics.lines[center], font_px, base_rx, spacing, letter) })
+        Rc::new(LineLayout {
+            placed: layout::placed_with_font(
+                &scene.lyrics.lines[center],
+                font_px,
+                base_rx,
+                spacing,
+                letter,
+                scene.typography.font(crate::BOLD),
+            ),
+        })
     });
     let end = layout::render_end(&scene.lyrics.lines, center);
     let own_end = layout::render_end(&scene.lyrics.lines, index);
@@ -189,7 +207,7 @@ fn paint(frame: &mut Frame, origin: Point, item: &Placed, pose: Glyph, font_px: 
             position: Point::ORIGIN,
             color: color(body, alpha),
             size: font_px.into(),
-            font: iced::Font { weight: iced::font::Weight::Bold, ..iced::Font::DEFAULT },
+            font: scene.typography.font(crate::BOLD),
             align_x: iced::widget::text::Alignment::Center,
             align_y: iced::alignment::Vertical::Center,
             shaping: iced::widget::text::Shaping::Advanced,

@@ -1,6 +1,10 @@
 // The lumiere passes: the graphics group (light, echo, lines, stars, motes) and the text group (crosses, lyrics),
 // each bloomed on its own. Front bokeh is its own pass.
 
+use std::sync::Weak;
+#[cfg(feature = "dev")]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use folia_render::glyphs::{Batch, Glyphs};
 use iced::Rectangle;
 use iced::widget::shader::{self, Primitive as ShaderPrimitive};
@@ -17,7 +21,30 @@ const PARTICLE_STRIDE: u64 = 48;
 pub(super) const MAX_PARTICLES: u64 = 4096;
 const BURSTS: u32 = 84;
 const MAX_SPRITES: usize = 4096;
-const IDLE_TRIMS: u32 = 120;
+
+#[cfg(feature = "dev")]
+static STAGE_SLOTS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "dev")]
+static STAGE_TEXTURES: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "dev")]
+static FRONT_SLOTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Graphics-group slots whose owner is still alive. Release builds omit the counter.
+#[cfg(feature = "dev")]
+pub fn stage_slots() -> usize {
+    STAGE_SLOTS.load(Ordering::Relaxed)
+}
+
+/// Slots that still hold a bloom pyramid. Release builds omit the counter.
+#[cfg(feature = "dev")]
+pub fn stage_textures() -> usize {
+    STAGE_TEXTURES.load(Ordering::Relaxed)
+}
+
+#[cfg(feature = "dev")]
+pub fn front_slots() -> usize {
+    FRONT_SLOTS.load(Ordering::Relaxed)
+}
 
 const LINE_ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
     wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
@@ -56,8 +83,14 @@ pub struct Pass {
     /// Only the lyrics: the graphics group is the flat `base` and is not bloomed.
     pub text_only: bool,
     pub base: [f32; 3],
+    pub veil: [f32; 4],
     /// `LUMIERE_QUALITY_PROFILES.graphicsScale`.
     pub graphics_scale: f32,
+    /// Widget identity. iced keeps one pipeline type for every lumiere scene in the frame.
+    pub slot: u64,
+    pub owner: Weak<std::sync::atomic::AtomicBool>,
+    /// Only the playing page copies this scene into the glass blur source.
+    pub publish_blur: bool,
 }
 
 /// Foreground bokeh drawn above the lyrics.
@@ -66,6 +99,8 @@ pub struct FrontPass {
     pub bytes: [u8; UNIFORM_BYTES],
     pub decor: [u8; DECOR_BYTES],
     pub particles: Option<Vec<u8>>,
+    pub slot: u64,
+    pub owner: Weak<std::sync::atomic::AtomicBool>,
 }
 
 struct Targets {
@@ -86,8 +121,8 @@ struct Targets {
     text_bloom: bloom::Filter,
     glyphs: Glyphs,
     sprites: u32,
-    /// Trims since the last prepare. Other windows trim too, so the textures go only after a long run without lumiere.
-    idle: u32,
+    /// Bloom pyramid is allocated. Dropped only with the slot, not because another window presented.
+    textures_live: bool,
     device: wgpu::Device,
     queue: wgpu::Queue,
     format: wgpu::TextureFormat,
@@ -162,11 +197,11 @@ impl Targets {
             line_verts: 0,
             particle_count: 0,
             pending_bursts: burst_instances(),
-            bloom: bloom::Filter::new(device, format, wgpu::BlendState::REPLACE),
+            bloom: bloom::Filter::new(device, format, wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
             text_bloom: bloom::Filter::new(device, format, wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
             glyphs: Glyphs::new(device, format, MAX_SPRITES, super::sprite_images()),
             sprites: 0,
-            idle: 0,
+            textures_live: false,
             device: device.clone(),
             queue: queue.clone(),
             format,
@@ -349,8 +384,7 @@ impl ShaderPrimitive for Pass {
         bounds: &Rectangle,
         viewport: &shader::Viewport,
     ) {
-        let gpu = &mut pipeline.0;
-        gpu.idle = 0;
+        let Some(gpu) = pipeline.slot(self.slot, self.owner.clone()) else { return };
         gpu.window = [bounds.width.max(1.0), bounds.height.max(1.0)];
         let (width, height) = pixel_size(bounds, viewport, self.graphics_scale);
         let strength = if self.text_only { 0.0 } else { bloom::GRAPHICS.strength * self.bloom };
@@ -360,6 +394,7 @@ impl ShaderPrimitive for Pass {
         let sprites = self.glyphs.lock();
         gpu.glyphs.prepare(device, queue, &sprites, [bounds.width, bounds.height], viewport.scale_factor());
         gpu.sprites = sprites.len().min(MAX_SPRITES) as u32;
+        note_stage_textures(gpu);
         drop(sprites);
         queue.write_buffer(&gpu.light_uniform, 0, &self.bytes);
         queue.write_buffer(&gpu.decor_uniform, 0, &self.decor);
@@ -386,7 +421,7 @@ impl ShaderPrimitive for Pass {
         target: &wgpu::TextureView,
         clip: &Rectangle<u32>,
     ) {
-        let gpu = &pipeline.0;
+        let Some(gpu) = pipeline.targets(self.slot) else { return };
         let (Some(graphics), Some(text)) = (gpu.bloom.scene(), gpu.text_bloom.scene()) else { return };
         if clip.width == 0 || clip.height == 0 {
             return;
@@ -394,7 +429,7 @@ impl ShaderPrimitive for Pass {
         let ground = if self.text_only {
             wgpu::Color { r: f64::from(self.base[0]), g: f64::from(self.base[1]), b: f64::from(self.base[2]), a: 1.0 }
         } else {
-            wgpu::Color::BLACK
+            wgpu::Color::TRANSPARENT
         };
         {
             let mut pass = scene_pass(encoder, graphics, "folia-lumiere-graphics", ground);
@@ -408,13 +443,21 @@ impl ShaderPrimitive for Pass {
             paint_text(gpu, &mut pass, self.echo);
         }
         gpu.text_bloom.encode(encoder, target, clip.x, clip.y, clip.width, clip.height);
-        if let Some(scene) = gpu.bloom.scene() {
+        if self.publish_blur
+            && let Some(scene) = gpu.bloom.scene()
+        {
             let stamp = self
                 .bytes
                 .iter()
                 .take(24)
                 .fold(0u64, |hash, byte| hash.wrapping_mul(0x0000_0100_0000_01b3).wrapping_add(u64::from(*byte)));
-            folia_render::paint_external(&gpu.device, &gpu.queue, encoder, gpu.format, scene, stamp, gpu.window);
+            folia_render::paint_over_underlay(
+                &gpu.device,
+                &gpu.queue,
+                encoder,
+                gpu.format,
+                folia_render::UnderlayOverlay { foreground: scene, stamp, window: gpu.window, veil: self.veil },
+            );
         }
     }
 }
@@ -493,12 +536,12 @@ impl ShaderPrimitive for FrontPass {
     fn prepare(
         &self,
         pipeline: &mut Self::Pipeline,
-        _device: &wgpu::Device,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         _bounds: &Rectangle,
         _viewport: &shader::Viewport,
     ) {
-        let gpu = &mut pipeline.0;
+        let Some(gpu) = pipeline.slot(self.slot, self.owner.clone(), device) else { return };
         queue.write_buffer(&gpu.light_uniform, 0, &self.bytes);
         queue.write_buffer(&gpu.decor_uniform, 0, &self.decor);
         if let Some(particles) = &self.particles {
@@ -507,7 +550,7 @@ impl ShaderPrimitive for FrontPass {
     }
 
     fn draw(&self, pipeline: &Self::Pipeline, pass: &mut wgpu::RenderPass<'_>) -> bool {
-        let gpu = &pipeline.0;
+        let Some(gpu) = pipeline.gpu(self.slot) else { return true };
         if gpu.count == 0 {
             return true;
         }
@@ -520,32 +563,136 @@ impl ShaderPrimitive for FrontPass {
     }
 }
 
-pub struct StageGpu(Targets);
-pub struct FrontStage(FrontGpu);
+struct StageSlot {
+    key: u64,
+    owner: Weak<std::sync::atomic::AtomicBool>,
+    gpu: folia_render::Prepared<Targets>,
+}
+
+impl Drop for StageSlot {
+    fn drop(&mut self) {
+        if let Some(gpu) = self.gpu.get_mut()
+            && gpu.textures_live
+        {
+            #[cfg(feature = "dev")]
+            STAGE_TEXTURES.fetch_sub(1, Ordering::Relaxed);
+            gpu.textures_live = false;
+        }
+        #[cfg(feature = "dev")]
+        STAGE_SLOTS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+struct FrontSlot {
+    key: u64,
+    owner: Weak<std::sync::atomic::AtomicBool>,
+    gpu: folia_render::Prepared<FrontGpu>,
+}
+
+impl Drop for FrontSlot {
+    fn drop(&mut self) {
+        #[cfg(feature = "dev")]
+        FRONT_SLOTS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+fn note_stage_textures(gpu: &mut Targets) {
+    let live = gpu.bloom.scene().is_some();
+    if live == gpu.textures_live {
+        return;
+    }
+    #[cfg(feature = "dev")]
+    if live {
+        STAGE_TEXTURES.fetch_add(1, Ordering::Relaxed);
+    } else {
+        STAGE_TEXTURES.fetch_sub(1, Ordering::Relaxed);
+    }
+    gpu.textures_live = live;
+}
+
+pub struct StageGpu {
+    slots: Vec<StageSlot>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    format: wgpu::TextureFormat,
+}
+
+pub struct FrontStage {
+    slots: Vec<FrontSlot>,
+    format: wgpu::TextureFormat,
+}
+
+impl StageGpu {
+    fn slot(&mut self, key: u64, owner: Weak<std::sync::atomic::AtomicBool>) -> Option<&mut Targets> {
+        if let Some(index) = self.slots.iter().position(|slot| slot.key == key) {
+            self.slots[index].owner = owner;
+            return self.slots[index].gpu.poll();
+        }
+        #[cfg(feature = "dev")]
+        STAGE_SLOTS.fetch_add(1, Ordering::Relaxed);
+        let (device, queue, format) = (self.device.clone(), self.queue.clone(), self.format);
+        let gpu = folia_render::Prepared::new(owner.clone(), move || Targets::new(&device, &queue, format));
+        self.slots.push(StageSlot { key, owner, gpu });
+        let index = self.slots.len() - 1;
+        self.slots[index].gpu.poll()
+    }
+
+    fn targets(&self, key: u64) -> Option<&Targets> {
+        self.slots.iter().find(|slot| slot.key == key).and_then(|slot| slot.gpu.get())
+    }
+}
+
+impl FrontStage {
+    fn slot(
+        &mut self,
+        key: u64,
+        owner: Weak<std::sync::atomic::AtomicBool>,
+        device: &wgpu::Device,
+    ) -> Option<&mut FrontGpu> {
+        if let Some(index) = self.slots.iter().position(|slot| slot.key == key) {
+            self.slots[index].owner = owner;
+            return self.slots[index].gpu.poll();
+        }
+        #[cfg(feature = "dev")]
+        FRONT_SLOTS.fetch_add(1, Ordering::Relaxed);
+        let (device, format) = (device.clone(), self.format);
+        let gpu = folia_render::Prepared::new(owner.clone(), move || FrontGpu::new(&device, format));
+        self.slots.push(FrontSlot { key, owner, gpu });
+        let index = self.slots.len() - 1;
+        self.slots[index].gpu.poll()
+    }
+
+    fn gpu(&self, key: u64) -> Option<&FrontGpu> {
+        self.slots.iter().find(|slot| slot.key == key).and_then(|slot| slot.gpu.get())
+    }
+}
 
 impl shader::Pipeline for StageGpu {
     fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        Self(Targets::new(device, queue, format))
+        Self { slots: Vec::new(), device: device.clone(), queue: queue.clone(), format }
     }
 
-    /// iced trims after every present of any window. After `IDLE_TRIMS` without lumiere, the full-size textures and
-    /// the atlas go.
+    /// Every present trims this storage, including another window that shares the engine.
+    /// A living owner keeps its pyramid and atlas; only a dropped widget releases them.
     fn trim(&mut self) {
-        let gpu = &mut self.0;
-        gpu.idle = gpu.idle.saturating_add(1);
-        if gpu.idle == IDLE_TRIMS {
-            gpu.bloom.release();
-            gpu.text_bloom.release();
-            gpu.glyphs.release();
-            tracing::debug!("lumiere textures released");
-        }
+        self.slots.retain_mut(|slot| {
+            if slot.owner.strong_count() == 0 {
+                return false;
+            }
+            if let Some(gpu) = slot.gpu.get_mut() {
+                note_stage_textures(gpu);
+            }
+            true
+        });
     }
 }
 
 impl shader::Pipeline for FrontStage {
-    fn new(device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        Self(FrontGpu::new(device, format))
+    fn new(_device: &wgpu::Device, _queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        Self { slots: Vec::new(), format }
     }
 
-    fn trim(&mut self) {}
+    fn trim(&mut self) {
+        self.slots.retain(|slot| slot.owner.strong_count() > 0);
+    }
 }

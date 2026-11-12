@@ -2,8 +2,6 @@
 // wiped segments for the mask (mask pixels), drop sprites (CSS pixels), breath lobes and the spotlight.
 // Everything is a function of playback time; the buffers are refilled each frame, not reallocated.
 
-use std::sync::Mutex;
-
 use super::scene::{Char, Drip, Hit, Line, Scene, Wipe};
 use super::{Rng, smooth};
 
@@ -21,20 +19,18 @@ pub type Segment = [f32; 6];
 /// One drop sprite: centre x, y, width, height (CSS pixels), refraction size, alpha.
 pub type Drop = [f32; 6];
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Paint {
     pub segments: Vec<Segment>,
     pub drops: Vec<Drop>,
     path: Vec<(f32, f32)>,
 }
 
-fn store() -> &'static Mutex<Paint> {
-    static STORE: Mutex<Paint> = Mutex::new(Paint { segments: Vec::new(), drops: Vec::new(), path: Vec::new() });
-    &STORE
-}
-
-pub fn with_paint(read: impl FnOnce(&Paint)) {
-    read(&store().lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+impl Paint {
+    /// Hands the frame's sprites to the pass and keeps `path` for the next frame.
+    pub fn take_sprites(&mut self) -> (Vec<Segment>, Vec<Drop>) {
+        (std::mem::take(&mut self.segments), std::mem::take(&mut self.drops))
+    }
 }
 
 /// The frame's tuning, read once.
@@ -54,10 +50,17 @@ pub struct Drive {
     pub spot: [f32; 4],
 }
 
-/// Collects this frame's segments and drops into the shared buffers and returns the rest.
-pub fn paint(scene: &Scene, time: f64, width: f32, height: f32, knobs: &Knobs, energy: f32) -> Drive {
-    let mut held = store().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Paint { segments, drops, path } = &mut *held;
+/// Collects this frame's segments and drops into `paint` and returns the rest.
+pub fn paint(
+    scene: &Scene,
+    time: f64,
+    width: f32,
+    height: f32,
+    knobs: &Knobs,
+    energy: f32,
+    paint: &mut Paint,
+) -> Drive {
+    let Paint { segments, drops, path } = paint;
     segments.clear();
     drops.clear();
     path.clear();

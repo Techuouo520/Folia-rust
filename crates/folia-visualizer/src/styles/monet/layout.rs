@@ -98,7 +98,7 @@ pub fn layout(scene: &Scene<'_>, size: Size, offset: f32) -> Layout {
 
     let artist_box = artist_px * 1.5;
     let title_text = if scene.title.is_empty() { "Monet" } else { scene.title.as_str() };
-    let title_rows = text::wrap(title_text, title_px, SEMIBOLD, header_width).len().clamp(1, 2);
+    let title_rows = text::wrap(title_text, title_px, scene.typography.font(SEMIBOLD), header_width).len().clamp(1, 2);
     let title_line = title_px * 1.06;
     // Padding-block 0.25em with margins -0.25em / -0.12em leaves 0.13em below the line boxes.
     let title_block = title_rows as f32 * title_line + 0.13 * title_px;
@@ -207,6 +207,7 @@ fn column_box(width: f32, column: f32) -> (f32, f32) {
 
 /// `theme.description || theme.name || 'Monet'`, upper-cased like the capsule's `uppercase`.
 pub fn capsule_label(scene: &Scene<'_>) -> String {
-    let name = scene.theme.name.trim();
+    let name =
+        scene.theme.description.as_deref().filter(|text| !text.trim().is_empty()).unwrap_or(&scene.theme.name).trim();
     if name.is_empty() { "MONET".to_owned() } else { name.to_uppercase() }
 }

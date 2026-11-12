@@ -23,6 +23,11 @@ pub struct StoredTheme {
     pub primary: Rgb,
     pub accent: Rgb,
     pub secondary: Rgb,
+    #[serde(alias = "wordColors")]
+    pub word_colors: Vec<folia_core::WordColor>,
+    #[serde(alias = "lyricsIcons")]
+    pub lyrics_icons: Vec<String>,
+    pub description: Option<String>,
 }
 
 impl Default for StoredTheme {
@@ -34,6 +39,9 @@ impl Default for StoredTheme {
             primary: theme.primary,
             accent: theme.accent,
             secondary: theme.secondary,
+            word_colors: Vec::new(),
+            lyrics_icons: Vec::new(),
+            description: None,
         }
     }
 }
@@ -48,6 +56,9 @@ impl StoredTheme {
             accent: self.accent,
             secondary: self.secondary,
             intensity,
+            word_colors: self.word_colors.clone(),
+            lyrics_icons: self.lyrics_icons.clone(),
+            description: self.description.clone(),
         }
     }
 }
@@ -69,6 +80,9 @@ impl Default for DualTheme {
                 primary: Theme::DAYLIGHT.primary,
                 accent: Theme::DAYLIGHT.accent,
                 secondary: Theme::DAYLIGHT.secondary,
+                word_colors: Vec::new(),
+                lyrics_icons: Vec::new(),
+                description: None,
             },
             dark: StoredTheme::default(),
         }

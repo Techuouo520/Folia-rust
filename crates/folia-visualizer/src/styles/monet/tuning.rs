@@ -159,8 +159,6 @@ pub fn manifest() -> Manifest {
     manifest.hidden_unless = &[("audioStyle", "showAudioVisualization")];
     manifest.paths = &["portraitPath"];
     manifest.concealed = &["portraitOffsetX"];
-    // Theme has no `wordColors`, so the switch cannot change a colour.
-    manifest.locked = &["keywordColoringEnabled"];
     manifest.reset_key = Some("notifications.monetReset");
     manifest
 }
