@@ -151,3 +151,73 @@ fn old_cover_source_cannot_replace_a_changed_track_cover() {
     }
     assert!(wall.cover(1).is_none());
 }
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "requires a hardware GPU for image allocation")]
+fn large_cover_stays_on_preview_until_uploaded_then_fades() {
+    use iced::advanced::{image::Renderer as _, renderer::Headless};
+    use std::time::{Duration, Instant};
+
+    let temp = tempfile::tempdir().unwrap();
+    image::RgbaImage::from_pixel(1024, 1024, image::Rgba([40, 90, 130, 255]))
+        .save(temp.path().join("cover.png"))
+        .unwrap();
+    let tiles = vec![WallTile {
+        id: 1,
+        title: "Song".into(),
+        subtitle: String::new(),
+        badge: None,
+        cover: WallCover::Local(temp.path().join("song.wav")),
+        heading: false,
+        hue: 0.0,
+        stack: false,
+    }];
+    let mut wall = Wall::new();
+    let _ = wall.relayout(&tiles, WallShape::Blocks, None);
+    let (task, _) = wall.update(WallMessage::Viewport(Size::new(3840.0, 2160.0)), &tiles, None);
+    let mut previews = messages(task);
+    assert_eq!(previews.len(), 1);
+    let (task, _) = wall.update(previews.pop().unwrap(), &tiles, None);
+    let preview = wall.cover(1).unwrap();
+    let mut decoded = messages(task);
+    assert_eq!(decoded.len(), 1);
+    assert!(
+        matches!(&decoded[0], WallMessage::CoverLoaded { cover: Some(cover), .. } if cover.rgba.len() >= 2 * 1024 * 1024)
+    );
+    let (upload, _) = wall.update(decoded.pop().unwrap(), &tiles, None);
+    assert_eq!(wall.cover(1).unwrap().id(), preview.id());
+
+    let renderer =
+        pollster::block_on(<iced::Renderer as Headless>::new(iced::Font::DEFAULT, iced::Pixels(16.0), None)).unwrap();
+    let uploaded = pollster::block_on(async {
+        let mut stream = iced_runtime::task::into_stream(upload).unwrap();
+        let mut output = Vec::new();
+        while let Some(action) = stream.next().await {
+            match action {
+                iced_runtime::Action::Image(iced_runtime::image::Action::Allocate(handle, sender)) => {
+                    sender.send(renderer.load_image(&handle)).unwrap();
+                }
+                iced_runtime::Action::Output(message) => output.push(message),
+                _ => panic!("unexpected cover upload action"),
+            }
+        }
+        output
+    });
+    assert_eq!(uploaded.len(), 1);
+    for message in uploaded {
+        let _ = wall.update(message, &tiles, None);
+    }
+    let now = Instant::now();
+    let first = wall.cover_layers_at(1, now);
+    assert_eq!(first.previous.unwrap().id(), preview.id());
+    assert_ne!(first.image.unwrap().id(), preview.id());
+    assert!(first.opacity < 0.1);
+    assert!(wall.coasting());
+    let middle = wall.cover_layers_at(1, now + Duration::from_millis(110));
+    assert!((middle.opacity - 0.5).abs() < 0.1);
+    let last = wall.cover_layers_at(1, now + Duration::from_millis(220));
+    assert!(last.previous.is_none());
+    assert_eq!(last.opacity, 1.0);
+    let _ = wall.tick_coast(now + Duration::from_millis(220), &tiles, None);
+    assert!(!wall.coasting());
+}

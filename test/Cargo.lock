@@ -1748,6 +1748,7 @@ dependencies = [
  "folia-store",
  "folia-visualizer",
  "iced",
+ "iced_runtime",
  "image",
  "lucide-static-svg",
  "open",

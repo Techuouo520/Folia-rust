@@ -85,7 +85,29 @@ fn tracked_runs_preserve_selection_clusters_and_bidi() {
         upright: true,
         width: None,
     };
-    assert!((Run::new("A", style).size.height - 14.0).abs() < 0.1);
+    for font in [style.font, Font { family: font::Family::Name("Segoe UI"), ..style.font }] {
+        let style = Style { font, ..style };
+        let expected = {
+            let mut shared = font_system().write().unwrap();
+            let system = shared.raw();
+            let mut buffer = cosmic::Buffer::new(system, cosmic::Metrics::new(style.size, style.line_height));
+            buffer.set_text(system, "A", &to_attributes(font), cosmic::Shaping::Advanced, None);
+            buffer.shape_until_scroll(system, false);
+            let glyph = buffer.layout_runs().next().unwrap().glyphs[0].clone();
+            let resolved = system.get_font(glyph.font_id, glyph.font_weight).unwrap();
+            let mut input = cosmic::harfrust::UnicodeBuffer::new();
+            input.push_str("A");
+            input.guess_segment_properties();
+            input.set_direction(cosmic::harfrust::Direction::TopToBottom);
+            let shaped = resolved.shaper().shape(input, &[]);
+            shaped.glyph_positions().iter().map(|position| -position.y_advance as f32).sum::<f32>() * style.size
+                / resolved.shaper().units_per_em() as f32
+        };
+        assert!(expected > 0.0);
+        assert!((Run::new("A", style).size.height - expected).abs() < 0.1);
+        let tracked = Run::new("AA", Style { tracking: 1.4, ..style });
+        assert!((tracked.size.height - 2.0 * (expected + 1.4)).abs() < 0.1);
+    }
 }
 
 #[test]
