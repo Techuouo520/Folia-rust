@@ -350,6 +350,7 @@ fn loading_capsule_keeps_a_visible_rotating_lucide_glyph() {
         secondary: Color::WHITE,
         background: Color::BLACK,
         daylight: false,
+        transparent_background: false,
         window: Size::new(W as f32, H as f32),
         bottom: 24.0,
         modal: false,

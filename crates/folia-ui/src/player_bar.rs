@@ -149,6 +149,8 @@ pub struct Look<'a> {
     /// `--bg-color`, the play glyph.
     pub background: Color,
     pub daylight: bool,
+    /// The player window exposes the desktop below the capsule.
+    pub transparent_background: bool,
     pub window: Size,
     /// The bar's `bottom`: `PLAYER_BOTTOM_BAR_BASE_OFFSET_PX` lifted by the user's offset.
     pub bottom: f32,
@@ -413,7 +415,7 @@ impl PlayerBar {
             });
         let lift = 24.0 * (1.0 - shown);
         let scale = 0.97 + 0.03 * shown;
-        let plate = shadow_plate(width, height, radius, fill, look.daylight, open, shown);
+        let plate = shadow_plate(width, height, radius, fill, &look, open, shown);
         // The same widgets whether the bar is present or not: hiding must not rebuild the hover and control state.
         let mut capsule = mouse_area(capsule);
         if self.present {
@@ -808,11 +810,11 @@ fn shadow_plate<'a>(
     height: f32,
     radius: f32,
     fill: Color,
-    daylight: bool,
+    look: &Look<'_>,
     open: bool,
     shown: f32,
 ) -> ShadowPlate<'a> {
-    let (y, blur, spread, alpha): (f32, f32, f32, f32) = match (daylight, open) {
+    let (y, blur, spread, alpha): (f32, f32, f32, f32) = match (look.daylight, open) {
         (false, _) => (25.0, 50.0, -12.0, 0.25),
         (true, true) => (20.0, 25.0, -5.0, 0.1),
         (true, false) => (10.0, 15.0, -3.0, 0.1),
@@ -830,7 +832,7 @@ fn shadow_plate<'a>(
         shadow_y: y,
         shadow_spread: spread,
         ring: [0.0; 4],
-        backdrop: 24.0,
+        backdrop: if look.transparent_background { 0.0 } else { 24.0 },
         fade: shown,
         saturate: 1.0,
     };

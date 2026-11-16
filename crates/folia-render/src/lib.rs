@@ -2,6 +2,7 @@
 
 mod backdrop;
 mod blur;
+mod compositor;
 mod frame;
 pub mod glyphs;
 mod pipeline;
@@ -29,6 +30,9 @@ pub use wash::{Glow, Veil, Wash};
 pub mod backend;
 mod host;
 mod host_widget;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod native_frame;
 pub use host::Renderer as HostRenderer;
 pub use host_widget::host;
 

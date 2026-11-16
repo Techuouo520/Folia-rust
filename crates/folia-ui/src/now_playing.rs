@@ -28,6 +28,7 @@ pub struct Backdrop {
 /// Where the picture is and how strong its vignette and bottom subtitle are.
 #[derive(Clone, Copy)]
 pub struct Screen<'a> {
+    pub transparent: bool,
     pub window: Size,
     pub vignette: f32,
     pub subtitle_opacity: f32,
@@ -63,7 +64,7 @@ pub fn view<'a, M: From<folia_visualizer::styles::monet::Event> + 'a>(
     let window = screen.window;
     let subtitle_opacity = screen.subtitle_opacity;
     let subtitle_scale = screen.subtitle_scale;
-    let show = scene.style.shows_shared_background();
+    let show = scene.style.shows_shared_background() && !screen.transparent;
     let flat = !matches!(scene.style, folia_visualizer::Style::Nebbia | folia_visualizer::Style::Lumiere);
     let ground = Ground {
         mode: screen.shared.mode,
@@ -84,15 +85,15 @@ pub fn view<'a, M: From<folia_visualizer::styles::monet::Event> + 'a>(
         picture: screen.picture,
         nomand: screen.nomand,
     };
-    let scene = Scene { backdrop: scene.backdrop && !show, ..scene };
+    let scene = Scene { backdrop: scene.backdrop && !show && !screen.transparent, ..scene };
     let visualizer = lyric_view(scene);
     let show_glow = subtitle.rows.iter().any(Option::is_some);
     let alpha = subtitle_opacity.clamp(0.0, 1.0);
     let ellipse = subtitle_ellipse(&subtitle, window, bottom, subtitle_scale, screen.subtitle_font);
     let atmosphere = shader(Program::new(Atmosphere {
         time,
-        vignette: if show { 0.0 } else { screen.vignette.clamp(0.0, 1.0) },
-        grain: 0.04,
+        vignette: if show || screen.transparent { 0.0 } else { screen.vignette.clamp(0.0, 1.0) },
+        grain: if screen.transparent { 0.0 } else { 0.04 },
         glow_center: ellipse.center,
         glow_radius: ellipse.radius,
         glow_rgb: [background.r, background.g, background.b],
@@ -103,7 +104,7 @@ pub fn view<'a, M: From<folia_visualizer::styles::monet::Event> + 'a>(
     let mut layers = stack![];
     // Styles with their own picture publish it. A flat style that hides the shared background still
     // falls back to the theme colour; the shared layer is captured with the lyrics instead.
-    if glass && flat && !show {
+    if glass && flat && !show && !screen.transparent {
         let picture = folia_render::BackdropScene {
             window: [window.width, window.height],
             ground: [background.r, background.g, background.b, 1.0],

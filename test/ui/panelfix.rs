@@ -53,6 +53,7 @@ fn closing_the_panel_takes_every_pixel_back_to_the_page() {
     let theme = Theme::MIDNIGHT;
     let empty: Vec<folia_core::Track> = Vec::new();
     let room = || PanelRoom {
+        background: folia_visualizer::Background::Latent,
         width: 1200.0,
         height: 800.0,
         bottom: 32.0,
@@ -121,16 +122,11 @@ pub(super) fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia
         add_disabled: None,
         quick: &[],
         theme_source: ThemeSource::Default,
+        transparent_background: false,
         has_custom_theme: false,
         random_pool: None,
         all_styles: &Style::ALL,
         background: folia_visualizer::Background::Latent,
-        sora: folia_visualizer::SoraTuning::DEFAULT,
-        monet: folia_visualizer::monet_background::Tuning::DEFAULT,
-        picture: None,
-        nomand: folia_visualizer::nomand::Tuning::default(),
-        background_shapes: true,
-        background_vignette: true,
         equalizer_on: false,
         replay_gain: ReplayGainMode::default(),
         gain: None,

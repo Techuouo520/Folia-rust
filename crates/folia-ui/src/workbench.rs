@@ -823,6 +823,7 @@ impl Workbench {
             folia_visualizer::color(theme.secondary, 1.0),
             folia_visualizer::color(theme.background, 1.0),
             crate::now_playing::Screen {
+                transparent: false,
                 window: look.window,
                 dpi: look.dpi,
                 opacity: look.appearance.visualizer_opacity,

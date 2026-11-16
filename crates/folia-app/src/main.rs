@@ -23,28 +23,12 @@ fn window_settings() -> anyhow::Result<iced::window::Settings> {
             .into_rgba8();
     let (width, height) = image.dimensions();
     let icon = iced::window::icon::from_rgba(image.into_raw(), width, height)?;
+    #[cfg(windows)]
+    folia_render::backend::prepare_taskbar_icon(icon.clone())?;
     Ok(iced::window::Settings {
-        size: folia_ui::INITIAL_WINDOW,
-        min_size: Some(folia_ui::MIN_WINDOW_SIZE),
         icon: Some(icon),
-        decorations: false,
-        platform_specific: platform_window(),
-        ..Default::default()
+        ..folia_render::backend::window_settings(folia_ui::INITIAL_WINDOW, folia_ui::MIN_WINDOW_SIZE)
     })
-}
-
-#[cfg(target_os = "windows")]
-fn platform_window() -> iced::window::settings::PlatformSpecific {
-    iced::window::settings::PlatformSpecific {
-        undecorated_shadow: true,
-        corner_preference: iced::window::settings::platform::CornerPreference::Round,
-        ..Default::default()
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn platform_window() -> iced::window::settings::PlatformSpecific {
-    iced::window::settings::PlatformSpecific::default()
 }
 
 /// Feeds every event to the in-memory session log and, when its switch is on, the file.
@@ -118,6 +102,7 @@ fn main() -> anyhow::Result<()> {
         .default_font(interface_font)
         .title(Shell::title)
         .theme(Shell::theme)
+        .style(Shell::window_style)
         .subscription(Shell::subscription)
         .window(window_settings()?)
         .run();

@@ -25,6 +25,8 @@ iced_wgpu = "=0.14.0"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 pollster = "0.4.0"
 wgpu = "27.0.1"
+winit = "=0.30.13"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 rqrr = "0.11.0"
 tempfile = "3.27.0"
 toml = "1.1.8"

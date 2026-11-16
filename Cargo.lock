@@ -1616,10 +1616,12 @@ dependencies = [
  "iced",
  "iced_wgpu",
  "parking_lot",
+ "thiserror 2.0.21",
  "tracing",
  "unicode-script",
  "unicode-vo",
  "wgpu",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

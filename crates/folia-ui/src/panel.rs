@@ -57,6 +57,7 @@ pub enum Tab {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    TransparentBackground(bool),
     Toggle,
     /// Escape: the open panel closes and stays on the player page.
     Close,
@@ -122,6 +123,8 @@ pub enum Message {
 }
 
 pub enum Effect {
+    Background(folia_visualizer::Background),
+    TransparentBackground(bool),
     None,
     Home,
     Locate,
@@ -484,9 +487,11 @@ impl PlayerPanel {
                 Effect::Settings
             }
             Message::Theme(mode) => Effect::Theme(*mode),
-            Message::Picker(message) => match self.pickers.update(message.clone(), style_id, now) {
+            Message::TransparentBackground(enabled) => Effect::TransparentBackground(*enabled),
+            Message::Picker(message) => match self.pickers.update(message.clone(), style_id, room.background, now) {
                 mode_picker::Outcome::None => Effect::None,
                 mode_picker::Outcome::Style(style) => Effect::Visualizer(style),
+                mode_picker::Outcome::Background(background) => Effect::Background(background),
                 mode_picker::Outcome::Settings => {
                     self.set_open(false, now);
                     Effect::Workbench
@@ -650,6 +655,7 @@ impl PlayerPanel {
 /// What the panel's update needs of the window and the queue.
 #[derive(Clone, Copy)]
 pub struct Room<'a> {
+    pub background: folia_visualizer::Background,
     pub width: f32,
     pub height: f32,
     pub bottom: f32,
@@ -706,19 +712,12 @@ pub struct View<'a> {
     /// The chosen style's own quick controls.
     pub quick: &'a [QuickControl],
     pub theme_source: ThemeSource,
+    pub transparent_background: bool,
     pub has_custom_theme: bool,
     /// The random pool (style ids), or every style when `None`.
     pub random_pool: Option<&'a [String]>,
     pub all_styles: &'a [Style],
     pub background: folia_visualizer::Background,
-    pub sora: folia_visualizer::SoraTuning,
-    pub monet: folia_visualizer::monet_background::Tuning,
-    pub nomand: folia_visualizer::nomand::Tuning,
-    pub picture: Option<&'a iced::widget::image::Handle>,
-    /// Geometric shapes of the common background.
-    pub background_shapes: bool,
-    /// Geometric edge vignette of the common background.
-    pub background_vignette: bool,
     pub equalizer_on: bool,
     pub replay_gain: ReplayGainMode,
     pub gain: Option<folia_core::ReplayGain>,
@@ -805,15 +804,9 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
             open,
             audio: view.audio,
             background: view.background,
-            shapes: view.background_shapes,
-            vignette: view.background_vignette,
-            daylight: view.daylight,
-            sora: view.sora,
-            monet: view.monet,
-            picture: view.picture,
-            nomand: view.nomand,
         };
-        let mut place = picker_place(&view, panel.pickers.drawn(), Size::new(panel_w, visual_h), header_h);
+        let mut place =
+            picker_place(&view, panel.pickers.drawn(), Size::new(panel_w, view.height - visual_top), header_h);
         place.origin = (visual_left - x0, visual_top - y0);
         picker = panel.pickers.picker(look, place, now, view.modal);
     }
@@ -1282,13 +1275,6 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
         open: ink.a,
         audio: view.audio,
         background: view.background,
-        shapes: view.background_shapes,
-        vignette: view.background_vignette,
-        daylight: view.daylight,
-        sora: view.sora,
-        monet: view.monet,
-        picture: view.picture,
-        nomand: view.nomand,
     };
     let intensity = view.i18n.t(intensity_key(view.theme.intensity));
     let intensity_tip = format!("{}: {}", view.i18n.t("ui.animationIntensity"), intensity);
@@ -1322,20 +1308,19 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
     let background = pickers.row(look, mode_picker::Row::Background, None, now);
     let transparent = row![
         container(
-            tooltip(
-                text(view.i18n.t("options.transparentPlayerBackground"))
-                    .size(crate::typeface::size::BODY)
-                    .color(fade(tokens.t2, ink.a * 0.4)),
-                text(view.i18n.t("options.transparentPlayerBackgroundUnavailable")).size(crate::typeface::size::HINT),
-                tooltip::Position::Top,
-            )
-            .style(tokens.tip())
+            text(view.i18n.t("options.transparentPlayerBackground"))
+                .size(crate::typeface::size::BODY)
+                .color(fade(tokens.t2, ink.a))
         )
         .width(Length::Fill),
-        off_switch(tokens),
+        crate::settings_kit::toggle(
+            tokens.tokens(),
+            if view.transparent_background { 1.0 } else { 0.0 },
+            Message::TransparentBackground(!view.transparent_background)
+        ),
     ]
     .align_y(Alignment::Center)
-    .height(Length::Fixed(44.0));
+    .height(44);
     let track = tokens.fill;
     let custom = view.theme_source == ThemeSource::Custom && view.has_custom_theme;
     let choices = container(
@@ -2169,24 +2154,6 @@ fn day_night<'a>(tokens: Faded, ink: Color, daylight: bool) -> Element<'a, Messa
         .into()
 }
 
-fn off_switch<'a>(tokens: Faded) -> Element<'a, Message> {
-    let knob = container(space()).width(18).height(18).style(move |_theme: &IcedTheme| container::Style {
-        background: Some(tokens.knob.into()),
-        border: Border { radius: 9.0.into(), ..Border::default() },
-        ..container::Style::default()
-    });
-    container(knob)
-        .width(40)
-        .height(24)
-        .padding(pad(3.0, 0.0, 0.0, 3.0))
-        .style(move |_theme: &IcedTheme| container::Style {
-            background: Some(fade(tokens.track, 0.4).into()),
-            border: Border { radius: 12.0.into(), ..Border::default() },
-            ..container::Style::default()
-        })
-        .into()
-}
-
 fn fade(color: Color, open: f32) -> Color {
     Color { a: color.a * open, ..color }
 }
@@ -2258,11 +2225,5 @@ fn picker_place(view: &View<'_>, row: Option<mode_picker::Row>, size: Size, head
         Some(mode_picker::Row::Background) => style_top + mode_picker::ROW_H + 8.0 + params,
         _ => style_top,
     };
-    mode_picker::Place {
-        width: size.width,
-        height: size.height,
-        trigger_top: top,
-        trigger_bottom: top + 48.0,
-        origin: (0.0, 0.0),
-    }
+    mode_picker::Place { width: size.width, height: size.height, trigger_bottom: top + 48.0, origin: (0.0, 0.0) }
 }

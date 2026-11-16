@@ -6,7 +6,7 @@ use std::time::Instant;
 use folia_core::{Lyrics, Theme};
 use folia_i18n::I18n;
 use folia_render::Plate;
-use folia_visualizer::{Ease, Ground, Scene, Style, background_view};
+use folia_visualizer::{Background as BackgroundMode, Ease, Scene, Style};
 use iced::widget::{button, canvas, column, container, mouse_area, row, scrollable, shader, space, stack, svg};
 use iced::{Alignment, Background, Border, Color, Element, Length, Size};
 use lucide_static_svg::Icon;
@@ -39,11 +39,6 @@ const MORE_H: f32 = 44.0;
 const PICKER_PAD: (f32, f32) = (8.0, 4.0);
 /// Random is a picker choice after the styles, as `RANDOM_VISUALIZER_CHOICE`.
 pub const RANDOM: usize = Style::ALL.len();
-/// The common background's glyph from `backgrounds/common/entry.tsx`.
-const COMMON_GLYPH: &str = concat!(
-    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">"#,
-    r#"<path d="M4 17l5-8 5 8z"/><circle cx="17.5" cy="8.5" r="3" opacity="0.55"/></svg>"#
-);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
@@ -66,6 +61,7 @@ pub enum Outcome {
     None,
     /// A lyric style, or `None` for random.
     Style(Option<Style>),
+    Background(BackgroundMode),
     Settings,
 }
 
@@ -96,13 +92,6 @@ pub struct Look<'a> {
     pub open: f32,
     pub audio: &'a folia_core::AudioFrame,
     pub background: folia_visualizer::Background,
-    pub shapes: bool,
-    pub vignette: bool,
-    pub daylight: bool,
-    pub sora: folia_visualizer::SoraTuning,
-    pub monet: folia_visualizer::monet_background::Tuning,
-    pub nomand: folia_visualizer::nomand::Tuning,
-    pub picture: Option<&'a iced::widget::image::Handle>,
 }
 
 impl Pickers {
@@ -123,7 +112,7 @@ impl Pickers {
         }
     }
 
-    pub fn update(&mut self, message: Message, style_id: &str, now: Instant) -> Outcome {
+    pub fn update(&mut self, message: Message, style_id: &str, background: BackgroundMode, now: Instant) -> Outcome {
         match message {
             Message::Toggle(row) => {
                 let next = if self.open == Some(row) { None } else { Some(row) };
@@ -138,7 +127,11 @@ impl Pickers {
                 self.entered(row, direction as f32, now);
                 match row {
                     Row::Style => Outcome::Style(step_style(style_id, direction)),
-                    Row::Background => Outcome::None,
+                    Row::Background => {
+                        let index = BackgroundMode::ALL.iter().position(|mode| *mode == background).unwrap_or(0);
+                        let next = (index as i64 + i64::from(direction)).rem_euclid(BackgroundMode::ALL.len() as i64);
+                        Outcome::Background(BackgroundMode::ALL[next as usize])
+                    }
                 }
             }
             Message::Pick(row, index) => {
@@ -146,7 +139,9 @@ impl Pickers {
                 match row {
                     Row::Style if index == RANDOM => Outcome::Style(None),
                     Row::Style => Style::ALL.get(index).map_or(Outcome::None, |style| Outcome::Style(Some(*style))),
-                    Row::Background => Outcome::None,
+                    Row::Background => {
+                        BackgroundMode::ALL.get(index).copied().map_or(Outcome::None, Outcome::Background)
+                    }
                 }
             }
             Message::Hover(index) => {
@@ -276,8 +271,7 @@ impl Pickers {
         container(line.align_y(Alignment::Center)).padding([4, 0]).into()
     }
 
-    /// The open picker, placed over the panel under (or over) its row. `top` is the trigger's top and
-    /// `bottom` its bottom inside a face `height` tall.
+    /// The open picker stays below its row and scrolls within the remaining window space.
     pub fn picker<'a>(
         &'a self,
         look: Look<'a>,
@@ -301,10 +295,8 @@ impl Pickers {
         let grid_h = rows as f32 * (picture_h + 24.0) + (rows.saturating_sub(1)) as f32 * GRID_GAP + 8.0;
         let natural = PICKER_PAD.0 + grid_h.min(GRID_MAX) + MORE_H + PICKER_PAD.1;
         let room_under = place.height - GUTTER - (place.trigger_bottom + GAP);
-        let room_over = place.trigger_top - GAP - GUTTER;
-        let under = room_under >= natural || room_under >= room_over;
-        let height = natural.min(if under { room_under } else { room_over }).max(MORE_H + 40.0);
-        let top = if under { place.trigger_bottom + GAP } else { place.trigger_top - GAP - height };
+        let height = natural.min(room_under).max(MORE_H + 40.0);
+        let top = place.trigger_bottom + GAP;
         let alpha = pop * look.open;
         let mut grid =
             column![].spacing(GRID_GAP).padding(iced::Padding { left: 4.0 + GUTTER_SCROLL, ..iced::Padding::new(4.0) });
@@ -328,8 +320,8 @@ impl Pickers {
             ..iced::Padding::ZERO
         });
         let body = container(body).width(Length::Fixed(width)).height(Length::Fixed(height));
-        // `st-pop`: in with `translateY(∓4px) scale(0.98)` and opacity; the panel's own plate draws the glass.
-        let lift = (if under { -4.0 } else { 4.0 }) * (1.0 - pop);
+        // `st-pop`: in with translateY(-4px), scale(0.98) and opacity.
+        let lift = -4.0 * (1.0 - pop);
         let plate = popover_plate(tokens, width, height, alpha);
         let layer: Element<'a, crate::panel::Message> = stack![
             plate.element,
@@ -373,7 +365,6 @@ impl Pickers {
                 } else {
                     folia_visualizer::POSTER_TIME
                 };
-                let show = style.shows_shared_background();
                 let scene = Scene {
                     style: *style,
                     lyrics: &self.preview,
@@ -383,7 +374,7 @@ impl Pickers {
                     seed: "style-picture-lumiere",
                     stage: Some(Size::new(folia_visualizer::STAGE_WIDTH, folia_visualizer::STAGE_HEIGHT)),
                     tuning: folia_visualizer::Values::default(),
-                    backdrop: !show,
+                    backdrop: true,
                     title: self.preview.title.clone().unwrap_or_default(),
                     artist: self.preview.artist.clone().unwrap_or_default(),
                     album: String::new(),
@@ -397,30 +388,7 @@ impl Pickers {
                 } else {
                     canvas(self.pictures.frozen(scene)).width(Length::Fill).height(Length::Fill).into()
                 };
-                if show {
-                    let ground = Ground {
-                        mode: look.background,
-                        seed: "style-picture-lumiere",
-                        time,
-                        theme: look.theme,
-                        audio: look.audio,
-                        shapes: look.shapes,
-                        vignette: look.vignette,
-                        publish: false,
-                        paused: !hovered,
-                        player: false,
-                        cover: &[],
-                        latent: folia_visualizer::LatentTuning::DEFAULT,
-                        daylight: look.daylight,
-                        sora: look.sora,
-                        monet: look.monet,
-                        picture: look.picture,
-                        nomand: look.nomand,
-                    };
-                    stack![background_view(ground), lyric].into()
-                } else {
-                    lyric
-                }
+                lyric
             }
             (Row::Style, None) => container(icon(Icon::Shuffle, 28.0, fade(tokens.accent))).center(Length::Fill).into(),
             (Row::Background, _) => container(glyph(which, index, 22.0, fade(tokens.t2))).center(Length::Fill).into(),
@@ -474,7 +442,6 @@ struct Cell<'a> {
 pub struct Place {
     pub width: f32,
     pub height: f32,
-    pub trigger_top: f32,
     pub trigger_bottom: f32,
     /// Where the panel's face starts inside the layer the picker is drawn in.
     pub origin: (f32, f32),
@@ -487,7 +454,7 @@ fn options<'a>(look: Look<'a>, which: Row) -> Vec<&'a str> {
             .map(|style| look.i18n.t(style.label_key()))
             .chain(std::iter::once(look.i18n.t("ui.visualizerRandom")))
             .collect(),
-        Row::Background => vec![look.i18n.t("options.visualizerBackgroundModeCommon")],
+        Row::Background => BackgroundMode::ALL.iter().map(|mode| look.i18n.t(mode.label_key())).collect(),
     }
 }
 
@@ -495,7 +462,7 @@ fn chosen(look: Look<'_>, which: Row) -> usize {
     match which {
         Row::Style if look.style_id == "random" => RANDOM,
         Row::Style => Style::ALL.iter().position(|style| style.id() == look.style_id).unwrap_or(0),
-        Row::Background => 0,
+        Row::Background => BackgroundMode::ALL.iter().position(|mode| *mode == look.background).unwrap_or(0),
     }
 }
 
@@ -515,7 +482,7 @@ fn glyph<'a, M: 'a>(which: Row, index: usize, size: f32, color: Color) -> Elemen
     let source: &'static str = match (which, Style::ALL.get(index)) {
         (Row::Style, Some(style)) => style.glyph_svg(),
         (Row::Style, None) => return icon(Icon::Shuffle, size, color),
-        (Row::Background, _) => COMMON_GLYPH,
+        (Row::Background, _) => BackgroundMode::ALL.get(index).unwrap_or(&BackgroundMode::DEFAULT).glyph_svg(),
     };
     svg(svg::Handle::from_memory(source.as_bytes()))
         .width(Length::Fixed(size))

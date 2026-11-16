@@ -10,13 +10,16 @@ mod loading;
 #[cfg(test)]
 mod monet;
 mod panelfix;
+mod picker;
 mod player_bar;
+mod player_fixture;
 mod polish;
 mod reorder;
 mod scroll_timeline;
 mod seam_title;
 #[cfg(all(feature = "stress", not(feature = "ci")))]
 mod text_atlas;
+mod transparent;
 mod wall_loading;
 mod workbench;
 

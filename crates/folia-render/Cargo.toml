@@ -14,11 +14,24 @@ iced.workspace = true
 iced_wgpu.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
+thiserror.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 
-[lints]
-workspace = true
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+# Win32 compositor interop is confined to native_frame; all other render code denies unsafe.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
 
 [features]
 dev = []

@@ -5,6 +5,11 @@ use iced::{Color, Font, Pixels, Size};
 
 #[test]
 fn backend_order_and_environment_override() {
+    let settings = backend::window_settings(Size::new(1200.0, 800.0), Size::new(350.0, 100.0));
+    assert!(settings.transparent);
+    assert!(!settings.decorations);
+    #[cfg(windows)]
+    assert!(!settings.platform_specific.undecorated_shadow, "DWM's non-client shadow makes transparent playback white");
     assert_eq!(backend::candidates(true, None), [wgpu::Backends::DX12, wgpu::Backends::VULKAN]);
     assert_eq!(backend::candidates(true, Some("vulkan")), [wgpu::Backends::VULKAN]);
     assert_eq!(backend::candidates(true, Some("dx12")), [wgpu::Backends::DX12]);

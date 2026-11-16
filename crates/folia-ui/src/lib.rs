@@ -620,6 +620,21 @@ impl Shell {
         self.iced_theme.clone()
     }
 
+    pub fn window_style(&self, _theme: &iced::Theme) -> iced::theme::Style {
+        iced::theme::Style {
+            background_color: if self.player_transparent() {
+                Color::TRANSPARENT
+            } else {
+                folia_visualizer::color(self.theme.background, 1.0)
+            },
+            text_color: folia_visualizer::color(self.theme.primary, 1.0),
+        }
+    }
+
+    fn player_transparent(&self) -> bool {
+        self.page == Page::NowPlaying && self.theme_settings.transparent_player_background
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         self.refresh_panel_data();
         let before = self.page;
@@ -715,6 +730,7 @@ impl Shell {
         }
         let (quality_levels, quality) = self.audio_quality();
         let room = panel::Room {
+            background: folia_visualizer::Background::resolve(self.appearance.stored_background_mode()),
             width: self.window_size.width,
             height: self.window_size.height,
             bottom: self.bar_offset(),
@@ -1659,6 +1675,7 @@ impl Shell {
                     muted,
                     background,
                     now_playing::Screen {
+                        transparent: self.theme_settings.transparent_player_background,
                         window: self.window_size,
                         vignette,
                         subtitle_opacity: self.appearance.subtitle.opacity,
@@ -1769,6 +1786,7 @@ impl Shell {
                 secondary: muted,
                 background: folia_visualizer::color(self.theme.background, 1.0),
                 daylight,
+                transparent_background: playing && self.theme_settings.transparent_player_background,
                 window: self.window_size,
                 bottom: self.bar_offset(),
                 modal: self.modal_open(),
@@ -1842,18 +1860,11 @@ impl Shell {
                 add_disabled: add_reason,
                 quick,
                 theme_source: self.theme_settings.source,
+                transparent_background: self.theme_settings.transparent_player_background,
                 has_custom_theme: self.theme_settings.custom_dual_theme.is_some(),
                 random_pool: self.theme_settings.random_pool.as_deref(),
                 all_styles: &Style::ALL,
                 background: folia_visualizer::Background::resolve(self.appearance.stored_background_mode()),
-                sora: folia_visualizer::SoraTuning::read(self.visualizer.tables.get("sora_background_tuning")),
-                monet: folia_visualizer::monet_background::Tuning::read(
-                    self.visualizer.tables.get("monet_background_tuning"),
-                ),
-                picture: self.background_poster.image(),
-                nomand: folia_visualizer::nomand::Tuning::read(self.visualizer.tables.get("nomand_background_tuning")),
-                background_shapes: !self.appearance.disable_visualizer_geometric_background,
-                background_vignette: !self.appearance.disable_visualizer_vignette,
                 equalizer_on: self.audio_settings.equalizer.enabled,
                 replay_gain: self.audio_settings.replay_gain_mode,
                 gain: self.playback_gain(),
@@ -2872,6 +2883,7 @@ impl Shell {
         let style = self.appearance.visualizer.clone();
         let (quality_levels, quality) = self.audio_quality();
         let room = panel::Room {
+            background: folia_visualizer::Background::resolve(self.appearance.stored_background_mode()),
             width: self.window_size.width,
             height: self.window_size.height,
             bottom: self.bar_offset(),
@@ -2971,6 +2983,16 @@ impl Shell {
                 self.iced_theme = iced_theme(&self.theme);
                 let theme_settings = self.theme_settings.clone();
                 save(&self.store, &theme_settings)
+            }
+            panel::Effect::TransparentBackground(enabled) => {
+                self.theme_settings.transparent_player_background = enabled;
+                tracing::info!(enabled, "player background transparency changed");
+                save(&self.store, &self.theme_settings)
+            }
+            panel::Effect::Background(background) => {
+                let before = self.appearance.clone();
+                self.appearance.set_background_mode(Some(background.id()));
+                self.appearance_changed(&before)
             }
             panel::Effect::QuickEditOpen => {
                 self.sheets.open_editor(self.theme_settings.custom_dual_theme.as_ref(), self.theme_is_light());
@@ -3430,7 +3452,7 @@ impl Shell {
         if !matches!(message, home::Message::CollectionMenu) {
             self.library.dismiss_menu();
         }
-        let reopen = matches!(message, home::Message::Tab) && !self.home.is_hidden();
+        let reopen = matches!(message, home::Message::Tab);
         let query = self.home.search_query().map(str::to_owned);
         let queue_open = self.home.queue_island_open();
         self.home.update(&message);

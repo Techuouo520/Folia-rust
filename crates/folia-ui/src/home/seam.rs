@@ -1315,7 +1315,15 @@ fn tab_button<'a>(host: &Host<'a>) -> Element<'a, Message> {
     } else {
         iced::border::Radius::default().top_left(6.0).bottom_left(6.0)
     };
-    let label = tracked_col(super::tr(host, "libraryBravais.homeTitle"), 13.0, 0.12, ink);
+    let label = if host.tab_hidden {
+        let glyph = if host.horizontal || host.seam.before { Icon::PanelLeftOpen } else { Icon::PanelRightOpen };
+        row![icon(glyph, 16.0, ink), text(super::tr(host, "libraryBravais.seamRestore")).size(13).color(ink)]
+            .spacing(6)
+            .align_y(Alignment::Center)
+            .into()
+    } else {
+        tracked_col(super::tr(host, "libraryBravais.homeTitle"), 13.0, 0.12, ink)
+    };
     let face = container(label).padding([14.0, 8.0]).style(move |_theme: &Theme| container::Style {
         background: Some(Background::Color(paper)),
         border: Border { radius, ..Border::default() },

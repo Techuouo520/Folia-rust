@@ -5,7 +5,7 @@ use graphics::core::{self, Color, Font, Pixels, Point, Rectangle, Size, Transfor
 use iced_wgpu::{Renderer as WgpuRenderer, graphics};
 
 pub struct Renderer(pub WgpuRenderer);
-pub struct Compositor(iced_wgpu::window::Compositor);
+pub struct Compositor(crate::compositor::Compositor);
 
 impl compositor::Default for Renderer {
     type Compositor = Compositor;
@@ -13,7 +13,7 @@ impl compositor::Default for Renderer {
 
 impl graphics::Compositor for Compositor {
     type Renderer = Renderer;
-    type Surface = wgpu::Surface<'static>;
+    type Surface = crate::compositor::Surface;
 
     async fn with_backend(
         settings: graphics::Settings,
@@ -30,14 +30,13 @@ impl graphics::Compositor for Compositor {
                 },
             });
         }
-        crate::backend::remember(&window);
         let mut errors = Vec::new();
         for backends in crate::backend::configured() {
             let mut settings = iced_wgpu::Settings { backends, ..settings.into() };
             if let Some(mode) = iced_wgpu::settings::present_mode_from_env() {
                 settings.present_mode = mode;
             }
-            match iced_wgpu::window::Compositor::request(settings, Some(window.clone()), shell.clone()).await {
+            match crate::compositor::Compositor::request(settings, window.clone(), shell.clone()).await {
                 Ok(compositor) => {
                     tracing::info!(?backends, "graphics backend ready");
                     return Ok(Self(compositor));
@@ -62,6 +61,7 @@ impl graphics::Compositor for Compositor {
         Renderer(self.0.create_renderer())
     }
     fn create_surface<W: compositor::Window + Clone>(&mut self, window: W, width: u32, height: u32) -> Self::Surface {
+        crate::backend::remember(&window, self.0.uses_direct_composition());
         self.0.create_surface(window, width, height)
     }
     fn configure_surface(&mut self, surface: &mut Self::Surface, width: u32, height: u32) {
@@ -78,10 +78,11 @@ impl graphics::Compositor for Compositor {
         background: Color,
         before: impl FnOnce(),
     ) -> Result<(), compositor::SurfaceError> {
-        self.0.present(&mut renderer.0, surface, viewport, background, before)
+        let surface = surface.as_mut().map_err(|_| compositor::SurfaceError::Other)?;
+        iced_wgpu::window::compositor::present(&mut renderer.0, surface, viewport, background, before)
     }
     fn screenshot(&mut self, renderer: &mut Renderer, viewport: &graphics::Viewport, background: Color) -> Vec<u8> {
-        self.0.screenshot(&mut renderer.0, viewport, background)
+        renderer.0.screenshot(viewport, background)
     }
 }
 

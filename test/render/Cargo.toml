@@ -23,6 +23,10 @@ pollster.workspace = true
 toml.workspace = true
 wgpu.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+winit.workspace = true
+windows-sys.workspace = true
+
 [features]
 # Set by CI: skips tests that need a hardware GPU.
 ci = []
