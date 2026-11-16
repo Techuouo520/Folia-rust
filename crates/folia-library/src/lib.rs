@@ -6,7 +6,8 @@ mod playlists;
 mod tags;
 
 pub use cover::{
-    Cover, CoverCache, cached_cover_thumbnail, cover_bytes, cover_for, cover_rgba, cover_uncropped, has_cover,
+    Cover, CoverCache, cached_cover_thumbnail, cover_and_background, cover_bytes, cover_for, cover_rgba,
+    cover_uncropped, has_cover,
 };
 pub use lyrics::{decode_text, lyrics_for};
 pub use playlists::Playlist;

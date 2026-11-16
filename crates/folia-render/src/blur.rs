@@ -71,6 +71,7 @@ pub struct Pyramid {
     sampler: wgpu::Sampler,
     format: wgpu::TextureFormat,
     size: (u32, u32),
+    depth: usize,
     source: Option<Image>,
     downs: Vec<Down>,
     ups: Vec<Up>,
@@ -106,6 +107,7 @@ impl Pyramid {
             sampler,
             format,
             size: (0, 0),
+            depth: 0,
             source: None,
             downs: Vec::new(),
             ups: Vec::new(),
@@ -149,6 +151,7 @@ impl Pyramid {
 
     pub fn release(&mut self) {
         self.size = (0, 0);
+        self.depth = 0;
         self.source = None;
         self.downs.clear();
         self.ups.clear();
@@ -161,10 +164,11 @@ impl Pyramid {
     pub fn ensure(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, levels: u32) -> bool {
         let size = source_size(width, height);
         let levels = levels.clamp(1, MAX_LEVELS) as usize;
-        if self.size == size && self.downs.len() >= levels && self.source.is_some() {
+        if self.size == size && self.depth >= levels && self.source.is_some() {
             return false;
         }
         self.size = size;
+        self.depth = levels;
         let source = image(device, self.format, size.0, size.1);
         let mut downs = Vec::new();
         let mut prev_view = source.view.clone();

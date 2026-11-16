@@ -328,6 +328,7 @@ impl CatalogPage {
                     bytes,
                 );
                 self.sync_covers();
+                return self.load_covers(omni);
             }
             Message::AllReady(generation, ticket, _, result)
                 if self.all_request.is_some() && generation == self.generation && ticket == self.all_ticket =>
@@ -561,6 +562,11 @@ impl CatalogPage {
             tasks.push(Task::perform(online_cover_sized(omni.clone(), url.clone(), 256, 256), move |cover| {
                 Message::Cover(generation, url.clone(), cover)
             }));
+        }
+        let before = self.covers.used_bytes();
+        self.covers.end_pass();
+        if self.covers.used_bytes() != before {
+            self.sync_covers();
         }
         Task::batch(tasks)
     }

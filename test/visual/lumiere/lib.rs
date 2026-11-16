@@ -131,6 +131,54 @@ fn defaults_match_the_original_panel() {
     assert_eq!(Style::Lumiere.label_key(), "ui.visualizerLumiere");
 }
 
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a hardware GPU")]
+fn bloom_filters_share_only_immutable_resources() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let mut first = lumiere::bloom::Filter::new(&device, wgpu::TextureFormat::Rgba8Unorm, wgpu::BlendState::REPLACE);
+    let before = instance.generate_report().unwrap().hub;
+    let mut second = first.with_shared_pipelines(&device);
+    let shared = instance.generate_report().unwrap().hub;
+    assert_eq!(shared.render_pipelines.num_allocated, before.render_pipelines.num_allocated);
+    assert_eq!(shared.samplers.num_allocated, before.samplers.num_allocated);
+    assert_eq!(shared.bind_group_layouts.num_allocated, before.bind_group_layouts.num_allocated);
+    assert_eq!(shared.buffers.num_allocated, before.buffers.num_allocated + 2);
+    first.sync(&device, &queue, 128, 64, &lumiere::bloom::GRAPHICS);
+    second.sync(&device, &queue, 64, 32, &lumiere::bloom::TEXT);
+    assert!(first.scene().is_some() && second.scene().is_some());
+    first.release();
+    assert!(first.scene().is_none() && second.scene().is_some());
+    first.sync(&device, &queue, 64, 32, &lumiere::bloom::TEXT);
+    second.release();
+    assert!(first.scene().is_some() && second.scene().is_none());
+}
+
+#[test]
+#[cfg(all(feature = "stress", not(feature = "ci")))]
+#[ignore = "explicit release GPU stress check"]
+fn bloom_uniform_upload_cost() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let mut graphics = lumiere::bloom::Filter::new(&device, wgpu::TextureFormat::Rgba8Unorm, wgpu::BlendState::REPLACE);
+    let mut text = lumiere::bloom::Filter::new(&device, wgpu::TextureFormat::Rgba8Unorm, wgpu::BlendState::REPLACE);
+    let mut times = Vec::new();
+    for frame in 0..612 {
+        let start = std::time::Instant::now();
+        graphics.sync(&device, &queue, WIDTH, HEIGHT, &lumiere::bloom::GRAPHICS);
+        text.sync(&device, &queue, WIDTH, HEIGHT, &lumiere::bloom::TEXT);
+        if frame >= 12 {
+            times.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        queue.submit([]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+    times.sort_by(f64::total_cmp);
+    println!("BLOOM_SYNC frames=600 cpu_median_ms={:.6} cpu_p95_ms={:.6}", (times[299] + times[300]) * 0.5, times[569]);
+}
+
 /// The stage pass of one frame, drawn the way the app's shader widget draws it.
 #[cfg(all(feature = "stress", not(feature = "ci")))]
 fn stage<'a>(

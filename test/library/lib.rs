@@ -180,6 +180,30 @@ fn crops_sidecar_cover_to_tile() {
 
     let wide = cover_for(&song, 400, 100).unwrap();
     assert_eq!((wide.width, wide.height), (200, 50), "crops to the tile's shape but never enlarges");
+
+    for (width, height, side) in [(128, 128, 64), (128, 128, 256), (127, 125, 64), (200, 100, 64)] {
+        let source = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(width, height, |x, y| {
+            image::Rgba([(x % 251) as u8, (y % 253) as u8, ((x + y) % 255) as u8, (x % 255) as u8])
+        }));
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        source.write_to(&mut encoded, image::ImageFormat::Png).unwrap();
+        let decoded = folia_library::cover_rgba(encoded.get_ref(), side, side).unwrap();
+        let edge = width.min(height);
+        let cropped = source.crop_imm((width - edge) / 2, (height - edge) / 2, edge, edge);
+        let expected =
+            if edge > side { cropped.resize_exact(side, side, image::imageops::FilterType::Triangle) } else { cropped };
+        assert_eq!(decoded.rgba, expected.into_rgba8().into_raw());
+        for background_edge in [0, 50, 1920] {
+            let (panel, background) =
+                folia_library::cover_and_background(encoded.get_ref(), side, background_edge).unwrap();
+            let old_background = folia_library::cover_uncropped(encoded.get_ref(), background_edge).unwrap();
+            assert_eq!((panel.width, panel.height, panel.rgba), (decoded.width, decoded.height, decoded.rgba.clone()));
+            assert_eq!(
+                (background.width, background.height, background.rgba),
+                (old_background.width, old_background.height, old_background.rgba)
+            );
+        }
+    }
 }
 
 #[test]

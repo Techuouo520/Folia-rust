@@ -1,11 +1,13 @@
 // Multi-level dual bloom. Textures and bind groups are rebuilt only when the picture size changes.
 
+use std::sync::Arc;
+
 use iced::Rectangle;
 
 const SHADER: &str = include_str!("../../../shaders/lumiere/bloom.wgsl");
 const MAX_LEVELS: usize = 6;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Preset {
     pub strength: f32,
     pub threshold: f32,
@@ -44,7 +46,7 @@ struct Up {
     add: wgpu::BindGroup,
 }
 
-pub struct Filter {
+struct Pipelines {
     down_pipe: wgpu::RenderPipeline,
     up_pipe: wgpu::RenderPipeline,
     combine_pipe: wgpu::RenderPipeline,
@@ -53,6 +55,10 @@ pub struct Filter {
     sample_layout: wgpu::BindGroupLayout,
     add_layout: wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
+}
+
+pub struct Filter {
+    pipelines: Arc<Pipelines>,
     size: (u32, u32),
     scene: Option<GpuTex>,
     scene_bind: Option<wgpu::BindGroup>,
@@ -64,6 +70,7 @@ pub struct Filter {
     combine_down: Option<wgpu::BindGroup>,
     passthrough: Option<wgpu::BindGroup>,
     active: u32,
+    preset: Option<Preset>,
 }
 
 impl Filter {
@@ -84,7 +91,7 @@ impl Filter {
         let add_layout = add_layout(device);
         let replace = wgpu::BlendState::REPLACE;
         let down_pipe = pipeline(device, &module, "fs_down", &[&down_layout], format, replace);
-        Self {
+        let pipelines = Arc::new(Pipelines {
             down_pipe,
             up_pipe: pipeline(device, &module, "fs_up", &[&sample_layout, &add_layout], format, replace),
             combine_pipe: pipeline(device, &module, "fs_combine", &[&sample_layout, &add_layout], format, output),
@@ -93,6 +100,18 @@ impl Filter {
             sample_layout,
             add_layout,
             format,
+        });
+        Self::from_pipelines(device, pipelines)
+    }
+
+    /// Shares immutable GPU programs while keeping every render target and uniform independent.
+    pub fn with_shared_pipelines(&self, device: &wgpu::Device) -> Self {
+        Self::from_pipelines(device, Arc::clone(&self.pipelines))
+    }
+
+    fn from_pipelines(device: &wgpu::Device, pipelines: Arc<Pipelines>) -> Self {
+        Self {
+            pipelines,
             size: (0, 0),
             scene: None,
             scene_bind: None,
@@ -104,6 +123,7 @@ impl Filter {
             combine_down: None,
             passthrough: None,
             active: 0,
+            preset: None,
         }
     }
 
@@ -120,6 +140,10 @@ impl Filter {
             self.size = (width, height);
             self.rebuild(device, width, height);
         }
+        if self.preset == Some(*preset) {
+            return;
+        }
+        self.preset = Some(*preset);
         self.active = if preset.strength <= 0.0 {
             0
         } else {
@@ -147,6 +171,7 @@ impl Filter {
         self.combine_up = None;
         self.combine_down = None;
         self.passthrough = None;
+        self.preset = None;
     }
 
     /// Runs the pyramid and writes the combined picture into `target` at the given pixel rect.
@@ -171,20 +196,20 @@ impl Filter {
             return;
         }
         for down in self.downs.iter().take(levels) {
-            self.full(encoder, &self.down_pipe, &down.image.view, &down.bind, None);
+            self.full(encoder, &self.pipelines.down_pipe, &down.image.view, &down.bind, None);
         }
         let glow = if levels == 1 {
             self.combine_down.as_ref()
         } else {
             let top = levels - 2;
             if let Some(up) = self.ups.get(top) {
-                self.full(encoder, &self.up_pipe, &up.image.view, &up.from_down, Some(&up.add));
+                self.full(encoder, &self.pipelines.up_pipe, &up.image.view, &up.from_down, Some(&up.add));
             }
             for index in (0..top).rev() {
                 if let Some(up) = self.ups.get(index)
                     && let Some(sample) = &up.from_up
                 {
-                    self.full(encoder, &self.up_pipe, &up.image.view, sample, Some(&up.add));
+                    self.full(encoder, &self.pipelines.up_pipe, &up.image.view, sample, Some(&up.add));
                 }
             }
             self.combine_up.as_ref()
@@ -195,15 +220,25 @@ impl Filter {
     }
 
     fn rebuild(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let scene = make_image(device, self.format, width, height);
-        let downs = build_downs(device, &self.down_layout, &self.sampler, self.format, &scene, width, height);
-        let ups = build_ups(device, &self.sample_layout, &self.add_layout, &self.sampler, self.format, &downs);
-        self.scene_bind = Some(sample_bind(device, &self.sample_layout, &self.sampler, &scene.view));
+        self.preset = None;
+        let pipelines = &self.pipelines;
+        let scene = make_image(device, pipelines.format, width, height);
+        let downs =
+            build_downs(device, &pipelines.down_layout, &pipelines.sampler, pipelines.format, &scene, width, height);
+        let ups = build_ups(
+            device,
+            &pipelines.sample_layout,
+            &pipelines.add_layout,
+            &pipelines.sampler,
+            pipelines.format,
+            &downs,
+        );
+        self.scene_bind = Some(sample_bind(device, &pipelines.sample_layout, &pipelines.sampler, &scene.view));
         self.combine_up =
-            ups.first().map(|up| add_bind(device, &self.add_layout, &up.image.view, &self.combine_uniform));
+            ups.first().map(|up| add_bind(device, &pipelines.add_layout, &up.image.view, &self.combine_uniform));
         self.combine_down =
-            downs.first().map(|down| add_bind(device, &self.add_layout, &down.image.view, &self.combine_uniform));
-        self.passthrough = Some(add_bind(device, &self.add_layout, &scene.view, &self.zero));
+            downs.first().map(|down| add_bind(device, &pipelines.add_layout, &down.image.view, &self.combine_uniform));
+        self.passthrough = Some(add_bind(device, &pipelines.add_layout, &scene.view, &self.zero));
         self.scene = Some(scene);
         self.downs = downs;
         self.ups = ups;
@@ -249,7 +284,7 @@ impl Filter {
         });
         pass.set_viewport(rect.x as f32, rect.y as f32, rect.width as f32, rect.height as f32, 0.0, 1.0);
         pass.set_scissor_rect(rect.x, rect.y, rect.width, rect.height);
-        pass.set_pipeline(&self.combine_pipe);
+        pass.set_pipeline(&self.pipelines.combine_pipe);
         pass.set_bind_group(0, base, &[]);
         pass.set_bind_group(1, glow, &[]);
         pass.draw(0..3, 0..1);

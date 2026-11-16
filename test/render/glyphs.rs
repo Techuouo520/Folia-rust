@@ -23,6 +23,18 @@ fn hollow_glyph_is_a_thin_ring_over_a_faint_fill() {
     };
     let sprites = [sprite(250.0, 0.0), sprite(750.0, 0.012)];
     let mut glyphs = Glyphs::new(&device, format, 16, Vec::new());
+    glyphs.prepare(&device, &queue, &[], [WIDTH as f32, HEIGHT as f32], 1.0);
+    assert_eq!(glyphs.stats().size, [0, 0], "an empty stage must not allocate an atlas");
+    glyphs.prepare(&device, &queue, &sprites, [WIDTH as f32, HEIGHT as f32], 1.0);
+    let populated = glyphs.stats();
+    glyphs.prepare(&device, &queue, &[], [WIDTH as f32, HEIGHT as f32], 1.0);
+    assert_eq!(glyphs.stats().size, populated.size, "brief blank frames keep the reusable atlas");
+    assert_eq!(glyphs.stats().live_marks, 0);
+    glyphs.prepare(&device, &queue, &sprites, [WIDTH as f32, HEIGHT as f32], 1.0);
+    glyphs.release();
+    assert_eq!(glyphs.stats().size, [0, 0]);
+    assert_eq!(glyphs.stats().marks, 0);
+    assert_eq!(glyphs.stats().peak_size, populated.peak_size);
     glyphs.prepare(&device, &queue, &sprites, [WIDTH as f32, HEIGHT as f32], 1.0);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: None,

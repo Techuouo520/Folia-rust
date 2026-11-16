@@ -62,8 +62,8 @@ pub fn panel_art_file(path: std::path::PathBuf, px: u32, full: bool) -> PanelArt
 }
 
 fn panel_art_bytes(bytes: &[u8], px: u32, keep_full: bool) -> PanelArt {
-    let full = match folia_library::cover_uncropped(bytes, if keep_full { 1920 } else { 50 }) {
-        Ok(cover) => cover,
+    let (cover, full) = match folia_library::cover_and_background(bytes, px, if keep_full { 1920 } else { 50 }) {
+        Ok(covers) => covers,
         Err(err) => {
             tracing::warn!(error = &err as &dyn Error, "background cover decode failed");
             return PanelArt::missing();
@@ -75,12 +75,7 @@ fn panel_art_bytes(bytes: &[u8], px: u32, keep_full: bool) -> PanelArt {
     } else {
         None
     };
-    let image = folia_library::cover_rgba(bytes, px, px)
-        .inspect_err(|err| {
-            tracing::warn!(error = err as &dyn Error, "panel cover decode failed");
-        })
-        .ok();
-    PanelArt { image, colors, background }
+    PanelArt { image: Some(cover), colors, background }
 }
 
 /// An online cover: downloaded through the facade, then decoded `px` square on a worker thread; failures are logged.

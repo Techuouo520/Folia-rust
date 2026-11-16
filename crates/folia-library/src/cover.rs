@@ -39,8 +39,23 @@ pub fn cover_for(track_path: &Path, width: u32, height: u32) -> Option<Cover> {
 /// Decodes `bytes` to `width`×`height`, cropped like CSS `object-fit: cover`.
 pub fn cover_rgba(bytes: &[u8], width: u32, height: u32) -> Result<Cover, image::ImageError> {
     let image = image::load_from_memory(bytes)?;
-    let rgba = fill(image, width.max(1), height.max(1)).into_rgba8();
-    Ok(Cover { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+    Ok(pixels(fill(image, width.max(1), height.max(1))))
+}
+
+/// Decodes once for a square panel cover and an uncropped background or palette sample, in that order.
+pub fn cover_and_background(
+    bytes: &[u8],
+    side: u32,
+    background_edge: u32,
+) -> Result<(Cover, Cover), image::ImageError> {
+    let image = image::load_from_memory(bytes)?;
+    let edge = background_edge.max(1);
+    let background = if image.width().max(image.height()) > edge {
+        image.resize(edge, edge, FilterType::Triangle)
+    } else {
+        image.clone()
+    };
+    Ok((pixels(fill(image, side.max(1), side.max(1))), pixels(background)))
 }
 
 /// A small decoded preview cached beside an image in the application's cover cache directory.
@@ -83,8 +98,12 @@ pub fn cover_uncropped(bytes: &[u8], max_edge: u32) -> Result<Cover, image::Imag
     let edge = max_edge.max(1);
     let image =
         if image.width().max(image.height()) > edge { image.resize(edge, edge, FilterType::Triangle) } else { image };
+    Ok(pixels(image))
+}
+
+fn pixels(image: DynamicImage) -> Cover {
     let rgba = image.into_rgba8();
-    Ok(Cover { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+    Cover { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() }
 }
 
 /// Crops the centre to the target's aspect ratio, then shrinks it to the target; never enlarges.
@@ -93,8 +112,11 @@ fn fill(image: DynamicImage, width: u32, height: u32) -> DynamicImage {
     let scale = (width as f32 / source_width as f32).max(height as f32 / source_height as f32);
     let crop_width = ((width as f32 / scale).round() as u32).clamp(1, source_width);
     let crop_height = ((height as f32 / scale).round() as u32).clamp(1, source_height);
-    let cropped =
-        image.crop_imm((source_width - crop_width) / 2, (source_height - crop_height) / 2, crop_width, crop_height);
+    let cropped = if crop_width == source_width && crop_height == source_height {
+        image
+    } else {
+        image.crop_imm((source_width - crop_width) / 2, (source_height - crop_height) / 2, crop_width, crop_height)
+    };
     if scale < 1.0 { cropped.resize_exact(width, height, FilterType::Triangle) } else { cropped }
 }
 

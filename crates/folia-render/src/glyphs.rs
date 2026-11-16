@@ -516,6 +516,12 @@ impl Glyphs {
     ) {
         self.frame += 1;
         let sprites = &sprites[..sprites.len().min(self.capacity)];
+        if sprites.is_empty() {
+            self.count = 0;
+            self.peak.live_marks = 0;
+            self.peak.live_texels = 0;
+            return;
+        }
         let largest = LARGEST_SIDE.min(device.limits().max_texture_dimension_2d);
         let shared = &self.shared;
         let first = [FIRST_SIZE[0].min(largest), FIRST_SIZE[1].min(largest)];
@@ -592,6 +598,10 @@ impl Glyphs {
     pub fn release(&mut self) {
         self.atlas = None;
         self.count = 0;
+        self.peak.size = [0, 0];
+        self.peak.marks = 0;
+        self.peak.live_marks = 0;
+        self.peak.live_texels = 0;
     }
 }
 

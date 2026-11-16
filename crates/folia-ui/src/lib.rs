@@ -3340,19 +3340,15 @@ impl Shell {
         self.playback.current().filter(|track| track.online.is_none() && track.id > 0).map(|track| track.id)
     }
 
-    fn favorite_ids(&self) -> std::collections::HashSet<i64> {
-        self.playlists
-            .iter()
-            .find(|playlist| playlist.favorite)
-            .map(|playlist| playlist.song_ids.iter().copied().collect())
-            .unwrap_or_default()
+    fn local_song_liked(&self, id: i64) -> bool {
+        self.playlists.iter().find(|playlist| playlist.favorite).is_some_and(|playlist| playlist.song_ids.contains(&id))
     }
 
     fn song_liked(&self) -> bool {
         match self.playback.current() {
             Some(track) => match &track.online {
                 Some(online) => self.library.online.is_liked(&online.provider, &online.id),
-                None => self.local_track().is_some_and(|id| self.favorite_ids().contains(&id)),
+                None => self.local_track().is_some_and(|id| self.local_song_liked(id)),
             },
             None => false,
         }
@@ -3473,7 +3469,7 @@ impl Shell {
             return Task::batch([load, press]);
         }
         let Some(id) = self.local_track() else { return Task::none() };
-        let favorite = !self.favorite_ids().contains(&id);
+        let favorite = !self.local_song_liked(id);
         let path = self.db_path.clone();
         let task = blocking(move || {
             let library = folia_library::Library::open(&path).map_err(|err| error_chain(&err))?;

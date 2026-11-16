@@ -238,6 +238,7 @@ impl SearchPage {
             Message::Cover(generation, id, cover) => {
                 if self.fade_goal > 0.0 && generation == self.generation {
                     self.store_cover(id, cover);
+                    return (self.load_covers(omni), Outcome::None);
                 }
             }
             Message::Frame => return (self.list.frame(Instant::now()), Outcome::None),
@@ -488,6 +489,11 @@ impl SearchPage {
             tasks.push(Task::perform(online_cover_sized(omni, url, FETCH_PX, COVER_PX), move |cover| {
                 Message::Cover(generation, id, cover)
             }));
+        }
+        let before = self.cache.used_bytes();
+        self.cache.end_pass();
+        if self.cache.used_bytes() != before {
+            self.sync_covers();
         }
         Task::batch(tasks)
     }

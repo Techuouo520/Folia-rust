@@ -183,6 +183,8 @@ impl Targets {
         let lines = vertex_buffer(device, "folia-lumiere-lines", MAX_LINE_FLOATS as u64 * 4);
         let particles = vertex_buffer(device, "folia-lumiere-particles", MAX_PARTICLES * PARTICLE_STRIDE);
         let bursts = vertex_buffer(device, "folia-lumiere-bursts", u64::from(BURSTS) * PARTICLE_STRIDE);
+        let bloom = bloom::Filter::new(device, format, wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        let text_bloom = bloom.with_shared_pipelines(device);
         Self {
             light,
             line,
@@ -197,8 +199,8 @@ impl Targets {
             line_verts: 0,
             particle_count: 0,
             pending_bursts: burst_instances(),
-            bloom: bloom::Filter::new(device, format, wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-            text_bloom: bloom::Filter::new(device, format, wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            bloom,
+            text_bloom,
             glyphs: Glyphs::new(device, format, MAX_SPRITES, super::sprite_images()),
             sprites: 0,
             textures_live: false,
@@ -489,7 +491,6 @@ fn paint_graphics(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>, echo: u32, spl
     pass.draw(0..3, 0..1);
     gpu.glyphs.draw(pass, 0..echo);
     let stars = split[0].min(gpu.particle_count);
-    let nodes = split[1].clamp(stars, gpu.particle_count);
     particles(gpu, pass, 0..stars);
     if gpu.line_verts > 0 {
         pass.set_pipeline(&gpu.line);
@@ -498,8 +499,7 @@ fn paint_graphics(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>, echo: u32, spl
         pass.set_vertex_buffer(0, gpu.lines.slice(..));
         pass.draw(0..gpu.line_verts, 0..1);
     }
-    particles(gpu, pass, stars..nodes);
-    particles(gpu, pass, nodes..gpu.particle_count);
+    particles(gpu, pass, stars..gpu.particle_count);
 }
 
 fn particles(gpu: &Targets, pass: &mut wgpu::RenderPass<'_>, range: std::ops::Range<u32>) {

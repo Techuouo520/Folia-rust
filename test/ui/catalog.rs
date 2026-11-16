@@ -198,6 +198,45 @@ fn playing_all_waits_for_remaining_pages_and_cancellation_rejects_queued_complet
     assert!(page.prepare_all(false, Some(&omni)).is_none());
 }
 
+#[test]
+fn artist_cover_cache_releases_offscreen_results_before_new_downloads() {
+    let temp = tempfile::tempdir().unwrap();
+    let omni = omni(temp.path());
+    let (mut page, task) =
+        CatalogPage::open(Message::OpenArtist(OnlineId { provider: "fixture".into(), id: "one".into() }), Some(&omni))
+            .unwrap();
+    drop(task);
+    let tracks: Vec<_> = (0..128)
+        .map(|id| Track { id, cover_url: Some(format!("https://fixture.invalid/{id}.png")), ..Default::default() })
+        .collect();
+    let generation = page.generation();
+    drop(page.update(
+        Message::Data(
+            generation,
+            Box::new(Data::Tracks(0, Ok(Page { items: tracks, total: Some(128), has_more: false, next_offset: 128 }))),
+        ),
+        Some(&omni),
+    ));
+    for id in 0..128 {
+        let cover = folia_library::Cover { width: 256, height: 256, rgba: vec![255; 256 * 256 * 4] };
+        drop(
+            page.update(
+                Message::Cover(generation, format!("https://fixture.invalid/{id}.png"), Some(cover)),
+                Some(&omni),
+            ),
+        );
+    }
+    use folia_ui::catalog::artist_page::Message as ArtistMessage;
+    drop(page.update(Message::Artist(ArtistMessage::Home), Some(&omni)));
+    let mut requests = 0;
+    for y in [1000.0, -1000.0, 2000.0, -2000.0] {
+        drop(page.update(Message::Artist(ArtistMessage::Press(iced::Point::ORIGIN)), Some(&omni)));
+        requests += page.update(Message::Artist(ArtistMessage::Move(iced::Point::new(0.0, y))), Some(&omni)).units();
+        drop(page.update(Message::Artist(ArtistMessage::Release), Some(&omni)));
+    }
+    assert!(requests > 0, "offscreen cover replies remained pinned above the cache budget");
+}
+
 #[derive(Default)]
 struct BiographyLayout {
     text: Option<iced::Rectangle>,

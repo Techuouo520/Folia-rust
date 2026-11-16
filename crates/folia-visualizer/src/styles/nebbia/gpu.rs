@@ -181,6 +181,7 @@ struct Targets {
     mask: wgpu::TextureView,
     drops: wgpu::TextureView,
     field: wgpu::TextureView,
+    field_dirty: AtomicBool,
     bind: wgpu::BindGroup,
     buildings: Buildings,
     fog: [wgpu::TextureView; 2],
@@ -364,7 +365,13 @@ impl Renderer {
         self.segments.write(device, queue, &pass.segments);
         self.drops.write(device, queue, &pass.drops);
         let field = &mut self.field;
-        self.field_key = super::drops::field(width, height, self.field_key, |drops| field.write(device, queue, drops));
+        let field_key = super::drops::field(width, height, self.field_key, |drops| field.write(device, queue, drops));
+        if field_key != self.field_key
+            && let Some(targets) = &self.targets
+        {
+            targets.field_dirty.store(true, Ordering::Relaxed);
+        }
+        self.field_key = field_key;
     }
 
     /// Draws the glass passes, then the window into `target` within the prepared bounds, clipped to `clip`.
@@ -372,7 +379,9 @@ impl Renderer {
         let Some(targets) = self.targets.as_ref() else { return };
         self.instanced(encoder, &targets.mask, &self.mask, &self.segments);
         self.instanced(encoder, &targets.drops, &self.drop, &self.drops);
-        self.instanced(encoder, &targets.field, &self.drop, &self.field);
+        if targets.field_dirty.swap(false, Ordering::Relaxed) {
+            self.instanced(encoder, &targets.field, &self.drop, &self.field);
+        }
         targets.buildings.render(encoder, &self.fill);
         if targets.noise_dirty.swap(false, Ordering::Relaxed) {
             fullscreen(encoder, &targets.noise, &self.noise, &self.noise_bind);
@@ -499,6 +508,7 @@ impl Renderer {
             mask,
             drops,
             field,
+            field_dirty: AtomicBool::new(true),
             bind,
             buildings,
             fog,

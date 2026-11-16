@@ -11,6 +11,7 @@ path = "lib.rs"
 tempfile.workspace = true
 folia-omni = { path = "../../crates/folia-omni" }
 folia-core.workspace = true
+folia-library.workspace = true
 folia-player.workspace = true
 folia-store.workspace = true
 folia-i18n.workspace = true

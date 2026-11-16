@@ -1,7 +1,31 @@
 // HTTP seek ranges must match the original representation and must never expose sparse holes as cache hits.
 use super::*;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::time::{Duration, Instant};
+
+fn request_headers(stream: &mut std::net::TcpStream) -> Option<String> {
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut reader = std::io::BufReader::new(stream);
+    let mut request = String::new();
+    loop {
+        let start = request.len();
+        if reader.read_line(&mut request).unwrap() == 0 {
+            return None;
+        }
+        if &request[start..] == "\r\n" {
+            return Some(request.to_ascii_lowercase());
+        }
+    }
+}
+
+fn accept_request(listener: &std::net::TcpListener) -> (std::net::TcpStream, String) {
+    loop {
+        let (mut stream, _) = listener.accept().unwrap();
+        if let Some(request) = request_headers(&mut stream) {
+            return (stream, request);
+        }
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn flac_seek_plays_the_target_before_the_sequential_download_catches_up() {
@@ -14,8 +38,7 @@ async fn flac_seek_plays_the_target_before_the_sequential_download_catches_up() 
     let url = format!("http://{}/audio", listener.local_addr().unwrap());
     let (release, wait) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let (mut primary, _) = listener.accept().unwrap();
-        primary.read(&mut [0; 4096]).unwrap();
+        let (mut primary, _) = accept_request(&listener);
         write!(
             primary,
             "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"flac\"\r\nConnection: close\r\n\r\n",
@@ -23,10 +46,7 @@ async fn flac_seek_plays_the_target_before_the_sequential_download_catches_up() 
         )
         .unwrap();
         primary.write_all(&data[..65536]).unwrap();
-        let (mut range, _) = listener.accept().unwrap();
-        let mut request = [0; 4096];
-        let n = range.read(&mut request).unwrap();
-        let request = String::from_utf8_lossy(&request[..n]).to_lowercase();
+        let (mut range, request) = accept_request(&listener);
         let range_value = request.lines().find_map(|line| line.strip_prefix("range: bytes=")).unwrap();
         let offset: usize = range_value.split_once('-').unwrap().0.parse().unwrap();
         assert!(offset >= 65536 && offset < data.len());
@@ -47,6 +67,7 @@ async fn flac_seek_plays_the_target_before_the_sequential_download_catches_up() 
         Track { online: Some(OnlineId { provider: "fixture".into(), id: "flac-range".into() }), ..Default::default() };
     let input = omni.prepare_track_audio(&track, AudioQuality::High).await.unwrap();
     let download = input.download.clone().unwrap();
+    assert_eq!(download.progress().0, 65536);
     player.set_volume(0.0);
     player.load_input(input.clone());
     let until = Instant::now() + Duration::from_secs(2);
@@ -60,7 +81,7 @@ async fn flac_seek_plays_the_target_before_the_sequential_download_catches_up() 
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     assert!(player.status().position > 1.8 && !player.is_buffering(), "seek did not resume: {:?}", player.status());
-    assert_eq!(download.progress().0, 65536);
+    assert!(!download.progress().1, "the sequential download must still be waiting");
     assert!(!input.path.exists());
     player.stop();
     release.send(()).unwrap();
@@ -78,8 +99,7 @@ async fn seek_ranges_validate_status_entity_offsets_and_complete_body() {
         let (release, wait) = std::sync::mpsc::channel();
         let bytes = data.clone();
         let worker = std::thread::spawn(move || {
-            let (mut primary, _) = listener.accept().unwrap();
-            primary.read(&mut [0; 4096]).unwrap();
+            let (mut primary, _) = accept_request(&listener);
             write!(
                 primary,
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: \"fixture\"\r\nConnection: close\r\n\r\n",
@@ -87,10 +107,7 @@ async fn seek_ranges_validate_status_entity_offsets_and_complete_body() {
             )
             .unwrap();
             primary.write_all(&bytes[..65536]).unwrap();
-            let (mut range, _) = listener.accept().unwrap();
-            let mut request = [0; 4096];
-            let n = range.read(&mut request).unwrap();
-            let request = String::from_utf8_lossy(&request[..n]).to_lowercase();
+            let (mut range, request) = accept_request(&listener);
             assert!(request.contains("range: bytes=1500000-1762143"), "{request}");
             assert!(request.contains("if-range: \"fixture\""));
             assert!(request.contains("accept-encoding: identity"));

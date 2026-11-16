@@ -21,6 +21,7 @@ pub(super) struct Offscreen {
     queries: Option<wgpu::QuerySet>,
     resolve: wgpu::Buffer,
     read: wgpu::Buffer,
+    prepare_ms: f64,
 }
 
 impl Offscreen {
@@ -65,7 +66,7 @@ impl Offscreen {
         });
         let view = target.create_view(&Default::default());
         let renderer = Renderer::new(&device, &queue, FORMAT);
-        Self { instance, device, queue, renderer, target, view, size, queries, resolve, read }
+        Self { instance, device, queue, renderer, target, view, size, queries, resolve, read, prepare_ms: 0.0 }
     }
 
     fn stamp(&self, encoder: &mut wgpu::CommandEncoder, index: u32) {
@@ -88,8 +89,14 @@ impl Offscreen {
     }
 
     pub(super) fn draw(&mut self, pass: &Pass) -> f64 {
+        self.draw_scaled(pass, 1.0)
+    }
+
+    fn draw_scaled(&mut self, pass: &Pass, scale: f32) -> f64 {
         let [w, h] = self.size;
-        self.renderer.prepare(&self.device, &self.queue, pass, [0.0, 0.0, w as f32, h as f32], 1.0);
+        let prepared = Instant::now();
+        self.renderer.prepare(&self.device, &self.queue, pass, [0.0, 0.0, w as f32, h as f32], scale);
+        self.prepare_ms = prepared.elapsed().as_secs_f64() * 1000.0;
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.stamp(&mut encoder, 0);
         self.renderer.render(&mut encoder, &self.view, [0, 0, w, h]);
@@ -165,22 +172,37 @@ fn sample(size: [u32; 2], time: f64, bus: f32, theme: &Theme) -> Pass {
 #[ignore = "explicit release GPU stress check"]
 fn nebbia_gpu_300_frames() {
     let _guard = GPU.lock().unwrap();
-    for size in [[1920, 1080], [2560, 1440]] {
+    for (size, hz) in [([1200, 800], 180.0), ([1920, 1080], 180.0), ([1920, 1080], 60.0), ([2560, 1440], 60.0)] {
         let mut gpu = Offscreen::new(size);
         for i in 0..12 {
-            gpu.draw(&sample(size, 6.0 + f64::from(i) / 60.0, 1.0, &Theme::MIDNIGHT));
+            gpu.draw(&sample(size, 6.0 + f64::from(i) / hz, 1.0, &Theme::MIDNIGHT));
         }
-        let mut times: Vec<f64> =
-            (0..300).map(|i| gpu.draw(&sample(size, 6.2 + f64::from(i) / 60.0, 1.0, &Theme::MIDNIGHT))).collect();
+        let mut times = Vec::new();
+        let mut prepares = Vec::new();
+        for i in 0..300 {
+            times.push(gpu.draw(&sample(size, 6.2 + f64::from(i) / hz, 1.0, &Theme::MIDNIGHT)));
+            prepares.push(gpu.prepare_ms);
+        }
         times.sort_by(f64::total_cmp);
+        prepares.sort_by(f64::total_cmp);
         println!(
-            "NEBBIA {}x{} frames=300 metric={} median_ms={:.4} p95_ms={:.4}",
+            "NEBBIA {}x{} hz={hz} frames=300 metric={} median_ms={:.4} p95_ms={:.4} p99_ms={:.4} prepare_median_ms={:.4} prepare_p95_ms={:.4}",
             size[0],
             size[1],
             if gpu.queries.is_some() { "GPU timestamp" } else { "CPU submit-to-completion" },
             (times[149] + times[150]) / 2.0,
-            times[284]
+            times[284],
+            times[296],
+            (prepares[149] + prepares[150]) / 2.0,
+            prepares[284]
         );
+        for frame in 0..6 {
+            gpu.draw(&sample(size, 12.0 + f64::from(frame) / hz, 1.0, &Theme::MIDNIGHT));
+            let checksum = gpu.pixels().iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+            });
+            println!("NEBBIA_PIXELS {}x{} hz={hz} frame={frame} fnv64={checksum:016x}", size[0], size[1]);
+        }
     }
 }
 
@@ -338,6 +360,27 @@ fn nebbia_cache_survives_wrap_seek_palette_and_resize() {
     for _ in 0..6 {
         gpu.draw(&pass);
         compare(&reference, &gpu.pixels());
+    }
+    for (width, height, scale) in [(960.1, 540.1, 1.0), (960.2, 540.2, 1.0), (480.1, 270.1, 2.0), (960.1, 540.1, 1.0)] {
+        let pass = frame(
+            &Lyrics::default(),
+            12.0,
+            iced::Size::new(width, height),
+            &Theme::DAYLIGHT,
+            1.0,
+            &Values::default(),
+            0.9,
+        );
+        let reused = std::mem::replace(&mut gpu.renderer, Renderer::new(&gpu.device, &gpu.queue, FORMAT));
+        for _ in 0..6 {
+            gpu.draw_scaled(&pass, scale);
+        }
+        let reference = gpu.pixels();
+        gpu.renderer = reused;
+        for _ in 0..6 {
+            gpu.draw_scaled(&pass, scale);
+        }
+        assert!(reference == gpu.pixels(), "field cache changed at {width}x{height} scale={scale}");
     }
 }
 

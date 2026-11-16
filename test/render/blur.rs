@@ -27,6 +27,16 @@ fn closing_the_pyramid_drops_its_textures() {
     assert!(pyramid.resident_bytes() > 0);
     pyramid.release();
     assert_eq!(pyramid.resident_bytes(), 0);
+    for (width, height) in [(1200, 800), (320, 180), (8, 8), (1, 1), (1200, 800)] {
+        assert!(pyramid.ensure(&device, &queue, width, height, 6));
+        let epoch = pyramid.output_epoch();
+        let bytes = pyramid.resident_bytes();
+        for _ in 0..3 {
+            assert!(!pyramid.ensure(&device, &queue, width, height, 6), "rebuilt {width}x{height}");
+            assert_eq!(pyramid.output_epoch(), epoch);
+            assert_eq!(pyramid.resident_bytes(), bytes);
+        }
+    }
     folia_render::compile_plate(&device, &queue, wgpu::TextureFormat::Bgra8UnormSrgb);
 }
 

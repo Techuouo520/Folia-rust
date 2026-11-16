@@ -6742,6 +6742,7 @@ version = "0.0.0"
 dependencies = [
  "folia-core",
  "folia-i18n",
+ "folia-library",
  "folia-lyrics",
  "folia-omni",
  "folia-player",
