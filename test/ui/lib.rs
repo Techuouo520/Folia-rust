@@ -7,6 +7,7 @@ mod fonts;
 mod glass_tone;
 mod icon_dots;
 mod loading;
+mod login_methods;
 #[cfg(test)]
 mod monet;
 mod panelfix;

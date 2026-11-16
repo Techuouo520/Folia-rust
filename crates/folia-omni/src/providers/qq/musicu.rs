@@ -180,6 +180,97 @@ impl Client {
         unpack(request.body(payload.to_string()).send().await?.error_for_status()?.json().await?)
     }
 
+    pub async fn wechat_login(&self, code: &str, appid: &str) -> Result<Credential, OmniError> {
+        self.bootstrap(true).await?;
+        let mut comm = android_comm(&self.session().device, None);
+        comm["tmeLoginType"] = json!(1);
+        let payload = json!({ "comm": comm, "req_0": {
+            "module": "music.login.LoginServer", "method": "Login", "param": { "code": code, "strAppid": appid }
+        }});
+        let data = self.post_android(&payload, None).await?;
+        super::login::credential_of(&data, 1)
+    }
+
+    pub async fn app_code(&self) -> Result<(crate::LoginCode, std::time::Duration), OmniError> {
+        self.bootstrap(true).await?;
+        let mut comm = android_comm(&self.session().device, None);
+        comm["ct"] = json!(23);
+        comm["cv"] = json!(0);
+        let payload = json!({ "comm": comm, "req_0": {
+            "module": "music.login.LoginServer", "method": "CreateQRCode",
+            "param": { "tmeAppID": "qqmusic", "ct": 11, "cv": 14090008 }
+        }});
+        let data = self.post_android(&payload, None).await?;
+        let id = data
+            .get("qrcodeID")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 512)
+            .ok_or_else(|| OmniError::Response("QQ app QR identifier is missing".into()))?;
+        let encoded =
+            data.get("qrcode").and_then(Value::as_str).unwrap_or_default().rsplit(',').next().unwrap_or_default();
+        let png = STANDARD.decode(encoded).map_err(|_| OmniError::QrImage("QQ app QR image is malformed".into()))?;
+        if !png.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
+            return Err(OmniError::QrImage("QQ app QR image is not PNG".into()));
+        }
+        let life = data.get("expiresIn").and_then(Value::as_u64).unwrap_or(180).min(180);
+        Ok((
+            crate::LoginCode { key: id.into(), content: crate::QrContent::Png(png) },
+            std::time::Duration::from_secs(life),
+        ))
+    }
+
+    pub async fn app_login(&self, id: &str, payload: &Value) -> Result<Credential, OmniError> {
+        let musicid = payload
+            .pointer("/cookies/qqmusic_uin/value")
+            .and_then(identifier)
+            .ok_or_else(|| OmniError::Response("QQ app account id is missing".into()))?;
+        let numeric_id = musicid
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value != 0)
+            .ok_or_else(|| OmniError::Response("QQ app account id is invalid".into()))?;
+        let token = payload
+            .pointer("/cookies/qqmusic_key/value")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| OmniError::Response("QQ app authorization token is missing".into()))?;
+        let account_type =
+            if payload.pointer("/cookies/tmeLoginType/value").and_then(identifier).as_deref() == Some("1") {
+                1
+            } else {
+                6
+            };
+        let mut comm = android_comm(&self.session().device, None);
+        comm["tmeLoginType"] = json!(6);
+        let request = json!({ "comm": comm, "req_0": {
+            "module": "music.login.LoginServer", "method": "Login",
+            "param": { "musicid": numeric_id, "qrCodeID": id, "token": token }
+        }});
+        match self.post_android(&request, None).await {
+            Ok(mut data) => {
+                let kind = data.get("loginType").and_then(Value::as_i64).unwrap_or(account_type);
+                if ![1, 2, 6].contains(&kind) {
+                    return Err(OmniError::Response("QQ app credential type is invalid".into()));
+                }
+                data["loginType"] = json!(kind);
+                super::login::credential_of(&data, kind)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = &error as &dyn std::error::Error,
+                    "QQ app exchange failed, validating the pushed credential"
+                );
+                let direct =
+                    Credential { musicid, musickey: token.into(), login_type: account_type, encrypt_uin: None };
+                let request = json!({ "comm": android_comm(&self.session().device, Some(&direct)), "req_0": {
+                    "module": "music.UserInfo.userInfoServer", "method": "GetLoginUserInfo", "param": {}
+                }});
+                self.post_android(&request, Some(&direct)).await?;
+                Ok(direct)
+            }
+        }
+    }
+
     /// `callMusicu` with the credential: the Android comm, its user agent and the credential's cookie.
     pub async fn android(&self, module: &str, method: &str, param: Value) -> Result<Value, OmniError> {
         let credential = self.credential().ok_or(OmniError::SignedOut)?;
@@ -519,7 +610,7 @@ pub fn random_hex(len: usize) -> String {
     random_bytes(len.div_ceil(2)).iter().map(|byte| format!("{byte:02x}")).collect::<String>()[..len].to_owned()
 }
 
-fn random_digits(len: usize) -> String {
+pub(super) fn random_digits(len: usize) -> String {
     random_bytes(len).into_iter().map(|byte| char::from(b'0' + byte % 10)).collect()
 }
 

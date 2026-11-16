@@ -1460,6 +1460,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
+name = "fixedbitset"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5905ec755cc8386d7928353e4d356d2be3e89e81e5ca01fe630a1ca4d08dc175"
+
+[[package]]
 name = "flate2"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1481,6 +1487,17 @@ name = "float_next_after"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
+
+[[package]]
+name = "flume"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0e4dd2a88388a1f4ccc7c9ce104604dab68d9f408dc34cd45823d5a9069095"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin",
+]
 
 [[package]]
 name = "fnv"
@@ -1570,10 +1587,12 @@ version = "0.1.2"
 dependencies = [
  "aes 0.8.4",
  "base64 0.23.1",
+ "bytes",
  "flate2",
  "folia-core",
  "folia-lyrics",
  "folia-store",
+ "futures-util",
  "image",
  "keyring",
  "librespot-audio",
@@ -1587,10 +1606,14 @@ dependencies = [
  "ring",
  "rquickjs",
  "rsa",
+ "rumqttc",
+ "rustls 0.23.46",
+ "rustls-native-certs 0.8.5",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "tracing",
 ]
 
@@ -2157,7 +2180,7 @@ dependencies = [
  "http",
  "httpdate",
  "mime",
- "sha1",
+ "sha1 0.10.7",
 ]
 
 [[package]]
@@ -3131,14 +3154,14 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
- "sha1",
+ "sha1 0.10.7",
  "shannon",
  "sysinfo",
  "thiserror 2.0.21",
  "time",
  "tokio",
  "tokio-stream",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tokio-util",
  "url",
  "uuid",
@@ -5229,6 +5252,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rumqttc"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0feff8d882bff0b2fddaf99355a10336d43dd3ed44204f85ece28cf9626ab519"
+dependencies = [
+ "bytes",
+ "fixedbitset",
+ "flume",
+ "futures-util",
+ "log",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5674,6 +5714,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5935,6 +5986,9 @@ name = "spin"
 version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+dependencies = [
+ "lock_api",
+]
 
 [[package]]
 name = "spinning_top"
@@ -6584,8 +6638,24 @@ dependencies = [
  "rustls-pki-types",
  "tokio",
  "tokio-rustls 0.26.6",
- "tungstenite",
+ "tungstenite 0.28.0",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "tokio-tungstenite"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
+dependencies = [
+ "futures-util",
+ "log",
+ "rustls 0.23.46",
+ "rustls-native-certs 0.8.5",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls 0.26.6",
+ "tungstenite 0.30.0",
 ]
 
 [[package]]
@@ -6804,9 +6874,27 @@ dependencies = [
  "rand 0.9.5",
  "rustls 0.23.46",
  "rustls-pki-types",
- "sha1",
+ "sha1 0.10.7",
  "thiserror 2.0.21",
  "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http",
+ "httparse",
+ "log",
+ "rand 0.10.3",
+ "rustls 0.23.46",
+ "rustls-pki-types",
+ "sha1 0.11.0",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

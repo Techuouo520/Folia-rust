@@ -10,13 +10,19 @@ license.workspace = true
 default = ["netease", "kugou", "qq", "bodian", "qishui", "spotify"]
 netease = []
 kugou = []
-qq = []
+qq = ["dep:bytes", "dep:futures-util", "dep:rumqttc", "dep:rustls", "dep:rustls-native-certs", "dep:tokio-tungstenite"]
 bodian = []
 qishui = []
 spotify = ["dep:librespot-audio", "dep:librespot-core", "dep:librespot-metadata"]
 ytm = []
 
 [dependencies]
+bytes = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+rumqttc = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-native-certs = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
 folia-core.workspace = true
 folia-lyrics.workspace = true
 folia-store.workspace = true

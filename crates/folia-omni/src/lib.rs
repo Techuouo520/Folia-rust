@@ -34,6 +34,12 @@ pub enum OmniError {
     UnknownProvider(String),
     #[error("request failed")]
     Http(#[from] reqwest::Error),
+    #[cfg(feature = "qq")]
+    #[error("QQ sign-in connection failed")]
+    QqSocket(#[source] Box<tokio_tungstenite::tungstenite::Error>),
+    #[cfg(feature = "qq")]
+    #[error("QQ sign-in MQTT packet is invalid")]
+    QqMqtt(#[from] rumqttc::v5::mqttbytes::Error),
     #[error("audio download timed out after 60 seconds waiting for {0}")]
     AudioTimeout(&'static str),
     #[error("platform answered with code {0}")]
@@ -121,7 +127,7 @@ pub struct Platform {
 const PLATFORMS: [(&str, &str, &str, char, u32, &str, &str); 7] = [
     ("netease", "NetEase Cloud Music", "网易云", '云', 0xdc2626, "home.loginTitle", "home.loginNote"),
     ("kugou", "KuGou Music", "酷狗", 'K', 0x2563eb, "home.loginTitleKugou", "home.loginNoteKugou"),
-    ("qq", "QQ Music", "QQ音乐", 'Q', 0x16a34a, "home.loginTitleQq", "home.loginNoteQq"),
+    ("qq", "QQ Music", "QQ音乐", 'Q', 0x16a34a, "home.loginTitleQq", "home.loginNoteQqAppScan"),
     ("bodian", "波点音乐", "波点", '波', 0x0d9488, "home.loginTitleBodian", "home.loginNoteBodian"),
     ("ytm", "YouTube Music", "YT Music", 'Y', 0xe11d48, "home.loginTitleYtm", "home.loginNoteYtmBrowser"),
     ("spotify", "Spotify", "Spotify", 'S', 0x22c55e, "home.loginTitleSpotify", "home.loginNoteSpotify"),
@@ -133,6 +139,13 @@ const PLATFORMS: [(&str, &str, &str, char, u32, &str, &str); 7] = [
 pub struct LoginCode {
     pub key: String,
     pub content: QrContent,
+}
+
+/// A provider's available QR authorization channel and its localized label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoginMethod {
+    pub id: &'static str,
+    pub label_key: &'static str,
 }
 
 /// What a sign-in code holds: an address to encode, or the platform's own picture of the code.
@@ -301,7 +314,18 @@ pub trait Provider: Send + Sync {
     fn chorus_ranges<'a>(&'a self, _song: &'a OnlineId) -> BoxFuture<'a, Result<Vec<ChorusRange>, OmniError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
+    fn login_methods(&self) -> &'static [LoginMethod] {
+        &[]
+    }
+    fn cancel_login(&self) {}
     fn login_code(&self) -> BoxFuture<'_, Result<LoginCode, OmniError>>;
+    fn login_code_with_method(&self, method: &str) -> BoxFuture<'_, Result<LoginCode, OmniError>> {
+        if method.is_empty() {
+            self.login_code()
+        } else {
+            Box::pin(async { Err(OmniError::Unsupported("login method")) })
+        }
+    }
     fn check_login<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<LoginState, OmniError>>;
     /// The signed-in account, or `None` when the session is missing or ran out.
     fn account(&self) -> BoxFuture<'_, Result<Option<Account>, OmniError>>;
@@ -603,7 +627,20 @@ impl Omni {
 
     /// Asks for a sign-in code and draws it as a QR matrix.
     pub async fn login_qr(&self, provider: &str) -> Result<LoginQr, OmniError> {
-        let code = self.provider(provider)?.login_code().await?;
+        self.login_qr_with_method(provider, "").await
+    }
+
+    pub fn login_methods(&self, provider: &str) -> Result<&'static [LoginMethod], OmniError> {
+        Ok(self.provider(provider)?.login_methods())
+    }
+
+    pub fn cancel_login(&self, provider: &str) -> Result<(), OmniError> {
+        self.provider(provider)?.cancel_login();
+        Ok(())
+    }
+
+    pub async fn login_qr_with_method(&self, provider: &str, method: &str) -> Result<LoginQr, OmniError> {
+        let code = self.provider(provider)?.login_code_with_method(method).await?;
         match code.content {
             QrContent::Url(url) => LoginQr::encode(code.key, &url),
             QrContent::Png(png) => LoginQr::decode_png(code.key, &png),

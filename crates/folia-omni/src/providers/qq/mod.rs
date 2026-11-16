@@ -1,20 +1,28 @@
 // QQ Music: anonymous musicu search and lyrics, Android musicu with the QQ Connect credential for the library.
 
+mod app_login;
 mod library;
 mod login;
 mod musicu;
 mod qrc;
+mod wechat;
 
 use folia_core::{AudioQuality, OnlineId, Track};
 use serde_json::{Value, json};
 
 use crate::{
     Account, AudioSource, BoxFuture, Capabilities, Collection, CollectionDetail, CollectionKind, ExploreSection,
-    LoginCode, LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
+    LoginCode, LoginMethod, LoginState, OmniError, Page, Provider, ProviderLyrics, RadioFeed,
 };
 
 const ID: &str = "qq";
 const ALBUM_COVER: &str = "https://y.gtimg.cn/music/photo_new/T002M000";
+
+#[derive(Default)]
+struct LoginRound {
+    id: u64,
+    app: Option<(String, std::sync::Arc<tokio::sync::Mutex<app_login::Session>>)>,
+}
 
 pub struct Qq {
     client: musicu::Client,
@@ -22,6 +30,8 @@ pub struct Qq {
     plain: reqwest::Client,
     /// Keywords whose signed-in first page came back empty: later pages search anonymously too.
     anonymous: std::sync::Mutex<std::collections::VecDeque<String>>,
+    /// Serializes starting a QR round with accepting its credential after an asynchronous poll.
+    login_round: std::sync::Mutex<LoginRound>,
 }
 
 impl Qq {
@@ -34,7 +44,46 @@ impl Qq {
                 tracing::warn!(error = &err as &dyn std::error::Error, "qq sign-in client falls back to the shared one");
                 http.clone()
             });
-        Self { client: musicu::Client::new(http), plain, anonymous: std::sync::Mutex::default() }
+        Self {
+            client: musicu::Client::new(http),
+            plain,
+            anonymous: std::sync::Mutex::default(),
+            login_round: std::sync::Mutex::default(),
+        }
+    }
+
+    async fn app_code(&self, round: u64) -> Result<LoginCode, OmniError> {
+        let (code, life) = self.client.app_code().await?;
+        let session = app_login::Session::open(&code.key, std::time::Instant::now() + life).await?;
+        let mut current = self.login_round.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if current.id != round {
+            return Err(OmniError::Response("QQ sign-in request was replaced".into()));
+        }
+        current.app = Some((code.key.clone(), std::sync::Arc::new(tokio::sync::Mutex::new(session))));
+        Ok(code)
+    }
+
+    async fn check_app(
+        &self,
+        round: Option<u64>,
+        key: &str,
+    ) -> Result<(LoginState, Option<musicu::Credential>), OmniError> {
+        let session = {
+            let current = self.login_round.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            current
+                .app
+                .as_ref()
+                .filter(|(id, _)| Some(current.id) == round && id == key)
+                .map(|(_, session)| session.clone())
+        };
+        let Some(session) = session else { return Ok((LoginState::Expired, None)) };
+        let event = session.lock().await.poll().await?;
+        match event {
+            app_login::Poll::Status(state) => Ok((state, None)),
+            app_login::Poll::Authorized(payload) => {
+                Ok((LoginState::Confirmed, Some(self.client.app_login(key, &payload).await?)))
+            }
+        }
     }
 }
 
@@ -78,12 +127,70 @@ impl Provider for Qq {
         Box::pin(library::lyrics(&self.client, SongKey::parse(&song.id)))
     }
 
+    fn login_methods(&self) -> &'static [LoginMethod] {
+        &[LoginMethod { id: "qqmusic", label_key: "home.qqLoginMethodQqMusic" }]
+    }
+
+    fn cancel_login(&self) {
+        let mut current = self.login_round.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        current.id = current.id.wrapping_add(1);
+        current.app = None;
+    }
+
     fn login_code(&self) -> BoxFuture<'_, Result<LoginCode, OmniError>> {
-        Box::pin(login::login_code(&self.client, &self.plain))
+        self.login_code_with_method("qqmusic")
+    }
+
+    fn login_code_with_method(&self, method: &str) -> BoxFuture<'_, Result<LoginCode, OmniError>> {
+        let method = match method {
+            "" | "qqmusic" => "qqmusic",
+            "qq" => "qq",
+            "wechat" => "wechat",
+            _ => return Box::pin(async { Err(OmniError::Unsupported("QQ login method")) }),
+        };
+        let round = {
+            let mut current = self.login_round.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            current.id = current.id.wrapping_add(1);
+            current.app = None;
+            current.id
+        };
+        Box::pin(async move {
+            let mut code = match method {
+                "qqmusic" => self.app_code(round).await?,
+                "wechat" => wechat::login_code(&self.plain).await?,
+                _ => login::login_code(&self.client, &self.plain).await?,
+            };
+            code.key = format!("{round}:{method}:{}", code.key);
+            Ok(code)
+        })
     }
 
     fn check_login<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<LoginState, OmniError>> {
-        Box::pin(login::check_login(&self.client, &self.plain, key))
+        Box::pin(async move {
+            let mut parts = key.splitn(3, ':');
+            let round = parts.next().and_then(|part| part.parse::<u64>().ok());
+            let method = parts.next();
+            let key = parts.next().unwrap_or_default();
+            if round != Some(self.login_round.lock().unwrap_or_else(std::sync::PoisonError::into_inner).id) {
+                return Ok(LoginState::Expired);
+            }
+            let (state, credential) = match method {
+                Some("qqmusic") => self.check_app(round, key).await?,
+                Some("qq") => login::check_login(&self.plain, key).await?,
+                Some("wechat") => wechat::check_login(&self.client, &self.plain, key).await?,
+                _ => return Err(OmniError::Unsupported("QQ login method")),
+            };
+            let mut current = self.login_round.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if round != Some(current.id) {
+                return Ok(LoginState::Expired);
+            }
+            if let Some(credential) = credential {
+                self.client.set_credential(Some(credential));
+                current.app = None;
+                tracing::info!(method, "qq sign-in confirmed");
+            }
+            Ok(state)
+        })
     }
 
     fn account(&self) -> BoxFuture<'_, Result<Option<Account>, OmniError>> {
@@ -93,6 +200,9 @@ impl Provider for Qq {
     /// `logout`: the package only forgets its session; nothing is sent to QQ.
     fn logout(&self) -> BoxFuture<'_, Result<(), OmniError>> {
         Box::pin(async move {
+            let mut current = self.login_round.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            current.id = current.id.wrapping_add(1);
+            current.app = None;
             self.client.set_credential(None);
             self.anonymous.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
             Ok(())

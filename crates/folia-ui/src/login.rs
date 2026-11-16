@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use folia_core::Rgb;
 use folia_i18n::I18n;
-use folia_omni::{Account, LoginQr, LoginState, Omni, OmniError, Platform};
+use folia_omni::{Account, LoginMethod, LoginQr, LoginState, Omni, OmniError, Platform};
 use folia_visualizer::Ease;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, gradient};
 use iced::widget::{button, canvas as canvas_widget, column, container, mouse_area, row, space, stack};
@@ -207,6 +207,7 @@ enum Phase {
 #[derive(Debug, Clone)]
 pub enum Message {
     Choose(&'static str),
+    Method(&'static str),
     Hover(Option<&'static str>),
     /// The platform search above twelve rows or more (`SEARCH_FROM`).
     Query(String),
@@ -251,6 +252,10 @@ pub struct Login {
     shown: Tween,
     open: bool,
     chosen: Option<&'static str>,
+    methods: &'static [LoginMethod],
+    method: &'static str,
+    request: Option<iced::task::Handle>,
+    sign_in: Option<Omni>,
     round: u64,
     phase: Phase,
     idle_spins: bool,
@@ -296,6 +301,10 @@ impl Login {
             shown: Tween::new(0.0, UNFOLD_MS, EASE_OUT, now),
             open: false,
             chosen: None,
+            methods: &[],
+            method: "",
+            request: None,
+            sign_in: None,
             round: 0,
             phase: Phase::Idle,
             idle_spins: false,
@@ -333,6 +342,8 @@ impl Login {
 
     /// `openLoginWindow`: opens on the platform in use when someone is signed in; a guest picks the platform.
     pub fn open(&mut self, provider: Option<&'static str>, online: &Online, omni: Option<&Omni>) -> Task<Message> {
+        self.cancel_request();
+        self.sign_in = omni.cloned();
         let now = Instant::now();
         self.open = true;
         self.shown.set_with(1.0, UNFOLD_MS, EASE_OUT, now);
@@ -354,6 +365,7 @@ impl Login {
 
     /// Ends this round: the window fades out and a sign-in in progress stops.
     pub fn close(&mut self) {
+        self.cancel_request();
         self.asking = false;
         self.pending_switch = None;
         self.open = false;
@@ -404,6 +416,16 @@ impl Login {
                     return (Task::none(), None);
                 }
                 (self.choose(provider, online, omni), None)
+            }
+            Message::Method(method) => {
+                if self.method == method
+                    || !self.methods.iter().any(|item| item.id == method)
+                    || self.chosen.is_some_and(|provider| holds_session(provider, online))
+                {
+                    return (Task::none(), None);
+                }
+                self.method = method;
+                (self.start(omni), None)
             }
             Message::Hover(provider) => {
                 self.hover = provider;
@@ -534,7 +556,10 @@ impl Login {
     }
 
     fn choose(&mut self, provider: &'static str, online: &Online, omni: Option<&Omni>) -> Task<Message> {
+        self.cancel_request();
         self.chosen = Some(provider);
+        self.methods = omni.and_then(|omni| omni.login_methods(provider).ok()).unwrap_or_default();
+        self.method = self.methods.first().map_or("", |method| method.id);
         self.sync_row_motion();
         self.qr = None;
         self.round += 1;
@@ -586,6 +611,7 @@ impl Login {
 
     /// Asks for a new code (`startLogin` + `createQr`).
     fn start(&mut self, omni: Option<&Omni>) -> Task<Message> {
+        self.cancel_request();
         self.round += 1;
         self.phase = Phase::Preparing;
         self.qr = None;
@@ -596,8 +622,26 @@ impl Login {
             return Task::none();
         };
         let (round, Some(provider)) = (self.round, self.chosen) else { return Task::none() };
-        let work = async move { omni.login_qr(provider).await.map_err(|err| Failure::from_error(&err, Step::Start)) };
-        Task::perform(work, move |result| Message::Qr(round, result))
+        let method = self.method;
+        let work = async move {
+            omni.login_qr_with_method(provider, method).await.map_err(|err| Failure::from_error(&err, Step::Start))
+        };
+        self.run_request(Task::perform(work, move |result| Message::Qr(round, result)))
+    }
+
+    fn run_request(&mut self, task: Task<Message>) -> Task<Message> {
+        let (task, handle) = task.abortable();
+        self.request = Some(handle.abort_on_drop());
+        task
+    }
+
+    fn cancel_request(&mut self) {
+        self.request = None;
+        if let (Some(omni), Some(provider)) = (&self.sign_in, self.chosen)
+            && let Err(error) = omni.cancel_login(provider)
+        {
+            tracing::warn!(error = &error as &dyn std::error::Error, "sign-in cancellation failed");
+        }
     }
 
     /// A new failure closes the details (`sceneKey` changed).
@@ -606,7 +650,7 @@ impl Login {
         self.phase = Phase::Failed(failure);
     }
 
-    fn check(&self, omni: Option<&Omni>) -> Task<Message> {
+    fn check(&mut self, omni: Option<&Omni>) -> Task<Message> {
         let (Some(omni), Some(qr), Some(provider)) = (omni.cloned(), self.qr.as_ref(), self.chosen) else {
             return Task::none();
         };
@@ -616,7 +660,7 @@ impl Login {
                 .await
                 .map_err(|err| (Failure::from_error(&err, Step::Check), Failure::network(&err)))
         };
-        Task::perform(work, move |result| Message::Checked(round, result))
+        self.run_request(Task::perform(work, move |result| Message::Checked(round, result)))
     }
 
     /// One poll settled: the next is asked 2s later, never overlapping (`providerLoginSession`).
@@ -1339,6 +1383,17 @@ impl Login {
                 }))
                 .padding(Padding::ZERO.top(12.0)),
             );
+        }
+        if platform.is_some() && !signed_in && self.methods.len() > 1 {
+            let choices = self.methods.iter().map(|method| {
+                kit_button(
+                    i18n.t(method.label_key).to_owned(),
+                    self.method == method.id,
+                    Message::Method(method.id),
+                    tokens,
+                )
+            });
+            words = words.push(container(row(choices).spacing(8)).padding(Padding::ZERO.top(12.0)));
         }
         let mut buttons = row![].spacing(8).align_y(Alignment::Center);
         let failure = match &self.phase {

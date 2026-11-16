@@ -53,7 +53,7 @@ pub async fn login_code(client: &Client, plain: &reqwest::Client) -> Result<Logi
 }
 
 /// `pollPtloginQr`: 66 waiting, 67 scanned, 65 expired, 0 confirmed; a confirmation is exchanged at once.
-pub async fn check_login(client: &Client, plain: &reqwest::Client, qrsig: &str) -> Result<LoginState, OmniError> {
+pub async fn check_login(plain: &reqwest::Client, qrsig: &str) -> Result<(LoginState, Option<Credential>), OmniError> {
     let token = hash33(qrsig, 0).to_string();
     let params = [
         ("u1", LOGIN_JUMP),
@@ -76,19 +76,18 @@ pub async fn check_login(client: &Client, plain: &reqwest::Client, qrsig: &str) 
     let args =
         ptui_arguments(&text).ok_or_else(|| OmniError::Response("Ptlogin poll response is malformed".to_owned()))?;
     let code: i64 = args.first().and_then(|code| code.parse().ok()).unwrap_or(-1);
-    Ok(match code {
+    let state = match code {
         66 => LoginState::Waiting,
         67 => LoginState::Scanned,
         65 => LoginState::Expired,
         0 => {
             let check_sig = args.get(2).cloned().unwrap_or_default();
             let credential = exchange(plain, &check_sig).await?;
-            client.set_credential(Some(credential));
-            tracing::info!("qq sign-in confirmed");
-            LoginState::Confirmed
+            return Ok((LoginState::Confirmed, Some(credential)));
         }
         code => LoginState::Failed { code, message: args.get(4).cloned() },
-    })
+    };
+    Ok((state, None))
 }
 
 /// `exchangePtloginCredential`: every hop checked against the host and path it must have.
@@ -169,11 +168,11 @@ async fn exchange(plain: &reqwest::Client, check_sig: &str) -> Result<Credential
     if global != Some(0) || request != Some(0) {
         return Err(OmniError::Platform(request.or(global).unwrap_or(-1)));
     }
-    credential_of(answer.pointer("/req/data").unwrap_or(&Value::Null))
+    credential_of(answer.pointer("/req/data").unwrap_or(&Value::Null), 2)
 }
 
-/// `credentialOf`: a web credential (`loginType` 2) with a key and a positive music id.
-fn credential_of(data: &Value) -> Result<Credential, OmniError> {
+/// Validates a channel's credential while retaining the exact decimal music id.
+pub(super) fn credential_of(data: &Value, expected_type: i64) -> Result<Credential, OmniError> {
     let musicid = data
         .get("str_musicid")
         .and_then(musicu::identifier)
@@ -181,12 +180,12 @@ fn credential_of(data: &Value) -> Result<Credential, OmniError> {
         .or_else(|| data.get("musicid").and_then(musicu::identifier))
         .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) && id != "0");
     let musickey = data.get("musickey").and_then(Value::as_str).filter(|key| !key.is_empty());
-    let login_type = data.get("loginType").and_then(Value::as_i64);
+    let login_type = data.get("loginType").and_then(Value::as_i64).or_else(|| (expected_type == 1).then_some(1));
     match (musicid, musickey, login_type) {
-        (Some(musicid), Some(musickey), Some(2)) => Ok(Credential {
+        (Some(musicid), Some(musickey), Some(login_type)) if login_type == expected_type => Ok(Credential {
             musicid,
             musickey: musickey.to_owned(),
-            login_type: 2,
+            login_type,
             encrypt_uin: data.get("encryptUin").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned),
         }),
         _ => Err(OmniError::Response("Ptlogin credential is invalid".to_owned())),

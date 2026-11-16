@@ -7,6 +7,53 @@ use folia_omni::{LoginQr, Omni, OmniError, cover_cache_key};
 
 mod like_capabilities;
 
+#[tokio::test]
+async fn qq_login_channels_reject_unknown_methods_and_stale_rounds() {
+    use folia_omni::LoginState;
+    let temp = tempfile::tempdir().unwrap();
+    let omni = Omni::new(temp.path().to_path_buf(), "folia-login-test".into()).unwrap();
+    let methods: Vec<_> = omni.login_methods("qq").unwrap().iter().map(|method| method.id).collect();
+    assert_eq!(methods, ["qqmusic"]);
+    assert!(omni.login_methods("netease").unwrap().is_empty());
+    assert!(matches!(omni.login_qr_with_method("qq", "invalid").await, Err(OmniError::Unsupported(_))));
+    assert!(matches!(omni.check_login("qq", "1:wechat:old-key").await.unwrap(), LoginState::Expired));
+}
+
+#[cfg(feature = "live")]
+#[tokio::test]
+#[ignore = "requests an anonymous WeChat QR from the real service"]
+async fn qq_wechat_qr_and_waiting_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let omni = Omni::new(temp.path().to_path_buf(), "folia-wechat-live-test".into()).unwrap();
+    let qr = omni.login_qr_with_method("qq", "wechat").await.unwrap();
+    let address = decode(render(&qr));
+    let url = reqwest::Url::parse(&address).unwrap();
+    assert!(matches!(url.host_str(), Some("open.weixin.qq.com" | "weixin.qq.com")));
+    let fresh = omni.login_qr_with_method("qq", "wechat").await.unwrap();
+    assert!(matches!(omni.check_login("qq", &qr.key).await.unwrap(), folia_omni::LoginState::Expired));
+    assert!(matches!(omni.check_login("qq", &fresh.key).await.unwrap(), folia_omni::LoginState::Waiting));
+}
+
+#[cfg(feature = "live")]
+#[tokio::test]
+#[ignore = "requests a shared QQ Music app QR and opens its real MQTT subscription"]
+async fn qq_shared_app_qr_and_waiting_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let omni = Omni::new(temp.path().to_path_buf(), "folia-qq-app-live-test".into()).unwrap();
+    let qr = omni.login_qr("qq").await.unwrap();
+    let address = decode(render(&qr));
+    let url = reqwest::Url::parse(&address).unwrap();
+    assert!(
+        url.host_str().is_some_and(|host| host == "y.qq.com" || host.ends_with(".y.qq.com")),
+        "unexpected shared QR host"
+    );
+    assert!(matches!(omni.check_login("qq", &qr.key).await.unwrap(), folia_omni::LoginState::Waiting));
+    tokio::time::sleep(std::time::Duration::from_secs(32)).await;
+    assert!(matches!(omni.check_login("qq", &qr.key).await.unwrap(), folia_omni::LoginState::Waiting));
+    omni.cancel_login("qq").unwrap();
+    assert!(matches!(omni.check_login("qq", &qr.key).await.unwrap(), folia_omni::LoginState::Expired));
+}
+
 #[test]
 fn registry_lists_providers_in_original_order() {
     let omni = Omni::new(std::env::temp_dir(), "Folia-rust-test".to_owned()).unwrap();
