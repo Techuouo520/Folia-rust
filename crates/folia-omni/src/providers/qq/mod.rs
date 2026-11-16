@@ -1,6 +1,7 @@
 // QQ Music: anonymous musicu search and lyrics, Android musicu with the QQ Connect credential for the library.
 
 mod app_login;
+mod catalog;
 mod library;
 mod login;
 mod musicu;
@@ -88,6 +89,45 @@ impl Qq {
 }
 
 impl Provider for Qq {
+    fn search_artists<'a>(
+        &'a self,
+        query: &'a str,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<crate::Artist>, OmniError>> {
+        Box::pin(catalog::search(&self.client, query, limit, offset))
+    }
+
+    fn artist_detail<'a>(&'a self, artist: &'a OnlineId) -> BoxFuture<'a, Result<crate::Artist, OmniError>> {
+        Box::pin(catalog::detail(&self.client, &artist.id))
+    }
+
+    fn artist_tracks<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
+        Box::pin(catalog::songs(&self.client, &artist.id, limit, offset))
+    }
+
+    fn artist_albums<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Collection>, OmniError>> {
+        Box::pin(catalog::albums(&self.client, &artist.id, limit, offset))
+    }
+
+    fn track_catalog<'a>(&'a self, track: &'a Track) -> BoxFuture<'a, Result<crate::TrackCatalog, OmniError>> {
+        Box::pin(catalog::track_catalog(&self.client, track))
+    }
+
+    fn album<'a>(&'a self, album: &'a OnlineId) -> BoxFuture<'a, Result<Collection, OmniError>> {
+        Box::pin(catalog::album(&self.client, &album.id))
+    }
+
     fn id(&self) -> &'static str {
         ID
     }
@@ -255,7 +295,14 @@ impl Provider for Qq {
 
     /// `likes`, `playlistTrackMutations` and `mutations.createPlaylist`.
     fn capabilities(&self) -> Capabilities {
-        Capabilities { likes: true, playlist_track_mutations: true, create_playlist: true }
+        Capabilities {
+            likes: true,
+            playlist_track_mutations: true,
+            create_playlist: true,
+            artist_search: true,
+            artists: true,
+            albums: true,
+        }
     }
 
     fn like_song<'a>(&'a self, song: &'a OnlineId, liked: bool) -> BoxFuture<'a, Result<(), OmniError>> {
@@ -383,7 +430,11 @@ fn track(raw: &Value) -> Option<Track> {
         artist: (!artists.is_empty()).then(|| artists.join(" / ")),
         album: text(album, &["name", "title", "albumname"]).or_else(|| text(raw, &["albumname", "albumName"])),
         cover_url: cover,
-        online_info: Some(folia_core::OnlineTrackInfo { album_id: album_mid, ..Default::default() }),
+        online_info: Some(folia_core::OnlineTrackInfo {
+            album_id: album_mid,
+            artists: catalog::references(raw),
+            ..Default::default()
+        }),
         duration: pick(raw, &["interval", "duration"]).and_then(Value::as_f64).unwrap_or(0.0),
         online: Some(online),
         ..Track::default()

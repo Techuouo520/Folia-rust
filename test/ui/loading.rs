@@ -2,6 +2,51 @@
 use folia_ui::{LoadPhase, Loading};
 
 #[test]
+fn unavailable_tracks_follow_skip_direction_and_stop() {
+    use folia_core::{OnlineId, Repeat, Track};
+    use folia_ui::{AudioFailure, Playback, PlaybackMessage};
+    let temp = tempfile::tempdir().unwrap();
+    let store = folia_store::Store::at(temp.path().join("config"));
+    let omni = folia_omni::Omni::with_providers(temp.path().join("cache"), "unused".into(), vec![]).unwrap();
+    let tracks = (0..3)
+        .map(|index| Track {
+            id: -1 - index,
+            online: Some(OnlineId { provider: "fixture".into(), id: index.to_string() }),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let fail = |playback: &mut Playback| {
+        let message = PlaybackMessage::AudioReady(
+            playback.request_id(),
+            playback.current().unwrap().id,
+            Err(AudioFailure::Other("song is not playable".into())),
+        );
+        drop(playback.update(message, &store));
+    };
+    for repeat in [Repeat::Off, Repeat::One, Repeat::All] {
+        let mut playback =
+            Playback::new(folia_store::PlaybackSettings { repeat, ..Default::default() }, Some(omni.clone()));
+        drop(playback.play(tracks.clone(), 2, None));
+        drop(playback.update(PlaybackMessage::Previous, &store));
+        fail(&mut playback);
+        assert_eq!(playback.queue.current_index(), Some(0), "previous in {repeat:?}");
+        drop(playback.update(PlaybackMessage::Next, &store));
+        fail(&mut playback);
+        assert_eq!(playback.queue.current_index(), Some(2), "next in {repeat:?}");
+
+        drop(playback.play(tracks.clone(), 2, None));
+        drop(playback.update(PlaybackMessage::Previous, &store));
+        let expected: &[usize] = if repeat == Repeat::All { &[0, 2, 2] } else { &[0, 0] };
+        for &index in expected {
+            fail(&mut playback);
+            assert_eq!(playback.queue.current_index(), Some(index), "boundary in {repeat:?}");
+        }
+        assert!(!playback.loading.active());
+        assert_eq!(playback.queue.items().len(), 3);
+    }
+}
+
+#[test]
 fn fullscreen_uses_the_reported_logical_size_even_below_window_minimum() {
     use iced::Size;
     let window = Size::new(1200.0, 800.0);

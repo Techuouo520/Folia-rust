@@ -2,10 +2,11 @@
 
 mod api;
 mod audio;
+mod catalog;
 mod library;
 mod signin;
 
-use folia_core::{AudioQuality, OnlineId, Track};
+use folia_core::{ArtistRef, AudioQuality, OnlineId, OnlineTrackInfo, Track};
 use serde_json::Value;
 
 use crate::ProviderLyrics;
@@ -47,6 +48,45 @@ impl Provider for Spotify {
 
     fn display_name(&self) -> &'static str {
         "Spotify"
+    }
+
+    fn search_artists<'a>(
+        &'a self,
+        query: &'a str,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<crate::Artist>, OmniError>> {
+        Box::pin(catalog::search(&self.client, query, limit, offset))
+    }
+
+    fn artist_detail<'a>(&'a self, artist: &'a OnlineId) -> BoxFuture<'a, Result<crate::Artist, OmniError>> {
+        Box::pin(catalog::detail(&self.client, &artist.id))
+    }
+
+    fn artist_tracks<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
+        Box::pin(catalog::songs(&self.client, &artist.id, limit, offset))
+    }
+
+    fn track_catalog<'a>(&'a self, track: &'a Track) -> BoxFuture<'a, Result<crate::TrackCatalog, OmniError>> {
+        Box::pin(catalog::references(&self.client, track))
+    }
+
+    fn artist_albums<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Collection>, OmniError>> {
+        Box::pin(catalog::albums(&self.client, &artist.id, limit, offset))
+    }
+
+    fn album<'a>(&'a self, album: &'a OnlineId) -> BoxFuture<'a, Result<Collection, OmniError>> {
+        Box::pin(catalog::album(&self.client, &album.id))
     }
 
     fn search_songs<'a>(
@@ -197,7 +237,14 @@ impl Provider for Spotify {
 
     /// `likes`, `playlistTrackMutations` and `mutations.createPlaylist`.
     fn capabilities(&self) -> Capabilities {
-        Capabilities { likes: true, playlist_track_mutations: true, create_playlist: true }
+        Capabilities {
+            likes: true,
+            playlist_track_mutations: true,
+            create_playlist: true,
+            artist_search: true,
+            artists: true,
+            albums: true,
+        }
     }
 
     fn like_song<'a>(&'a self, song: &'a OnlineId, liked: bool) -> BoxFuture<'a, Result<(), OmniError>> {
@@ -259,6 +306,23 @@ fn artists(rows: Option<&Value>) -> Vec<String> {
         .collect()
 }
 
+fn artist_refs(rows: Option<&Value>) -> Vec<ArtistRef> {
+    rows.and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            Some(ArtistRef {
+                id: row
+                    .get("uri")
+                    .and_then(Value::as_str)
+                    .and_then(|uri| spotify_id(uri, "artist"))
+                    .unwrap_or_default(),
+                name: row.pointer("/profile/name")?.as_str()?.to_owned(),
+            })
+        })
+        .collect()
+}
+
 /// `spotifySongOf`.
 fn song_of(track: &Value) -> Option<Track> {
     if track.get("__typename").and_then(Value::as_str).is_some_and(|kind| kind != "Track") {
@@ -270,6 +334,11 @@ fn song_of(track: &Value) -> Option<Track> {
     if names.is_empty() {
         names = artists(track.pointer("/firstArtist/items"));
         names.extend(artists(track.pointer("/otherArtists/items")));
+    }
+    let mut refs = artist_refs(track.pointer("/artists/items"));
+    if refs.is_empty() {
+        refs = artist_refs(track.pointer("/firstArtist/items"));
+        refs.extend(artist_refs(track.pointer("/otherArtists/items")));
     }
     let album = track.get("albumOfTrack").unwrap_or(&Value::Null);
     let ms = track
@@ -286,6 +355,15 @@ fn song_of(track: &Value) -> Option<Track> {
         cover_url: picture(album.pointer("/coverArt/sources")),
         duration: ms.max(0.0) / 1000.0,
         online: Some(online),
+        online_info: Some(OnlineTrackInfo {
+            artists: refs,
+            album_id: album
+                .get("uri")
+                .and_then(Value::as_str)
+                .and_then(|uri| spotify_id(uri, "album"))
+                .unwrap_or_default(),
+            ..Default::default()
+        }),
         ..Track::default()
     })
 }

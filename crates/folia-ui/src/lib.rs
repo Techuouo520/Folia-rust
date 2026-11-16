@@ -4,9 +4,11 @@ mod album_wall;
 mod background;
 mod background_image;
 mod block_reflows;
+pub mod catalog;
 mod chrome;
 mod color_picker;
 mod cover_flight;
+mod credits;
 mod design_size;
 pub mod developer;
 mod drag_capture;
@@ -88,7 +90,7 @@ pub use playback_navigation::PlaybackNavigation;
 pub use player_bar::{CapsuleBox, Look as PlayerBarLook, PlayerBar, capsule_box};
 pub use playlist_dialog::{Dialog as PlaylistDialog, Look as PlaylistLook, Message as PlaylistMessage, PlaylistChoice};
 pub use reorder::drag_to_reorder;
-pub use search::{Message as SearchMessage, SearchPage, View as SearchView};
+pub use search::{Kind as SearchKind, Message as SearchMessage, SearchPage, View as SearchView};
 pub use search_results::format_duration;
 pub use settings::{Message as SettingsMessage, Section as SettingsSection, Settings, Values as SettingsValues};
 pub use settings_kit::{Faded, Tokens, panel_glass, quick_tile_fill, tools_glass};
@@ -171,6 +173,13 @@ pub enum Page {
     Library,
     Search,
     NowPlaying,
+    Catalog,
+}
+
+enum NavigationEntry {
+    Page(Page),
+    Search(Box<SearchPage>),
+    Catalog(Box<catalog::CatalogPage>),
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +201,8 @@ pub enum Message {
     Visualizer(Option<Style>),
     Library(library::Message),
     Search(search::Message),
+    Catalog(catalog::Message),
+    Back,
     Playback(playback::Message),
     OpenFiles(Vec<Track>),
     Chrome(chrome::Message),
@@ -300,6 +311,10 @@ pub struct Shell {
     memory_monitor: folia_store::MemoryMonitor,
     library: LibraryPage,
     search: SearchPage,
+    catalog: Option<catalog::CatalogPage>,
+    history: Vec<NavigationEntry>,
+    playback_source: Option<NavigationEntry>,
+    pending_playback_source: Option<(u64, NavigationEntry)>,
     omni: Option<Omni>,
     playback: Playback,
     play_navigation: PlaybackNavigation,
@@ -426,6 +441,10 @@ impl Shell {
             memory_monitor,
             library,
             search: SearchPage::default(),
+            catalog: None,
+            history: Vec::new(),
+            playback_source: None,
+            pending_playback_source: None,
             playback: Playback::new(init.playback, omni.clone()),
             play_navigation: PlaybackNavigation::default(),
             playlists: Vec::new(),
@@ -829,10 +848,203 @@ impl Shell {
         Task::batch([art, painting])
     }
 
+    fn page_snapshot(&self) -> NavigationEntry {
+        match self.page {
+            Page::Search => NavigationEntry::Search(Box::new(self.search.snapshot())),
+            Page::Catalog => self.catalog.as_ref().map_or(NavigationEntry::Page(Page::Library), |page| {
+                NavigationEntry::Catalog(Box::new(page.snapshot()))
+            }),
+            page => NavigationEntry::Page(page),
+        }
+    }
+
+    fn remember_page(&mut self) {
+        let entry = match self.page {
+            Page::Catalog => match self.catalog.take() {
+                Some(mut page) => {
+                    page.suspend();
+                    NavigationEntry::Catalog(Box::new(page))
+                }
+                None => return,
+            },
+            Page::Search => {
+                let mut page = std::mem::take(&mut self.search);
+                page.suspend();
+                NavigationEntry::Search(Box::new(page))
+            }
+            page => NavigationEntry::Page(page),
+        };
+        self.history.push(entry);
+        if self.history.len() > 32 {
+            self.history.remove(0);
+        }
+    }
+
+    fn restore_page(&mut self, entry: NavigationEntry) -> Task<Message> {
+        match entry {
+            NavigationEntry::Catalog(page) => {
+                self.catalog = Some(*page);
+                self.page = Page::Catalog;
+                self.catalog
+                    .as_mut()
+                    .map_or_else(Task::none, |page| page.activate(self.omni.as_ref()).map(Message::Catalog))
+            }
+            NavigationEntry::Search(page) => {
+                self.search = *page;
+                self.page = Page::Search;
+                self.search.restore(self.omni.as_ref()).map(Message::Search)
+            }
+            NavigationEntry::Page(page) => {
+                self.page = page;
+                Task::none()
+            }
+        }
+    }
+
+    fn navigate_back(&mut self) -> Task<Message> {
+        if self.page == Page::Catalog && self.catalog.as_mut().is_some_and(|page| page.close_biography()) {
+            return Task::none();
+        }
+        self.play_navigation.cancel();
+        if let Some(page) = &mut self.catalog {
+            page.suspend();
+        }
+        self.catalog = None;
+        self.search.suspend();
+        let entry = self.history.pop().unwrap_or(NavigationEntry::Page(Page::Library));
+        self.restore_page(entry)
+    }
+
+    fn return_home(&mut self) {
+        self.play_navigation.cancel();
+        self.catalog = None;
+        self.search.suspend();
+        self.history.clear();
+        self.page = Page::Library;
+    }
+
+    fn locate_playback_source(&mut self) -> Task<Message> {
+        let entry = match &self.playback_source {
+            Some(NavigationEntry::Catalog(page)) => NavigationEntry::Catalog(Box::new(page.snapshot())),
+            Some(NavigationEntry::Search(page)) => NavigationEntry::Search(Box::new(page.snapshot())),
+            _ => {
+                self.page = Page::Library;
+                return match self.playback.current().map(|track| track.id) {
+                    Some(track) => self.library_message(library::Message::Locate(track)),
+                    None => Task::none(),
+                };
+            }
+        };
+        self.play_navigation.cancel();
+        self.remember_page();
+        self.restore_page(entry)
+    }
+
+    fn catalog_message(&mut self, message: catalog::Message) -> Task<Message> {
+        if matches!(message, catalog::Message::Back) {
+            return self.navigate_back();
+        }
+        if matches!(
+            message,
+            catalog::Message::TrackArtists(_)
+                | catalog::Message::TrackAlbum(_)
+                | catalog::Message::OpenArtist(_)
+                | catalog::Message::OpenAlbum(_)
+        ) {
+            let Some((page, task)) = catalog::CatalogPage::open(message, self.omni.as_ref()) else {
+                return Task::none();
+            };
+            self.play_navigation.cancel();
+            self.remember_page();
+            self.catalog = Some(page);
+            self.page = Page::Catalog;
+            return task.map(Message::Catalog);
+        }
+        if let catalog::Message::AllReady(_, _, enqueue, ref result) = message {
+            let active =
+                self.page == Page::Catalog && self.catalog.as_ref().is_some_and(|page| page.accepts_all(&message));
+            if !active {
+                return Task::none();
+            }
+            let succeeded = result.is_ok();
+            let task = self
+                .catalog
+                .as_mut()
+                .map_or_else(Task::none, |page| page.update(message.clone(), self.omni.as_ref()).map(Message::Catalog));
+            if succeeded {
+                return Task::batch([
+                    task,
+                    self.catalog_message(if enqueue {
+                        catalog::Message::EnqueueAll
+                    } else {
+                        catalog::Message::PlayAll
+                    }),
+                ]);
+            }
+            return task;
+        }
+        if matches!(message, catalog::Message::PlayAll | catalog::Message::EnqueueAll) {
+            let enqueue = matches!(message, catalog::Message::EnqueueAll);
+            if let Some(task) = self.catalog.as_mut().and_then(|page| page.prepare_all(enqueue, self.omni.as_ref())) {
+                return task.map(Message::Catalog);
+            }
+        }
+        if matches!(message, catalog::Message::Data(..) | catalog::Message::Cover(..) | catalog::Message::Backdrop(..))
+        {
+            if let Some(page) = self.catalog.as_mut().filter(|page| page.accepts(&message)) {
+                return page.update(message, self.omni.as_ref()).map(Message::Catalog);
+            }
+            for entry in &mut self.history {
+                if let NavigationEntry::Catalog(page) = entry
+                    && page.accepts(&message)
+                {
+                    return page.update(message, self.omni.as_ref()).map(Message::Catalog);
+                }
+            }
+            return Task::none();
+        }
+        let Some(page) = self.catalog.as_ref() else { return Task::none() };
+        match message {
+            catalog::Message::Play(_) | catalog::Message::PlayAll => {
+                let index = if let catalog::Message::Play(index) = message { index } else { 0 };
+                if page.tracks.is_empty() || index >= page.tracks.len() {
+                    return Task::none();
+                }
+                let origin = folia_core::Origin { name: page.title().to_owned() };
+                let start = self.playback.play(page.tracks.clone(), index, Some(origin)).map(Message::Playback);
+                self.await_player();
+                Task::batch([start, self.ensure_art()])
+            }
+            catalog::Message::Enqueue(index) => {
+                if let Some(track) = page.tracks.get(index).cloned() {
+                    self.playback.enqueue(vec![track]);
+                }
+                Task::none()
+            }
+            catalog::Message::EnqueueAll => {
+                self.playback.enqueue(page.tracks.clone());
+                Task::none()
+            }
+            message => self
+                .catalog
+                .as_mut()
+                .map_or_else(Task::none, |page| page.update(message, self.omni.as_ref()).map(Message::Catalog)),
+        }
+    }
+
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Back => self.navigate_back(),
+            Message::Catalog(message) => self.catalog_message(message),
             Message::Navigate(page) => {
                 self.play_navigation.cancel();
+                if page == Page::Library {
+                    self.return_home();
+                    return Task::none();
+                }
+                if page == Page::NowPlaying && self.page != Page::NowPlaying {
+                    self.remember_page();
+                }
                 self.page = page;
                 if page == Page::NowPlaying {
                     self.reveal_chrome();
@@ -916,9 +1128,24 @@ impl Shell {
                 Task::batch([queue_task, task, self.library_effect(effect), notice])
             }
             Message::Search(message) => {
+                if matches!(
+                    message,
+                    search::Message::Results(..) | search::Message::More(..) | search::Message::Cover(..)
+                ) && !self.search.accepts_message(&message)
+                {
+                    let provider = self.library.online.provider();
+                    for entry in &mut self.history {
+                        if let NavigationEntry::Search(page) = entry
+                            && page.accepts_message(&message)
+                        {
+                            return page.update(message, self.omni.as_ref(), provider).0.map(Message::Search);
+                        }
+                    }
+                    return Task::none();
+                }
                 if matches!(message, search::Message::Close) {
                     self.play_navigation.cancel();
-                    self.search.close();
+                    return self.navigate_back();
                 }
                 let now = std::time::Instant::now();
                 if matches!(message, search::Message::Frame) && self.page == Page::Search && self.search.gone(now) {
@@ -944,6 +1171,7 @@ impl Shell {
                         }
                         task
                     }
+                    search::Outcome::Catalog(message) => Task::batch([task, self.catalog_message(message)]),
                     search::Outcome::None => task,
                 }
             }
@@ -957,8 +1185,16 @@ impl Shell {
                 };
                 let task = self.playback.update(message, &self.store).map(Message::Playback);
                 if started.is_some_and(|request| {
+                    self.pending_playback_source.as_ref().is_some_and(|(pending, _)| *pending == request)
+                }) {
+                    self.playback_source = self.pending_playback_source.take().map(|(_, source)| source);
+                }
+                if started.is_some_and(|request| {
                     request == self.playback.request_id() && self.play_navigation.ready(request, self.page)
                 }) {
+                    if self.page != Page::NowPlaying {
+                        self.remember_page();
+                    }
                     self.page = Page::NowPlaying;
                     self.reveal_chrome();
                 }
@@ -1058,6 +1294,9 @@ impl Shell {
                 }
                 // `usePlayerBottomBarPositioningEntry`: close settings, go to the player, enter the mode.
                 self.settings = None;
+                if self.page != Page::NowPlaying {
+                    self.remember_page();
+                }
                 self.page = Page::NowPlaying;
                 self.reveal_chrome();
                 self.positioning = Some(positioner::Positioning::new(self.bar_offset()));
@@ -1068,7 +1307,8 @@ impl Shell {
                 self.positioner(if commit { positioner::Message::Commit } else { positioner::Message::Cancel })
             }
             Message::Bar(player_bar::Message::Open) => {
-                if self.page == Page::Library {
+                if self.page != Page::NowPlaying {
+                    self.remember_page();
                     self.page = Page::NowPlaying;
                     self.reveal_chrome();
                 }
@@ -1301,7 +1541,7 @@ impl Shell {
                 } else if self.panel.is_open() {
                     self.panel(panel::Message::Close)
                 } else {
-                    self.handle(Message::Navigate(Page::Library))
+                    self.navigate_back()
                 }
             }
             Message::PlayerComposing(composing) => {
@@ -1365,7 +1605,7 @@ impl Shell {
 
     /// The sign-in window on `provider`, from the home page when the player's account tab asks for it.
     fn open_login_on(&mut self, provider: Option<&'static str>) -> Task<Message> {
-        self.page = Page::Library;
+        self.return_home();
         self.login.open(provider, &self.library.online, self.omni.as_ref()).map(Message::Login)
     }
 
@@ -1397,10 +1637,14 @@ impl Shell {
 
     /// Another platform takes over: the player empties, as a sign-out does, since its songs belong to the old one.
     fn leave_provider(&mut self) -> Task<Message> {
+        self.history.clear();
+        self.catalog = None;
+        self.search = SearchPage::default();
+        self.playback_source = None;
+        self.pending_playback_source = None;
+        self.play_navigation.cancel();
         self.playback.clear();
-        if self.page == Page::NowPlaying {
-            self.page = Page::Library;
-        }
+        self.page = Page::Library;
         Task::none()
     }
 
@@ -1415,6 +1659,7 @@ impl Shell {
 
     fn await_player(&mut self) {
         if self.playback.current().is_some() {
+            self.pending_playback_source = Some((self.playback.request_id(), self.page_snapshot()));
             self.play_navigation.begin(self.playback.request_id(), self.page);
         } else {
             self.play_navigation.cancel();
@@ -1424,6 +1669,7 @@ impl Shell {
     /// Plays what the home wall chose, or keeps the tab it switched to.
     fn library_effect(&mut self, effect: Option<library::Effect>) -> Task<Message> {
         match effect {
+            Some(library::Effect::Catalog(message)) => self.catalog_message(message),
             Some(library::Effect::Play { queue, index, origin }) => {
                 let name = origin.unwrap_or_else(|| self.i18n.t("localMusic.allSongs").to_owned());
                 let start = self.playback.play(queue, index, Some(folia_core::Origin { name })).map(Message::Playback);
@@ -1445,6 +1691,9 @@ impl Shell {
                 self.playback.update(playback::Message::Toggle, &self.store).map(Message::Playback)
             }
             Some(library::Effect::EnterPlayer) => {
+                if self.page != Page::NowPlaying {
+                    self.remember_page();
+                }
                 self.page = Page::NowPlaying;
                 self.reveal_chrome();
                 Task::none()
@@ -1604,7 +1853,7 @@ impl Shell {
             (folia_visualizer::color(self.theme.primary, 1.0), folia_visualizer::color(self.theme.secondary, 1.0));
         let daylight = self.appearance.theme == ThemeMode::Light;
         let page: Element<'_, Message> = match self.page {
-            Page::Library | Page::Search => {
+            Page::Library | Page::Search | Page::Catalog => {
                 let playing = self.playback.current().map(|track| track.id);
                 let queued = self
                     .library
@@ -1722,6 +1971,24 @@ impl Shell {
         let now = std::time::Instant::now();
         let mut frame: iced::widget::Stack<'_, Message, iced::Theme, iced::Renderer> = if playing {
             stack![page]
+        } else if self.page == Page::Catalog {
+            match &self.catalog {
+                Some(catalog) => stack![
+                    catalog
+                        .view(catalog::View {
+                            i18n: &self.i18n,
+                            ink: text_color,
+                            muted,
+                            accent: folia_visualizer::color(self.theme.accent, 1.0),
+                            background: folia_visualizer::color(self.theme.background, 1.0),
+                            daylight,
+                            width: self.window_size.width,
+                            height: self.window_size.height
+                        })
+                        .map(Message::Catalog)
+                ],
+                None => stack![page],
+            }
         } else if self.page == Page::Search {
             let provider = self.library.online.provider();
             let search_source = self
@@ -1741,6 +2008,7 @@ impl Shell {
                         daylight,
                         width: self.window_size.width,
                         source: search_source,
+                        catalog: self.omni.as_ref().map(|omni| omni.capabilities(provider)).unwrap_or_default(),
                     },
                     now,
                 )
@@ -1767,7 +2035,7 @@ impl Shell {
                     Color { a: 0.2, ..Color::BLACK },
                     Color { r: 1.0, g: 1.0, b: 1.0, a: 0.6 },
                     self.i18n.t("ui.back"),
-                    Message::Navigate(Page::Library),
+                    Message::Back,
                 )
             ]
             .into();
@@ -1826,6 +2094,12 @@ impl Shell {
             let add_reason = self.panel_add_reason.as_deref();
             let can_match = self.omni.is_some() && self.playback.current().is_some_and(|track| track.online.is_some());
             let panel_view = panel::View {
+                catalog: self
+                    .playback
+                    .current()
+                    .and_then(|track| track.online.as_ref())
+                    .and_then(|id| self.omni.as_ref().map(|omni| omni.capabilities(&id.provider)))
+                    .unwrap_or_default(),
                 i18n: &self.i18n,
                 theme: &self.theme,
                 daylight,
@@ -2104,7 +2378,7 @@ impl Shell {
 
     /// Surfaces that take the keyboard the way an open sheet does: settings, sign-in, the workbench, search.
     fn blocks_space(&self) -> bool {
-        self.modal_open() || self.page == Page::Search
+        self.modal_open() || matches!(self.page, Page::Search | Page::Catalog)
     }
 
     /// The original back button only appears inside the top-left 120px square.
@@ -2280,6 +2554,14 @@ impl Shell {
         }
         if self.page == Page::Library && self.home_menu_open() {
             parts.push(iced::event::listen_with(home_dismiss));
+        }
+        if self.page == Page::Catalog {
+            if self.catalog.as_ref().is_some_and(|page| page.animating(now)) {
+                parts.push(iced::window::frames().map(|_| Message::Catalog(catalog::Message::Frame)));
+            }
+            if sheets {
+                parts.push(iced::event::listen_with(catalog_key));
+            }
         }
         if self.page == Page::Search {
             if self.settings.is_none() {
@@ -2897,16 +3179,10 @@ impl Shell {
         let task = match effect {
             panel::Effect::None => Task::none(),
             panel::Effect::Home => {
-                self.page = Page::Library;
+                self.return_home();
                 Task::none()
             }
-            panel::Effect::Locate => {
-                self.page = Page::Library;
-                match self.playback.current().map(|track| track.id) {
-                    Some(track) => self.library_message(library::Message::Locate(track)),
-                    None => Task::none(),
-                }
-            }
+            panel::Effect::Locate => self.locate_playback_source(),
             panel::Effect::Settings => {
                 self.settings = Some(settings::Settings::open());
                 Task::none()
@@ -2984,6 +3260,7 @@ impl Shell {
                 let theme_settings = self.theme_settings.clone();
                 save(&self.store, &theme_settings)
             }
+            panel::Effect::Catalog(message) => self.catalog_message(message),
             panel::Effect::TransparentBackground(enabled) => {
                 self.theme_settings.transparent_player_background = enabled;
                 tracing::info!(enabled, "player background transparency changed");
@@ -3487,11 +3764,13 @@ impl Shell {
                 replan = true;
                 self.search.begin(query);
                 self.search.reveal();
+                self.remember_page();
                 self.page = Page::Search;
                 let provider = self.library.online.provider();
                 let (task, _) = self.search.update(search::Message::Submit, self.omni.as_ref(), provider);
                 task.map(Message::Search)
             }
+            home::Message::Catalog(message) => self.catalog_message(message),
             home::Message::SearchQuery(_) => Task::none(),
             home::Message::EscapeSearch => {
                 if self.home.search_query().is_none() {
@@ -3537,6 +3816,9 @@ impl Shell {
             }
             home::Message::Player => {
                 if self.playback.current().is_some() {
+                    if self.page != Page::NowPlaying {
+                        self.remember_page();
+                    }
                     self.page = Page::NowPlaying;
                     self.reveal_chrome();
                 }
@@ -4023,4 +4305,20 @@ fn wall_ms() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs_f64() * 1000.0)
         .unwrap_or(0.0)
+}
+
+fn catalog_key(event: iced::Event, status: iced::event::Status, _window: iced::window::Id) -> Option<Message> {
+    if status == iced::event::Status::Ignored
+        && matches!(
+            event,
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+                ..
+            })
+        )
+    {
+        Some(Message::Back)
+    } else {
+        None
+    }
 }

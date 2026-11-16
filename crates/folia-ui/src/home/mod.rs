@@ -124,6 +124,7 @@ enum Level {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Catalog(crate::catalog::Message),
     Fold,
     Expand,
     TitleToggle {
@@ -456,6 +457,7 @@ impl HomeChrome {
                 }
             }
             Message::Settings
+            | Message::Catalog(_)
             | Message::Player
             | Message::Search
             | Message::Import
@@ -947,6 +949,7 @@ pub struct AlbumSeam {
     /// 「专辑 · 年份」.
     pub kicker: String,
     pub artists: String,
+    pub artist_links: Vec<(String, folia_core::OnlineId)>,
     pub facts: Vec<String>,
     pub description: Option<String>,
     /// The watermark: the hero word's last character, else the title's.

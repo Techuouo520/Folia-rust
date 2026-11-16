@@ -430,7 +430,13 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
             .and_then(|info| text_of(&info, &["list_create_userid", "create_userid"])),
     };
     tracing::info!(playlist = id, songs = songs.len(), subscribed = row.is_some(), "kugou playlist read");
-    Ok(CollectionDetail { tracks: songs, subscribed: Some(row.is_some()), owner, published: None })
+    Ok(CollectionDetail {
+        tracks: songs,
+        subscribed: Some(row.is_some()),
+        owner,
+        published: None,
+        ..Default::default()
+    })
 }
 
 /// `playlist_track_all_new`: every page of one of the account's lists by its list id.
@@ -494,7 +500,7 @@ async fn playlist_info(client: &Client, id: &str) -> Result<Value, OmniError> {
 }
 
 /// `album_detail`: the album's record on the open API.
-async fn album_info(client: &Client, id: &str) -> Result<Value, OmniError> {
+pub(super) async fn album_info(client: &Client, id: &str) -> Result<Value, OmniError> {
     let answer = client
         .call(|| {
             let body = json!({
@@ -537,7 +543,8 @@ async fn album_detail(client: &Client, id: &str) -> Result<CollectionDetail, Omn
         .and_then(|date| date_millis(&date));
     let rows = if client.session().signed_in() { user_rows(client).await.unwrap_or_default() } else { Vec::new() };
     let subscribed = rows.iter().any(|row| is_album_row(row) && album_row_id(row).as_deref() == Some(id));
-    Ok(CollectionDetail { tracks: songs, subscribed: Some(subscribed), owner: None, published })
+    let artists = info.as_ref().map(super::catalog::references).unwrap_or_default();
+    Ok(CollectionDetail { tracks: songs, subscribed: Some(subscribed), owner: None, published, artists })
 }
 
 fn album_row_id(row: &Value) -> Option<String> {

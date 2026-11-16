@@ -1697,10 +1697,26 @@ fn album_poster<'a>(host: &Host<'a>, seam: &super::LayerSeam, album: &super::Alb
     let facts_ink = fade(paper, facts_in.0);
     let dot = || text("·").size(crate::typeface::size::BODY).color(fade(facts_ink, 0.5));
     if !album.artists.is_empty() {
-        let name = text(album.artists.clone())
-            .size(crate::typeface::size::POSTER_ARTIST)
-            .font(crate::typeface::adapt(crate::typeface::BLACK))
-            .color(facts_ink);
+        let label = |name| {
+            text(name)
+                .size(crate::typeface::size::POSTER_ARTIST)
+                .font(crate::typeface::adapt(crate::typeface::BLACK))
+                .color(facts_ink)
+        };
+        let name: Element<'a, Message> = if album.artist_links.is_empty() {
+            label(album.artists.clone()).into()
+        } else {
+            row(album.artist_links.iter().map(|(name, id)| {
+                button(label(name.clone()))
+                    .padding(0)
+                    .on_press(Message::Catalog(crate::catalog::Message::OpenArtist(id.clone())))
+                    .style(button::text)
+                    .into()
+            }))
+            .spacing(8)
+            .wrap()
+            .into()
+        };
         let rule = container(space()).width(Length::Fill).height(Length::Fixed(2.0)).style(move |_theme: &Theme| {
             container::Style { background: Some(Background::Color(facts_ink)), ..container::Style::default() }
         });

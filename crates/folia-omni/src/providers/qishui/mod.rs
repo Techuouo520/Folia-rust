@@ -1,9 +1,10 @@
 // Qishui (汽水音乐) over the car protocol: search, plaintext audio, KRC lyrics, Douyin QR sign-in, lists and the feed.
 
+mod catalog;
 mod client;
 mod library;
 
-use folia_core::{AudioQuality, OnlineId, Track};
+use folia_core::{ArtistRef, AudioQuality, OnlineId, OnlineTrackInfo, Track};
 use serde_json::Value;
 
 use crate::{
@@ -31,6 +32,36 @@ impl Provider for Qishui {
 
     fn display_name(&self) -> &'static str {
         "汽水音乐"
+    }
+
+    fn search_artists<'a>(
+        &'a self,
+        query: &'a str,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<crate::Artist>, OmniError>> {
+        Box::pin(catalog::search(&self.client, query, limit, offset))
+    }
+
+    fn artist_detail<'a>(&'a self, artist: &'a OnlineId) -> BoxFuture<'a, Result<crate::Artist, OmniError>> {
+        Box::pin(catalog::detail(&self.client, &artist.id))
+    }
+
+    fn artist_tracks<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
+        Box::pin(catalog::songs(&self.client, &artist.id, limit, offset))
+    }
+
+    fn track_catalog<'a>(&'a self, track: &'a Track) -> BoxFuture<'a, Result<crate::TrackCatalog, OmniError>> {
+        Box::pin(catalog::references(&self.client, track))
+    }
+
+    fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities { artist_search: true, artists: true, albums: false, ..Default::default() }
     }
 
     fn search_songs<'a>(
@@ -184,6 +215,16 @@ fn track(raw: &Value) -> Option<Track> {
         .and_then(Value::as_array)
         .map(|list| list.iter().filter_map(|artist| text(artist, "name")).collect())
         .unwrap_or_default();
+    let refs = related
+        .get("artist_links")
+        .or_else(|| base.pointer("/song_maker_team/composers"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|artist| {
+            Some(ArtistRef { id: text(artist, "id").unwrap_or_default(), name: text(artist, "name")? })
+        })
+        .collect();
     let online = OnlineId { provider: ID.to_owned(), id };
     Some(Track {
         id: online.track_id(),
@@ -193,6 +234,7 @@ fn track(raw: &Value) -> Option<Track> {
         cover_url: image(entity.pointer("/display_info/cover_url")),
         duration: base.get("duration_ms").and_then(Value::as_f64).unwrap_or(0.0).max(0.0) / 1000.0,
         online: Some(online),
+        online_info: Some(OnlineTrackInfo { artists: refs, ..Default::default() }),
         ..Track::default()
     })
 }

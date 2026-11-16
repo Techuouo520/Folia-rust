@@ -3,9 +3,7 @@
 use crate::typeface::text;
 use folia_core::Track;
 use iced::widget::scrollable::Viewport;
-use iced::widget::{
-    Id, button, column, container, image, mouse_area, responsive, row, scrollable, space, stack, tooltip,
-};
+use iced::widget::{Id, button, column, container, image, mouse_area, row, scrollable, space, stack, tooltip};
 use iced::{Alignment, Background, Border, Color, Element, Length, Task, Theme, mouse};
 use lucide_static_svg::Icon;
 
@@ -25,7 +23,7 @@ pub fn format_duration(seconds: f64) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct List {
     scroll: Scroll,
     viewport: f32,
@@ -118,6 +116,7 @@ pub struct Bindings<M> {
     pub play: fn(usize) -> M,
     pub enqueue: fn(usize) -> M,
     pub plus: fn(Option<usize>) -> M,
+    pub catalog: fn(crate::catalog::Message) -> M,
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +131,8 @@ pub struct Look<'a> {
     pub secondary: Color,
     pub daylight: bool,
     pub wide: bool,
+    pub artists: bool,
+    pub catalog: folia_omni::Capabilities,
     pub queue_tip: &'a str,
 }
 
@@ -170,12 +171,12 @@ fn card_row<'a, M: Clone + 'a>(
     state: RowState,
     bindings: &Bindings<M>,
 ) -> Element<'a, M> {
-    let cover = cover_button(index, cover, look.text, state.hovered, bindings.play);
-    let mut row = row![cover, titles(index, track, look, bindings.play)].spacing(12.0).align_y(Alignment::Center);
-    if look.wide {
+    let cover = cover_button(index, cover, look.text, state.hovered, look.artists, bindings.play);
+    let mut row = row![cover, titles(index, track, look, bindings)].spacing(12.0).align_y(Alignment::Center);
+    if look.wide && !look.artists {
         row = row.push(duration_text(track, look.text));
     }
-    row.push(queue_button(index, look, state, bindings)).into()
+    if look.artists { row.into() } else { row.push(queue_button(index, look, state, bindings)).into() }
 }
 
 fn cover_button<'a, M: Clone + 'a>(
@@ -183,6 +184,7 @@ fn cover_button<'a, M: Clone + 'a>(
     cover: Option<&'a image::Handle>,
     ink: Color,
     hovered: bool,
+    artist: bool,
     on_play: fn(usize) -> M,
 ) -> Element<'a, M> {
     let plate = Color { r: 0x71 as f32 / 255.0, g: 0x71 as f32 / 255.0, b: 0x7a as f32 / 255.0, a: 0.15 };
@@ -199,11 +201,15 @@ fn cover_button<'a, M: Clone + 'a>(
     let mut layers = stack![face];
     if hovered {
         layers = layers.push(
-            container(variant(Variant::FilledPlay, 18.0, Color::WHITE)).center(Length::Fixed(COVER)).style(|_| {
-                container::Style {
-                    background: Some(Background::Color(Color { a: 0.45, ..Color::BLACK })),
-                    ..container::Style::default()
-                }
+            container(if artist {
+                icon(Icon::ArrowUpRight, 18.0, Color::WHITE)
+            } else {
+                variant(Variant::FilledPlay, 18.0, Color::WHITE)
+            })
+            .center(Length::Fixed(COVER))
+            .style(|_| container::Style {
+                background: Some(Background::Color(Color { a: 0.45, ..Color::BLACK })),
+                ..container::Style::default()
             }),
         );
     }
@@ -217,12 +223,7 @@ fn cover_button<'a, M: Clone + 'a>(
     button(face).padding(0).on_press(on_play(index)).style(bare).into()
 }
 
-fn titles<'a, M: Clone + 'a>(
-    index: usize,
-    track: &'a Track,
-    look: Look<'a>,
-    on_play: fn(usize) -> M,
-) -> Element<'a, M> {
+fn titles<'a, M: Clone + 'a>(index: usize, track: &'a Track, look: Look<'a>, bindings: &Bindings<M>) -> Element<'a, M> {
     let title = button(
         text(&track.title)
             .size(crate::typeface::size::BODY)
@@ -231,35 +232,39 @@ fn titles<'a, M: Clone + 'a>(
             .wrapping(text::Wrapping::None),
     )
     .padding(0)
-    .on_press(on_play(index))
+    .on_press((bindings.play)(index))
     .style(bare);
     let name = container(title).width(Length::Fill).clip(true);
-    column![name, meta_line(track, look)].spacing(4.0).width(Length::Fill).into()
+    column![name, meta_line(track, look, bindings.catalog)].spacing(4.0).width(Length::Fill).into()
 }
 
 /// `artist • album` on one 16px line. The album keeps its width up to 45%; the artist takes what is left.
-fn meta_line<'a, M: 'a>(track: &'a Track, look: Look<'a>) -> Element<'a, M> {
-    let artist = track.artist.as_deref().unwrap_or("");
-    let Some(album) = track.album.as_deref().filter(|name| !name.is_empty()) else {
-        return container(meta_text(artist, look.secondary)).width(Length::Fill).clip(true).into();
-    };
-    let line = responsive(move |space| {
-        let natural = |value: &str| crate::typeface::measure(value, 12.0, crate::typeface::SYSTEM, f32::INFINITY).width;
-        let dot_w = natural("•").ceil() + 8.0;
-        let album_w = natural(album).ceil().min(space.width * 0.45);
-        let artist_w = natural(artist).ceil().min((space.width - album_w - dot_w).max(0.0));
-        let dot =
-            text("•").size(crate::typeface::size::HINT).color(Color { a: look.secondary.a * 0.4, ..look.secondary });
-        row![
-            container(meta_text(artist, look.secondary)).width(Length::Fixed(artist_w)).clip(true),
-            dot,
-            container(meta_text(album, look.secondary)).width(Length::Fixed(album_w)).clip(true),
-        ]
-        .spacing(4.0)
-        .align_y(Alignment::Center)
-        .into()
-    });
-    container(line).width(Length::Fill).height(Length::Fixed(16.0)).into()
+fn meta_line<'a, M: Clone + 'a>(
+    track: &'a Track,
+    look: Look<'a>,
+    catalog: fn(crate::catalog::Message) -> M,
+) -> Element<'a, M> {
+    let mut names = row![].spacing(4).align_y(Alignment::Center);
+    for (index, (name, action)) in crate::credits::artists(track, look.catalog.artists).into_iter().enumerate() {
+        if index > 0 {
+            names = names.push(meta_text("/", look.secondary));
+        }
+        names = names.push(
+            button(text(name).size(crate::typeface::size::HINT).color(look.secondary).wrapping(text::Wrapping::None))
+                .padding(0)
+                .on_press_maybe(action.map(catalog))
+                .style(bare),
+        );
+    }
+    if let Some(album) = track.album.as_deref().filter(|name| !name.is_empty()) {
+        names = names.push(meta_text("•", look.secondary)).push(
+            button(meta_text(album, look.secondary))
+                .padding(0)
+                .on_press_maybe(crate::credits::album(track, look.catalog.albums).map(catalog))
+                .style(bare),
+        );
+    }
+    container(names).width(Length::Fill).height(16).clip(true).into()
 }
 
 fn meta_text<'a>(value: &'a str, color: Color) -> iced::widget::Text<'a> {

@@ -823,3 +823,14 @@ punch = "Punch"
 [timeline]
 title = "Timeline"
 noLyrics = "No lyrics"
+
+[catalog]
+songs = "Songs"
+artists = "Artists"
+hotSongs = "Popular songs"
+albums = "Albums"
+error = "Could not load these details. Please try again."
+enqueueHot = "Queue popular songs"
+moreSongs = "More popular songs"
+moreAlbums = "More albums"
+counts = "{{songs}} songs · {{albums}} albums"

@@ -2,6 +2,8 @@
 
 mod audio_cache;
 mod audio_ranges;
+mod catalog;
+pub use catalog::{Artist, TrackCatalog};
 pub mod lx;
 pub use audio_cache::{PrefetchPlan, prefetch_indices, url_is_fresh};
 mod paging;
@@ -219,6 +221,8 @@ impl Collection {
 /// A collection's songs and the account's relation to it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CollectionDetail {
+    /// The album's own credits, distinct from guest credits on individual tracks.
+    pub artists: Vec<folia_core::ArtistRef>,
     pub tracks: Vec<Track>,
     /// Whether the account saved it; `None` where saving does not apply (daily songs, personal FM).
     pub subscribed: Option<bool>,
@@ -270,6 +274,9 @@ pub struct ProviderLyrics {
 /// What one platform can do. Search results are tracks whose `online` id points back at the platform.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Capabilities {
+    pub artist_search: bool,
+    pub artists: bool,
+    pub albums: bool,
     /// `likes`: songs can be liked and the account's liked ids read.
     pub likes: bool,
     /// `playlistTrackMutations`: a song can be added to one of the account's own playlists.
@@ -291,6 +298,39 @@ pub trait Provider: Send + Sync {
         limit: u32,
         offset: u32,
     ) -> BoxFuture<'a, Result<Page<Track>, OmniError>>;
+    fn search_artists<'a>(
+        &'a self,
+        _query: &'a str,
+        _limit: u32,
+        _offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Artist>, OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("artist search")) })
+    }
+    fn artist_detail<'a>(&'a self, _artist: &'a OnlineId) -> BoxFuture<'a, Result<Artist, OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("artist details")) })
+    }
+    fn artist_tracks<'a>(
+        &'a self,
+        _artist: &'a OnlineId,
+        _limit: u32,
+        _offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("artist tracks")) })
+    }
+    fn artist_albums<'a>(
+        &'a self,
+        _artist: &'a OnlineId,
+        _limit: u32,
+        _offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Collection>, OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("artist albums")) })
+    }
+    fn track_catalog<'a>(&'a self, track: &'a Track) -> BoxFuture<'a, Result<TrackCatalog, OmniError>> {
+        Box::pin(async move { Ok(TrackCatalog::from_track(track)) })
+    }
+    fn album<'a>(&'a self, _album: &'a OnlineId) -> BoxFuture<'a, Result<Collection, OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("album details")) })
+    }
     /// The levels this platform tells apart, lowest first; without one it is `UNLISTED_AUDIO_QUALITY_LEVELS`.
     fn audio_quality_levels(&self) -> &'static [AudioQuality] {
         &UNLISTED_AUDIO_QUALITY_LEVELS

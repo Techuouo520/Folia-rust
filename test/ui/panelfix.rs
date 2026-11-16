@@ -88,6 +88,7 @@ fn closing_the_panel_takes_every_pixel_back_to_the_page() {
 
 pub(super) fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia_core::Track]) -> PanelView<'a> {
     PanelView {
+        catalog: folia_omni::Capabilities::default(),
         i18n,
         theme,
         daylight: false,

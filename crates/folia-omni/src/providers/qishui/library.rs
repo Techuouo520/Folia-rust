@@ -242,7 +242,7 @@ pub async fn search(client: &Client, query: &str, limit: u32, offset: u32) -> Re
 }
 
 /// `catalog.track`: `/media/mget/` for one track.
-async fn track_entity(client: &Client, id: &str) -> Result<Value, OmniError> {
+pub(super) async fn track_entity(client: &Client, id: &str) -> Result<Value, OmniError> {
     let body = json!({ "media_list": [{ "id": id, "type": "track" }], "card_context": {} });
     let data = client.platform("/media/mget/", body, false).await?;
     let list = data

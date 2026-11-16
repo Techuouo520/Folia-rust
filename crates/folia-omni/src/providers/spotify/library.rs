@@ -426,7 +426,7 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
     let owned = head.pointer("/currentUserCapabilities/canEditItems").and_then(Value::as_bool) == Some(true);
     let subscribed = if owned { None } else { head.get("following").and_then(Value::as_bool) };
     let owner = client.session().filter(|_| owned).map(|session| session.user.id);
-    Ok(CollectionDetail { tracks: songs, subscribed, owner, published: None })
+    Ok(CollectionDetail { tracks: songs, subscribed, owner, published: None, ..Default::default() })
 }
 
 /// `getAlbum`: its rows name no album, so they get this one's; `areEntitiesInLibrary` for whether it is kept.
@@ -447,6 +447,7 @@ async fn album_detail(client: &Client, id: &str) -> Result<CollectionDetail, Omn
         songs.extend(rows.iter().filter_map(|row| row.get("track")).filter_map(song_of).map(|mut song| {
             if let Some(card) = &card {
                 song.album = Some(card.name.clone());
+                song.online_info.get_or_insert_default().album_id = card.id.clone();
                 song.cover_url = card.cover_url.clone();
             }
             song
@@ -461,7 +462,13 @@ async fn album_detail(client: &Client, id: &str) -> Result<CollectionDetail, Omn
     let published = album.pointer("/date/isoString").and_then(Value::as_str).and_then(iso_millis).or_else(|| {
         album.pointer("/date/year").and_then(Value::as_i64).map(|year| days_from_civil(year, 1, 1) * 86_400_000)
     });
-    Ok(CollectionDetail { tracks: songs, subscribed, owner: None, published })
+    Ok(CollectionDetail {
+        tracks: songs,
+        subscribed,
+        owner: None,
+        published,
+        artists: super::artist_refs(album.pointer("/artists/items")),
+    })
 }
 
 /// `library`: an album with `addToLibrary`, someone else's playlist with `addItemsToRootlist` (or their removals).

@@ -205,6 +205,7 @@ async fn platform_ids_and_quality_hashes_survive_the_facade() {
                 album_id: "album".into(),
                 audio_id: "77".into(),
                 quality_hashes: [(AudioQuality::High, "HQ".into())].into_iter().collect(),
+                ..Default::default()
             }),
             ..Default::default()
         };

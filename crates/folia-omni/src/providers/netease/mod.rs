@@ -1,6 +1,7 @@
 // NetEase Cloud Music over eapi with the kept session: search, song URLs, lyrics, QR sign-in and the account's library.
 
 mod account;
+mod catalog;
 mod eapi;
 mod explore;
 mod library;
@@ -53,6 +54,7 @@ struct Song {
 
 #[derive(Deserialize)]
 struct Named {
+    id: Option<u64>,
     name: Option<String>,
 }
 
@@ -120,6 +122,45 @@ impl Provider for Netease {
 
     fn display_name(&self) -> &'static str {
         "网易云音乐"
+    }
+
+    fn search_artists<'a>(
+        &'a self,
+        query: &'a str,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<crate::Artist>, OmniError>> {
+        Box::pin(catalog::search(self, query, limit, offset))
+    }
+
+    fn artist_detail<'a>(&'a self, artist: &'a OnlineId) -> BoxFuture<'a, Result<crate::Artist, OmniError>> {
+        Box::pin(catalog::detail(self, &artist.id))
+    }
+
+    fn artist_tracks<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
+        Box::pin(catalog::songs(self, &artist.id, limit, offset))
+    }
+
+    fn artist_albums<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Collection>, OmniError>> {
+        Box::pin(catalog::albums(self, &artist.id, limit, offset))
+    }
+
+    fn track_catalog<'a>(&'a self, track: &'a Track) -> BoxFuture<'a, Result<crate::TrackCatalog, OmniError>> {
+        Box::pin(catalog::track_catalog(self, track))
+    }
+
+    fn album<'a>(&'a self, album: &'a OnlineId) -> BoxFuture<'a, Result<Collection, OmniError>> {
+        Box::pin(catalog::album(self, &album.id))
     }
 
     fn lx_music_info(&self, track: &Track) -> Option<crate::lx::MusicInfo> {
@@ -268,7 +309,14 @@ impl Provider for Netease {
 
     /// `likes` and `playlistTrackMutations`; the account's liked list is `/api/song/like/list`.
     fn capabilities(&self) -> Capabilities {
-        Capabilities { likes: true, playlist_track_mutations: true, create_playlist: false }
+        Capabilities {
+            likes: true,
+            playlist_track_mutations: true,
+            create_playlist: false,
+            artist_search: true,
+            artists: true,
+            albums: true,
+        }
     }
 
     fn like_song<'a>(&'a self, song: &'a OnlineId, liked: bool) -> BoxFuture<'a, Result<(), OmniError>> {
@@ -350,7 +398,17 @@ fn truthy(value: &Value) -> bool {
 
 fn track(song: Song) -> Track {
     let online = OnlineId { provider: ID.to_owned(), id: song.id.to_string() };
-    let artists: Vec<String> = song.ar.into_iter().filter_map(|artist| artist.name).collect();
+    let artists: Vec<String> = song.ar.iter().filter_map(|artist| artist.name.clone()).collect();
+    let references = song
+        .ar
+        .into_iter()
+        .filter_map(|artist| {
+            Some(folia_core::ArtistRef {
+                id: artist.id.filter(|id| *id > 0).map(|id| id.to_string()).unwrap_or_default(),
+                name: artist.name?,
+            })
+        })
+        .collect();
     let album = song.al;
     Track {
         id: online.track_id(),
@@ -358,7 +416,13 @@ fn track(song: Song) -> Track {
         artist: (!artists.is_empty()).then(|| artists.join(" / ")),
         album: album.as_ref().and_then(|album| album.name.clone()),
         online_info: Some(folia_core::OnlineTrackInfo {
-            album_id: album.as_ref().and_then(|a| a.id).map(|id| id.to_string()).unwrap_or_default(),
+            artists: references,
+            album_id: album
+                .as_ref()
+                .and_then(|a| a.id)
+                .filter(|id| *id > 0)
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
             ..Default::default()
         }),
         cover_url: album.and_then(|album| album.pic_url).map(https),

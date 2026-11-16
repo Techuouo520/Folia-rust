@@ -22,5 +22,5 @@ pub use language::{Language, LanguagePreference};
 pub use lyrics::{ChorusRange, INTERLUDE_TEXT, Line, Lyrics, SubtitleContentMode, Word};
 pub use queue::{Origin, Queue, Repeat};
 pub use theme::{AnimationIntensity, Rgb, Theme};
-pub use track::{OnlineId, OnlineTrackInfo, ReplayGain, Track};
+pub use track::{ArtistRef, OnlineId, OnlineTrackInfo, ReplayGain, Track};
 pub use word_color::{WordColor, WordColorRange, parse_color, word_color_ranges};

@@ -2,6 +2,7 @@
 
 #![cfg(test)]
 
+mod catalog;
 mod chrome_motion;
 mod fonts;
 mod glass_tone;

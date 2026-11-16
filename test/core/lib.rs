@@ -5,6 +5,21 @@
 use folia_core::{Language, LanguagePreference, Origin, Queue, Repeat};
 
 #[test]
+fn online_credits_preserve_legacy_metadata_and_exact_artist_order() {
+    use folia_core::{ArtistRef, OnlineTrackInfo};
+    let old: OnlineTrackInfo = toml::from_str("album_id = \"album-mid\"\naudio_id = \"audio\"\n").unwrap();
+    assert!(old.artists.is_empty());
+    assert_eq!(old.album_id, "album-mid");
+    let mut current = old;
+    current.artists = vec![
+        ArtistRef { id: "artist-2".into(), name: "AC/DC, Live".into() },
+        ArtistRef { id: "artist-1".into(), name: "AC/DC, Live".into() },
+    ];
+    let restored: OnlineTrackInfo = toml::from_str(&toml::to_string(&current).unwrap()).unwrap();
+    assert_eq!(restored, current);
+}
+
+#[test]
 fn keyword_colors_match_phrases_and_whole_latin_words() {
     use folia_core::{WordColor, word_color_ranges};
     let colors = vec![

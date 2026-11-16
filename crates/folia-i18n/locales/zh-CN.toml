@@ -822,3 +822,14 @@ addToQueue = "加入播放队列"
 [timeline]
 title = "时间线"
 noLyrics = "无歌词"
+
+[catalog]
+songs = "歌曲"
+artists = "歌手"
+hotSongs = "热门歌曲"
+albums = "专辑"
+error = "详情加载失败，请重试。"
+enqueueHot = "热门歌曲加入队列"
+moreSongs = "更多热门歌曲"
+moreAlbums = "更多专辑"
+counts = "{{songs}} 首 · {{albums}} 专辑"

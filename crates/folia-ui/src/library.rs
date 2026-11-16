@@ -54,6 +54,8 @@ enum Action {
 
 /// A collection opened from the wall: its songs replace the tiles until the seam's back is pressed.
 pub struct Layer {
+    request: u64,
+    artists: Vec<folia_core::ArtistRef>,
     pub collection: Collection,
     pub tracks: Feed<Vec<Track>>,
     /// Whether the account saved it; `None` while unknown or where saving does not apply.
@@ -99,7 +101,7 @@ pub struct Poster {
 }
 
 impl Layer {
-    fn new(collection: Collection, tracks: Feed<Vec<Track>>) -> Self {
+    fn new(collection: Collection, tracks: Feed<Vec<Track>>, request: u64) -> Self {
         // The layer key the composition is drawn from (`resolveAlbumComposition(layer.key)`).
         let poster = (collection.kind == CollectionKind::Album).then(|| Poster {
             cover: None,
@@ -120,6 +122,8 @@ impl Layer {
             art_asked: false,
         });
         Self {
+            request,
+            artists: Vec::new(),
             collection,
             tracks,
             subscribed: None,
@@ -193,6 +197,7 @@ pub struct CardLook {
 
 /// What the shell does after a page message.
 pub enum Effect {
+    Catalog(crate::catalog::Message),
     Play {
         queue: Vec<Track>,
         index: usize,
@@ -224,6 +229,7 @@ pub struct LibraryPage {
     pub tab: HomeTab,
     pub online: Online,
     pub layer: Option<Layer>,
+    collection_request: u64,
     tiles: Vec<Tile>,
     actions: Vec<Action>,
     /// Where the playing queue was started, for 「定位」 (`playingSongLocator`).
@@ -265,10 +271,10 @@ pub enum Message {
     Frame,
     Tab(HomeTab),
     Online(online::Message),
-    Opened(String, Result<folia_omni::CollectionDetail, String>),
+    Opened(u64, Result<folia_omni::CollectionDetail, String>),
     /// The album poster's cover at 512px, and the colours read from it at 128px.
-    PosterCover(String, Option<iced::widget::image::Handle>),
-    PosterPalette(String, Option<crate::poster::Palette>),
+    PosterCover(u64, Option<iced::widget::image::Handle>),
+    PosterPalette(u64, Option<crate::poster::Palette>),
     /// 「过滤当前页」 on the poster.
     OpenFilter,
     /// Enter in the filter: editing ends and the wall takes the keyboard focus (`focusFirst`).
@@ -280,8 +286,8 @@ pub enum Message {
     /// Where the poster's cover canvas is on screen.
     PosterCoverAt(iced::Rectangle),
     /// The album wall's mosaic cover, and one cover baked into a shard with its spots.
-    AlbumMosaic(String, Option<iced::widget::image::Handle>),
-    AlbumShard(String, String, Option<(iced::widget::image::Handle, Vec<(f32, f32)>)>),
+    AlbumMosaic(u64, Option<iced::widget::image::Handle>),
+    AlbumShard(u64, String, Option<(iced::widget::image::Handle, Vec<(f32, f32)>)>),
     Back,
     PlayAll,
     EnqueueAll,
@@ -294,7 +300,7 @@ pub enum Message {
     LocateRow(usize),
     PlayRow(usize),
     ToggleSubscribe,
-    Subscribed(String, bool, Result<(), String>),
+    Subscribed(u64, bool, Result<(), String>),
     CollectionMenu,
     ReloadCollection,
     RowHover(Option<usize>),
@@ -315,6 +321,7 @@ impl LibraryPage {
             tab,
             online,
             layer: None,
+            collection_request: 0,
             source: None,
             locating: None,
             bottom_inset: 0.0,
@@ -410,7 +417,7 @@ impl LibraryPage {
         };
         poster.art_asked = true;
         let palette = poster.palette.unwrap_or(crate::poster::FALLBACK);
-        let id = layer.collection.id.clone();
+        let id = layer.request;
         let mut album = crate::album_wall::AlbumWall { stand_in: poster.cover.clone(), ..Default::default() };
         let task = match crate::album_wall::assign(tracks, layer.collection.cover_url.as_deref()) {
             crate::album_wall::Assignment::Mosaic(url) => {
@@ -418,7 +425,7 @@ impl LibraryPage {
                 Task::perform(crate::background::online_cover(omni, url, 1024), move |cover| {
                     let image = cover
                         .map(|cover| iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba));
-                    Message::AlbumMosaic(id.clone(), image)
+                    Message::AlbumMosaic(id, image)
                 })
             }
             crate::album_wall::Assignment::Shards(urls) => {
@@ -427,7 +434,7 @@ impl LibraryPage {
                 wanted.sort();
                 wanted.dedup();
                 Task::batch(wanted.into_iter().map(|url| {
-                    let (omni, id, key) = (omni.clone(), id.clone(), url.clone());
+                    let (omni, id, key) = (omni.clone(), id, url.clone());
                     Task::perform(
                         async move {
                             let sample =
@@ -439,7 +446,7 @@ impl LibraryPage {
                             let pixels = crate::album_wall::duotone(&cover.rgba, palette.accent, palette.block);
                             Some((iced::widget::image::Handle::from_rgba(cover.width, cover.height, pixels), spots))
                         },
-                        move |art| Message::AlbumShard(id.clone(), key.clone(), art),
+                        move |art| Message::AlbumShard(id, key.clone(), art),
                     )
                 }))
             }
@@ -512,6 +519,7 @@ impl LibraryPage {
         let Some((_, tile)) = self.wall.focus.expanded() else { return (Task::none(), None) };
         let current = self.playing_id.is_some() && self.playing_id == self.track_of(tile).map(|track| track.id);
         match action {
+            crate::focus_card::Action::Catalog(message) => (Task::none(), Some(Effect::Catalog(message))),
             crate::focus_card::Action::Play if current => (Task::none(), Some(Effect::Toggle)),
             crate::focus_card::Action::Play => self.press(tile, i18n),
             crate::focus_card::Action::Enter => (Task::none(), Some(Effect::EnterPlayer)),
@@ -758,7 +766,7 @@ impl LibraryPage {
                 (Task::none(), None)
             }
             Message::AlbumMosaic(id, image) => {
-                if self.layer.as_ref().is_some_and(|layer| layer.collection.id == id)
+                if self.layer.as_ref().is_some_and(|layer| layer.request == id)
                     && let Some(album) = self.wall.album.as_mut()
                 {
                     album.mosaic = image;
@@ -766,7 +774,7 @@ impl LibraryPage {
                 (Task::none(), None)
             }
             Message::AlbumShard(id, url, art) => {
-                let layer = self.layer.as_ref().filter(|layer| layer.collection.id == id);
+                let layer = self.layer.as_ref().filter(|layer| layer.request == id);
                 let (Some(layer), Some((duotone, spots))) = (layer, art) else { return (Task::none(), None) };
                 let tracks = layer.tracks.ready().map(Vec::as_slice).unwrap_or_default();
                 let assigned = crate::album_wall::assign(tracks, layer.collection.cover_url.as_deref());
@@ -843,11 +851,12 @@ impl LibraryPage {
                 (Task::batch(tasks), None)
             }
             Message::Opened(id, result) => {
-                let Some(layer) = self.layer.as_mut().filter(|layer| layer.collection.id == id) else {
+                let Some(layer) = self.layer.as_mut().filter(|layer| layer.request == id) else {
                     return (Task::none(), None);
                 };
                 layer.tracks = match result {
                     Ok(detail) => {
+                        layer.artists = detail.artists;
                         if let Some(poster) = layer.poster.as_mut() {
                             poster.published = detail.published;
                         }
@@ -870,22 +879,16 @@ impl LibraryPage {
                 (Task::batch([rebuilt, located]), None)
             }
             Message::PosterCover(id, cover) => {
-                if let Some(poster) = self
-                    .layer
-                    .as_mut()
-                    .filter(|layer| layer.collection.id == id)
-                    .and_then(|layer| layer.poster.as_mut())
+                if let Some(poster) =
+                    self.layer.as_mut().filter(|layer| layer.request == id).and_then(|layer| layer.poster.as_mut())
                 {
                     poster.cover = cover;
                 }
                 (Task::none(), None)
             }
             Message::PosterPalette(id, palette) => {
-                if let Some(poster) = self
-                    .layer
-                    .as_mut()
-                    .filter(|layer| layer.collection.id == id)
-                    .and_then(|layer| layer.poster.as_mut())
+                if let Some(poster) =
+                    self.layer.as_mut().filter(|layer| layer.request == id).and_then(|layer| layer.poster.as_mut())
                 {
                     poster.palette = palette;
                     poster.palette_read = true;
@@ -985,13 +988,13 @@ impl LibraryPage {
                     return (Task::none(), None);
                 };
                 layer.subscribing = true;
-                let (id, wanted, collection) = (layer.collection.id.clone(), !subscribed, layer.collection.clone());
+                let (id, wanted, collection) = (layer.request, !subscribed, layer.collection.clone());
                 let work =
                     async move { omni.set_subscribed(&collection, wanted).await.map_err(|err| error_chain(&err)) };
-                (Task::perform(work, move |result| Message::Subscribed(id.clone(), wanted, result)), None)
+                (Task::perform(work, move |result| Message::Subscribed(id, wanted, result)), None)
             }
             Message::Subscribed(id, wanted, result) => {
-                let Some(layer) = self.layer.as_mut().filter(|layer| layer.collection.id == id) else {
+                let Some(layer) = self.layer.as_mut().filter(|layer| layer.request == id) else {
                     return (Task::none(), None);
                 };
                 layer.subscribing = false;
@@ -1077,28 +1080,30 @@ impl LibraryPage {
     }
 
     fn open(&mut self, collection: Collection, i18n: &I18n) -> Task<Message> {
+        self.collection_request += 1;
+        let request = self.collection_request;
         let daily = (collection.kind == CollectionKind::DailySongs)
             .then(|| self.online.radio.ready().map(|feed| feed.daily_songs.clone()))
             .flatten();
         let fetch = match (&daily, self.online.omni().cloned()) {
             (Some(_), _) => Task::none(),
             (None, Some(omni)) => {
-                let (id, wanted) = (collection.id.clone(), collection.clone());
+                let (id, wanted) = (request, collection.clone());
                 let work = async move { omni.collection_detail(&wanted).await.map_err(|err| error_chain(&err)) };
-                Task::perform(work, move |result| Message::Opened(id.clone(), result))
+                Task::perform(work, move |result| Message::Opened(id, result))
             }
             (None, None) => Task::none(),
         };
         let tracks = daily.map_or(Feed::Loading, Feed::Ready);
         let art = match (collection.kind, collection.cover_url.clone(), self.online.omni().cloned()) {
             (CollectionKind::Album, Some(url), Some(omni)) => {
-                let id = collection.id.clone();
-                let (sample_omni, sample_url, sample_id) = (omni.clone(), url.clone(), id.clone());
+                let id = request;
+                let (sample_omni, sample_url, sample_id) = (omni.clone(), url.clone(), id);
                 // `BRAVAIS_ALBUM_COVER_PX`; the colours are read at `SAMPLE_COVER_PX` drawn 50px wide (`loadImagePixels`).
                 let cover = Task::perform(crate::background::online_cover(omni, url, 512), move |cover| {
                     let handle = cover
                         .map(|cover| iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba));
-                    Message::PosterCover(id.clone(), handle)
+                    Message::PosterCover(id, handle)
                 });
                 let palette = Task::perform(
                     async move {
@@ -1113,7 +1118,7 @@ impl LibraryPage {
                             .collect();
                         crate::poster::album_palette(&colors)
                     },
-                    move |palette| Message::PosterPalette(sample_id.clone(), palette),
+                    move |palette| Message::PosterPalette(sample_id, palette),
                 );
                 Task::batch([cover, palette])
             }
@@ -1125,7 +1130,7 @@ impl LibraryPage {
             let image = self.wall.cover(self.tiles.get(tile)?.id)?;
             Some((rect, image))
         });
-        self.layer = Some(Layer::new(collection, tracks));
+        self.layer = Some(Layer::new(collection, tracks, request));
         self.poster_cover = None;
         self.wall.album = None;
         // `flyCoverToPoster`: from the tile that was clicked to the poster's cover, which hides until it lands.
@@ -1405,6 +1410,20 @@ impl LibraryPage {
                     cover: poster.cover.clone(),
                     kicker: year.map_or_else(|| kind.to_owned(), |year| format!("{kind} · {year}")),
                     artists: layer.collection.creator.clone().unwrap_or_default(),
+                    artist_links: layer
+                        .artists
+                        .iter()
+                        .filter(|artist| !artist.id.is_empty())
+                        .map(|artist| {
+                            (
+                                artist.name.clone(),
+                                folia_core::OnlineId {
+                                    provider: layer.collection.provider.clone(),
+                                    id: artist.id.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
                     // NetEase gives an album no length or genre: its facts are the count alone.
                     facts: (total > 0).then(|| track_count(i18n, total as u32)).into_iter().collect(),
                     description: layer.collection.description.clone().filter(|text| !text.trim().is_empty()),
@@ -1511,6 +1530,11 @@ impl LibraryPage {
         {
             let card = crate::focus_card::Card {
                 track,
+                catalog: track
+                    .online
+                    .as_ref()
+                    .and_then(|song| self.online.omni().map(|omni| omni.capabilities(&song.provider)))
+                    .unwrap_or_default(),
                 queued: look.queued,
                 current: playing == Some(track.id),
                 playing: look.playing,

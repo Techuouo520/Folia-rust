@@ -823,3 +823,14 @@ punch = "Độ nảy"
 [timeline]
 title = "Dòng thời gian"
 noLyrics = "Không có lời bài hát"
+
+[catalog]
+songs = "Bài hát"
+artists = "Nghệ sĩ"
+hotSongs = "Bài hát nổi bật"
+albums = "Album"
+error = "Không tải được thông tin. Vui lòng thử lại."
+enqueueHot = "Thêm bài nổi bật vào hàng đợi"
+moreSongs = "Thêm bài nổi bật"
+moreAlbums = "Thêm album"
+counts = "{{songs}} bài hát · {{albums}} album"

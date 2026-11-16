@@ -20,6 +20,7 @@ use crate::background::{error_chain, online_cover_sized};
 use crate::icons::icon;
 use crate::search_results::{self, List};
 
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 const PAGE_SIZE: u32 = 30;
 const COVER_PX: u32 = 48;
 const FETCH_PX: u32 = 120;
@@ -28,32 +29,54 @@ const FADE_EASE: Ease = Ease::new(0.0, 0.0, 0.2, 1.0);
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Kind(Kind),
+    Catalog(crate::catalog::Message),
     Query(String),
     Submit,
-    Results(Result<folia_omni::Page<Track>, String>),
+    Results(Request, Result<folia_omni::Page<Track>, String>),
     LoadMore,
-    More(Result<folia_omni::Page<Track>, String>),
+    More(Request, Result<folia_omni::Page<Track>, String>),
     Scrolled(Viewport),
     Wheel(mouse::ScrollDelta),
     Hover(Option<usize>),
     Plus(Option<usize>),
     Play(usize),
     Enqueue(usize),
-    Cover(i64, Option<Cover>),
+    Cover(u64, i64, Option<Cover>),
     Close,
     Frame,
 }
 
 /// What a result row asked the shell to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Outcome {
     None,
     Play(usize),
     Enqueue(usize),
+    Catalog(crate::catalog::Message),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Kind {
+    #[default]
+    Songs,
+    Artists,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Request {
+    generation: u64,
+    provider: String,
+    query: String,
+    kind: Kind,
+    offset: u32,
 }
 
 pub struct SearchPage {
     query: String,
+    kind: Kind,
+    request: Option<Request>,
+    generation: u64,
     pub results: Vec<Track>,
     covers: Vec<Option<iced::widget::image::Handle>>,
     cache: folia_library::CoverCache<i64, iced::widget::image::Handle>,
@@ -77,6 +100,9 @@ impl Default for SearchPage {
         let now = Instant::now();
         Self {
             query: String::new(),
+            kind: Kind::Songs,
+            request: None,
+            generation: 0,
             results: Vec::new(),
             covers: Vec::new(),
             cache: folia_library::CoverCache::new(4 * 1024 * 1024),
@@ -105,6 +131,8 @@ impl SearchPage {
     /// Takes a query committed from the home seam (`onSearchCommitted`): the page opens straight on its results.
     pub fn begin(&mut self, query: String) {
         self.query = query;
+        self.generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.request = None;
         self.clear_results();
         self.busy = false;
         self.submitted = true;
@@ -153,11 +181,36 @@ impl SearchPage {
         provider: &'static str,
     ) -> (Task<Message>, Outcome) {
         match message {
+            Message::Kind(kind) => {
+                if self.kind != kind
+                    && (kind == Kind::Songs || omni.is_some_and(|omni| omni.capabilities(provider).artist_search))
+                {
+                    self.kind = kind;
+                    if self.query.trim().is_empty() {
+                        self.generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        self.request = None;
+                        self.busy = false;
+                        self.loading_more = false;
+                        self.submitted = false;
+                        self.clear_results();
+                    }
+                    return (self.submit(omni, provider), Outcome::None);
+                }
+            }
+            Message::Catalog(message) => return (Task::none(), Outcome::Catalog(message)),
             Message::Query(query) => self.query = query,
             Message::Submit => return (self.submit(omni, provider), Outcome::None),
-            Message::Results(result) => return self.land(result, false, omni),
+            Message::Results(request, result) => {
+                if self.accepts(&request, false) {
+                    return self.land(result, false, omni);
+                }
+            }
             Message::LoadMore => return (self.load_more(omni, provider), Outcome::None),
-            Message::More(result) => return self.land(result, true, omni),
+            Message::More(request, result) => {
+                if self.accepts(&request, true) {
+                    return self.land(result, true, omni);
+                }
+            }
             Message::Scrolled(viewport) => {
                 self.list.scrolled(&viewport, Instant::now());
                 return (self.load_covers(omni), Outcome::None);
@@ -168,9 +221,25 @@ impl SearchPage {
             }
             Message::Hover(index) => self.list.hovered = index,
             Message::Plus(index) => self.list.plus(index),
-            Message::Play(index) => return (Task::none(), Outcome::Play(index)),
-            Message::Enqueue(index) => return (Task::none(), Outcome::Enqueue(index)),
-            Message::Cover(id, cover) => self.store_cover(id, cover),
+            Message::Play(index) => {
+                if self.kind == Kind::Artists {
+                    if let Some(id) = self.results.get(index).and_then(|track| track.online.clone()) {
+                        return (Task::none(), Outcome::Catalog(crate::catalog::Message::OpenArtist(id)));
+                    }
+                } else {
+                    return (Task::none(), Outcome::Play(index));
+                }
+            }
+            Message::Enqueue(index) => {
+                if self.kind == Kind::Songs {
+                    return (Task::none(), Outcome::Enqueue(index));
+                }
+            }
+            Message::Cover(generation, id, cover) => {
+                if self.fade_goal > 0.0 && generation == self.generation {
+                    self.store_cover(id, cover);
+                }
+            }
             Message::Frame => return (self.list.frame(Instant::now()), Outcome::None),
             Message::Close => {}
         }
@@ -187,7 +256,19 @@ impl SearchPage {
         let close = close_button(ink, view.daylight, shown);
         let source = source_pill(view, shown);
         let body = self.results(view, ink, now);
-        let header = column![row![field, close].spacing(12).align_y(Alignment::Center), source].spacing(12);
+        let mut tabs = row![source].spacing(8).align_y(Alignment::Center);
+        if view.catalog.artist_search {
+            for (kind, key) in [(Kind::Songs, "catalog.songs"), (Kind::Artists, "catalog.artists")] {
+                let color = if self.kind == kind { view.accent } else { ink };
+                tabs = tabs.push(
+                    button(text(view.i18n.t(key)).size(13).color(color))
+                        .padding([8, 12])
+                        .on_press(Message::Kind(kind))
+                        .style(button::text),
+                );
+            }
+        }
+        let header = column![row![field, close].spacing(12).align_y(Alignment::Center), tabs].spacing(12);
         let page = column![header, body]
             .spacing(12)
             .width(Length::Fixed(view.width.min(1024.0)))
@@ -222,42 +303,99 @@ impl SearchPage {
             .into()
     }
 
+    pub fn restore(&mut self, omni: Option<&Omni>) -> Task<Message> {
+        self.reveal();
+        Task::batch([self.list.apply(), self.load_covers(omni)])
+    }
+
+    pub fn suspend(&mut self) {
+        self.covers.fill(None);
+        self.cache.clear();
+        self.pending.clear();
+        self.close();
+    }
+
+    pub fn accepts_message(&self, message: &Message) -> bool {
+        match message {
+            Message::Results(request, _) => self.accepts(request, false),
+            Message::More(request, _) => self.accepts(request, true),
+            Message::Cover(generation, ..) => *generation == self.generation,
+            _ => false,
+        }
+    }
+
+    pub fn snapshot(&self) -> Self {
+        let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let request = self.request.clone().map(|mut request| {
+            request.generation = generation;
+            request
+        });
+        Self {
+            query: self.query.clone(),
+            kind: self.kind,
+            request,
+            generation,
+            results: self.results.clone(),
+            covers: vec![None; self.results.len()],
+            busy: false,
+            loading_more: false,
+            more_error: self.more_error,
+            has_more: self.has_more,
+            next_offset: self.next_offset,
+            submitted: self.submitted,
+            error: self.error,
+            list: self.list.clone(),
+            ..Self::default()
+        }
+    }
+
+    fn accepts(&self, request: &Request, more: bool) -> bool {
+        self.request.as_ref().is_some_and(|active| {
+            active.generation == request.generation
+                && active.provider == request.provider
+                && active.query == request.query
+                && active.kind == request.kind
+                && if more {
+                    self.loading_more && request.offset == self.next_offset
+                } else {
+                    self.busy && request.offset == 0
+                }
+        })
+    }
+
     fn submit(&mut self, omni: Option<&Omni>, provider: &'static str) -> Task<Message> {
         let query = self.query.trim().to_owned();
         let Some(omni) = omni.cloned() else { return Task::none() };
-        if query.is_empty() || self.busy {
+        if query.is_empty() {
             return Task::none();
         }
+        if self.kind == Kind::Artists && !omni.capabilities(provider).artist_search {
+            self.kind = Kind::Songs;
+        }
+        self.generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.clear_results();
         self.busy = true;
         self.busy_at = Instant::now();
         self.submitted = true;
         self.error = false;
         self.more_error = false;
         self.loading_more = false;
-        let search = async move {
-            omni.search(provider, &query, PAGE_SIZE, 0).await.map_err(|err| {
-                tracing::warn!(error = &err as &dyn std::error::Error, "search failed");
-                error_chain(&err)
-            })
-        };
-        Task::perform(search, Message::Results)
+        let request =
+            Request { generation: self.generation, provider: provider.to_owned(), query, kind: self.kind, offset: 0 };
+        self.request = Some(request.clone());
+        Task::perform(run_search(omni, request.clone()), move |result| Message::Results(request.clone(), result))
     }
 
-    fn load_more(&mut self, omni: Option<&Omni>, provider: &'static str) -> Task<Message> {
+    fn load_more(&mut self, omni: Option<&Omni>, _provider: &'static str) -> Task<Message> {
         let Some(omni) = omni.cloned() else { return Task::none() };
-        if !self.has_more || self.busy || self.loading_more || self.query.trim().is_empty() {
+        let Some(mut request) = self.request.clone() else { return Task::none() };
+        if !self.has_more || self.busy || self.loading_more {
             return Task::none();
         }
         self.loading_more = true;
         self.more_error = false;
-        let (query, offset) = (self.query.trim().to_owned(), self.next_offset);
-        let search = async move {
-            omni.search(provider, &query, PAGE_SIZE, offset).await.map_err(|err| {
-                tracing::warn!(error = &err as &dyn std::error::Error, "search page failed");
-                error_chain(&err)
-            })
-        };
-        Task::perform(search, Message::More)
+        request.offset = self.next_offset;
+        Task::perform(run_search(omni, request.clone()), move |result| Message::More(request.clone(), result))
     }
 
     fn land(
@@ -312,9 +450,7 @@ impl SearchPage {
     fn sync_covers(&mut self) {
         self.covers.resize(self.results.len(), None);
         for (index, track) in self.results.iter().enumerate() {
-            if let Some(hit) = self.cache.peek(&track.id).cloned() {
-                self.covers[index] = hit;
-            }
+            self.covers[index] = self.cache.peek(&track.id).cloned().flatten();
         }
     }
 
@@ -323,16 +459,13 @@ impl SearchPage {
         let bytes = cover.as_ref().map_or(0, |cover| cover.rgba.len());
         let handle = cover.map(|cover| iced::widget::image::Handle::from_rgba(cover.width, cover.height, cover.rgba));
         self.cache.insert(id, handle.clone(), bytes);
-        for (index, track) in self.results.iter().enumerate() {
-            if track.id == id
-                && let Some(slot) = self.covers.get_mut(index)
-            {
-                *slot = handle.clone();
-            }
-        }
+        self.sync_covers();
     }
 
     fn load_covers(&mut self, omni: Option<&Omni>) -> Task<Message> {
+        if self.fade_goal == 0.0 {
+            return Task::none();
+        }
         self.cache.begin_pass();
         let mut tasks = Vec::new();
         for index in self.list.visible(self.results.len()) {
@@ -351,8 +484,9 @@ impl SearchPage {
                 continue;
             };
             self.pending.insert(id);
+            let generation = self.generation;
             tasks.push(Task::perform(online_cover_sized(omni, url, FETCH_PX, COVER_PX), move |cover| {
-                Message::Cover(id, cover)
+                Message::Cover(generation, id, cover)
             }));
         }
         Task::batch(tasks)
@@ -412,6 +546,8 @@ impl SearchPage {
             daylight: view.daylight,
             wide: view.width >= 640.0,
             queue_tip: view.i18n.t("navidrome.addToQueue"),
+            artists: self.kind == Kind::Artists,
+            catalog: view.catalog,
         };
         let bindings = search_results::Bindings {
             scroll: Message::Scrolled,
@@ -420,6 +556,7 @@ impl SearchPage {
             play: Message::Play,
             enqueue: Message::Enqueue,
             plus: Message::Plus,
+            catalog: Message::Catalog,
         };
         let list = self.list.view(&self.results, &self.covers, look, bindings);
         column![list, more_row(self, view, ink)].height(Length::Fill).into()
@@ -507,6 +644,7 @@ pub struct View<'a> {
     pub width: f32,
     /// The short name of the platform searched.
     pub source: &'static str,
+    pub catalog: folia_omni::Capabilities,
 }
 
 fn source_pill<'a>(view: View<'a>, shown: f32) -> Element<'a, Message> {
@@ -546,4 +684,41 @@ fn close_button<'a>(ink: Color, daylight: bool, shown: f32) -> Element<'a, Messa
 
 fn medium() -> iced::Font {
     crate::typeface::MEDIUM
+}
+
+async fn run_search(omni: Omni, request: Request) -> Result<folia_omni::Page<Track>, String> {
+    let result = match request.kind {
+        Kind::Songs => omni.search(&request.provider, &request.query, PAGE_SIZE, request.offset).await,
+        Kind::Artists => {
+            omni.search_artists(&request.provider, &request.query, PAGE_SIZE, request.offset).await.map(|page| {
+                folia_omni::Page {
+                    items: page
+                        .items
+                        .into_iter()
+                        .map(|artist| {
+                            let id = folia_core::OnlineId { provider: artist.provider, id: artist.id };
+                            Track {
+                                id: folia_core::OnlineId {
+                                    provider: format!("{}/artist", id.provider),
+                                    id: id.id.clone(),
+                                }
+                                .track_id(),
+                                title: artist.name,
+                                cover_url: artist.picture_url,
+                                online: Some(id),
+                                ..Track::default()
+                            }
+                        })
+                        .collect(),
+                    total: page.total,
+                    has_more: page.has_more,
+                    next_offset: page.next_offset,
+                }
+            })
+        }
+    };
+    result.map_err(|err| {
+        tracing::warn!(error = &err as &dyn std::error::Error, "search failed");
+        error_chain(&err)
+    })
 }

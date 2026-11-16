@@ -1,9 +1,10 @@
 // Bodian (波点音乐) over its desktop API: search, play rights, word-timed lyrics, QR sign-in, lists and radio.
 
 mod api;
+mod catalog;
 mod library;
 
-use folia_core::{AudioQuality, OnlineId, Track};
+use folia_core::{ArtistRef, AudioQuality, OnlineId, OnlineTrackInfo, Track};
 use serde_json::Value;
 
 use crate::ProviderLyrics;
@@ -31,6 +32,49 @@ impl Provider for Bodian {
 
     fn display_name(&self) -> &'static str {
         "波点音乐"
+    }
+
+    fn search_artists<'a>(
+        &'a self,
+        query: &'a str,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<crate::Artist>, OmniError>> {
+        Box::pin(catalog::search(&self.client, query, limit, offset))
+    }
+
+    fn artist_detail<'a>(&'a self, artist: &'a OnlineId) -> BoxFuture<'a, Result<crate::Artist, OmniError>> {
+        Box::pin(catalog::detail(&self.client, &artist.id))
+    }
+
+    fn artist_tracks<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
+        Box::pin(catalog::songs(&self.client, &artist.id, limit, offset))
+    }
+
+    fn track_catalog<'a>(&'a self, track: &'a Track) -> BoxFuture<'a, Result<crate::TrackCatalog, OmniError>> {
+        Box::pin(catalog::references(&self.client, track))
+    }
+
+    fn artist_albums<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Collection>, OmniError>> {
+        Box::pin(catalog::albums(&self.client, &artist.id, limit, offset))
+    }
+
+    fn album<'a>(&'a self, album: &'a OnlineId) -> BoxFuture<'a, Result<Collection, OmniError>> {
+        Box::pin(catalog::album(&self.client, &album.id))
+    }
+
+    fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities { artist_search: true, artists: true, albums: true, ..Default::default() }
     }
 
     fn search_songs<'a>(
@@ -191,6 +235,7 @@ fn track(raw: &Value) -> Option<Track> {
         Some(list) => list.iter().filter_map(|artist| text(artist, &["name"])).collect(),
         None => text(raw, &["artist"]).into_iter().collect(),
     };
+    let refs = artist_refs(raw);
     let online = OnlineId { provider: ID.to_owned(), id };
     Some(Track {
         id: online.track_id(),
@@ -200,8 +245,28 @@ fn track(raw: &Value) -> Option<Track> {
         cover_url: text(raw, &["albumPic"]).map(|url| secure(&url)),
         duration: raw.get("duration").and_then(Value::as_f64).unwrap_or(0.0).max(0.0),
         online: Some(online),
+        online_info: Some(OnlineTrackInfo {
+            artists: refs,
+            album_id: text(raw, &["albumId"]).unwrap_or_default(),
+            ..Default::default()
+        }),
         ..Track::default()
     })
+}
+
+fn artist_refs(raw: &Value) -> Vec<ArtistRef> {
+    match raw.get("artists").and_then(Value::as_array) {
+        Some(rows) => rows
+            .iter()
+            .filter_map(|row| {
+                Some(ArtistRef { id: text(row, &["id"]).unwrap_or_default(), name: text(row, &["name"])? })
+            })
+            .collect(),
+        None => text(raw, &["artist"])
+            .map(|name| ArtistRef { id: text(raw, &["artistId"]).unwrap_or_default(), name })
+            .into_iter()
+            .collect(),
+    }
 }
 
 fn tracks(list: Option<&Value>) -> Vec<Track> {

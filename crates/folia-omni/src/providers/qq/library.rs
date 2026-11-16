@@ -117,7 +117,7 @@ async fn anonymous_search(client: &Client, keyword: &str, page: u32, size: u32) 
     Ok(search_page(&data, page, size, false))
 }
 
-fn search_param(keyword: &str, page: u32, size: u32, kind: u32) -> Value {
+pub(super) fn search_param(keyword: &str, page: u32, size: u32, kind: u32) -> Value {
     // `searchIdOf` in qq-music-api 3.3.3: eighteen decimal digits with a nonzero first digit.
     let random = musicu::random_bytes(18);
     let search_id: String = random
@@ -366,6 +366,7 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
             subscribed: None,
             owner: Some(credential.musicid.clone()),
             published: None,
+            ..Default::default()
         });
     }
     let disstid: u64 = id.parse().map_err(|_| OmniError::Response(format!("not a QQ playlist id: {id}")))?;
@@ -395,7 +396,7 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
             .and_then(musicu::identifier)
             .or_else(|| first.pointer("/dirinfo/host_uin").and_then(musicu::identifier));
         let subscribed = playlist_fan(client, disstid).await.ok();
-        return Ok(CollectionDetail { tracks: songs, subscribed, owner, published: None });
+        return Ok(CollectionDetail { tracks: songs, subscribed, owner, published: None, ..Default::default() });
     }
     let params = [
         ("disstid", disstid.to_string()),
@@ -414,6 +415,7 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
         subscribed: None,
         owner: text(list, &["uin"]),
         published: None,
+        ..Default::default()
     })
 }
 
@@ -448,7 +450,13 @@ async fn album_detail(client: &Client, mid: &str) -> Result<CollectionDetail, Om
     let data = answer.get("data").unwrap_or(&Value::Null);
     let published = text(data, &["aDate", "publishDate", "publictime"]).and_then(|date| date_millis(&date));
     let subscribed = if client.credential().is_some() { album_fan(client, mid).await.ok() } else { None };
-    Ok(CollectionDetail { tracks: tracks(data.get("list")), subscribed, owner: None, published })
+    let mut artists = super::catalog::references(data);
+    if artists.is_empty()
+        && let (Some(id), Some(name)) = (text(data, &["singermid"]), text(data, &["singername"]))
+    {
+        artists.push(folia_core::ArtistRef { id, name });
+    }
+    Ok(CollectionDetail { tracks: tracks(data.get("list")), subscribed, owner: None, published, artists })
 }
 
 /// `GetDetail` of a chart, its first hundred songs.

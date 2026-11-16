@@ -53,7 +53,26 @@ pub async fn collection_detail(client: &Client, collection: &Collection) -> Resu
             let state = client.post("/api/album/detail/dynamic", object(json!({ "id": id }))).await?;
             let subscribed = state.body.get("isSub").and_then(Value::as_bool);
             let published = answer.body.pointer("/album/publishTime").and_then(Value::as_i64).filter(|time| *time > 0);
-            Ok(CollectionDetail { tracks: tracks(answer.body.get("songs")), subscribed, owner: None, published })
+            let artists = answer
+                .body
+                .pointer("/album/artists")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|artist| {
+                    Some(folia_core::ArtistRef {
+                        id: artist.get("id")?.as_u64().filter(|id| *id > 0)?.to_string(),
+                        name: artist.get("name")?.as_str()?.to_owned(),
+                    })
+                })
+                .collect();
+            Ok(CollectionDetail {
+                tracks: tracks(answer.body.get("songs")),
+                subscribed,
+                owner: None,
+                published,
+                artists,
+            })
         }
         CollectionKind::DailySongs => {
             Ok(CollectionDetail { tracks: daily_songs(client).await?, ..CollectionDetail::default() })
@@ -153,7 +172,13 @@ async fn playlist_detail(client: &Client, id: &str) -> Result<CollectionDetail, 
         eapi::check(&answer.body)?;
         songs.extend(tracks(answer.body.get("songs")));
     }
-    Ok(CollectionDetail { tracks: songs, subscribed: Some(subscribed.unwrap_or(false)), owner, published: None })
+    Ok(CollectionDetail {
+        tracks: songs,
+        subscribed: Some(subscribed.unwrap_or(false)),
+        owner,
+        published: None,
+        ..Default::default()
+    })
 }
 
 /// `album_sublist`, every page.

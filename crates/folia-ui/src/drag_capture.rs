@@ -11,6 +11,7 @@ pub struct Capture<'a, Message> {
     content: Element<'a, Message>,
     held: bool,
     grabbing: bool,
+    cursor: Option<mouse::Interaction>,
     /// The strip at the left whose presses start a drag, and how far down rows reach, in the list's coordinates.
     handle: Rectangle,
     on_press: Box<dyn Fn(Point) -> Message + 'a>,
@@ -32,6 +33,7 @@ impl<'a, Message> Capture<'a, Message> {
             content: content.into(),
             held: false,
             grabbing: false,
+            cursor: None,
             handle,
             on_press: Box::new(on_press),
             on_move: Box::new(on_move),
@@ -44,6 +46,12 @@ impl<'a, Message> Capture<'a, Message> {
     pub fn held(mut self, held: bool, grabbing: bool) -> Self {
         self.held = held;
         self.grabbing = grabbing;
+        self
+    }
+
+    /// Chooses the cursor over the drag surface and during capture.
+    pub fn cursor(mut self, cursor: mouse::Interaction) -> Self {
+        self.cursor = Some(cursor);
         self
     }
 }
@@ -145,10 +153,10 @@ impl<Message: Clone> Widget<Message, Theme, iced::Renderer> for Capture<'_, Mess
         renderer: &iced::Renderer,
     ) -> mouse::Interaction {
         if self.grabbing {
-            return mouse::Interaction::Grabbing;
+            return self.cursor.unwrap_or(mouse::Interaction::Grabbing);
         }
         if cursor.position_in(layout.bounds()).is_some_and(|at| self.handle.contains(at)) {
-            return mouse::Interaction::Grab;
+            return self.cursor.unwrap_or(mouse::Interaction::Grab);
         }
         self.content.as_widget().mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
     }

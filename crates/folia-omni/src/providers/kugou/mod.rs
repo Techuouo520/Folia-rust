@@ -1,6 +1,7 @@
 // KuGou Music over the lite-client gateway: search, song URLs, KRC lyrics, QR sign-in and the account's library.
 
 mod account;
+mod catalog;
 mod gateway;
 mod library;
 mod lyrics;
@@ -36,6 +37,49 @@ impl Kugou {
 }
 
 impl Provider for Kugou {
+    fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities { artist_search: true, artists: true, albums: true, ..Default::default() }
+    }
+
+    fn search_artists<'a>(
+        &'a self,
+        query: &'a str,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<crate::Artist>, OmniError>> {
+        Box::pin(catalog::search(&self.client, query, limit, offset))
+    }
+
+    fn artist_detail<'a>(&'a self, artist: &'a OnlineId) -> BoxFuture<'a, Result<crate::Artist, OmniError>> {
+        Box::pin(catalog::detail(&self.client, &artist.id))
+    }
+
+    fn artist_tracks<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
+        Box::pin(catalog::songs(&self.client, &artist.id, limit, offset))
+    }
+
+    fn artist_albums<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Collection>, OmniError>> {
+        Box::pin(catalog::albums(&self.client, &artist.id, limit, offset))
+    }
+
+    fn track_catalog<'a>(&'a self, track: &'a Track) -> BoxFuture<'a, Result<crate::TrackCatalog, OmniError>> {
+        Box::pin(catalog::track_catalog(&self.client, track))
+    }
+
+    fn album<'a>(&'a self, album: &'a OnlineId) -> BoxFuture<'a, Result<Collection, OmniError>> {
+        Box::pin(catalog::album(&self.client, &album.id))
+    }
+
     fn id(&self) -> &'static str {
         ID
     }
@@ -394,6 +438,7 @@ fn track(raw: &Value) -> Option<Track> {
     let album_id = text_of(raw, &["AlbumID", "album_id", "albumId"])
         .or_else(|| text_of(album, &["album_id", "albumId"]))
         .or_else(|| text_of(base, &["album_id", "albumId"]))
+        .filter(|id| id != "0")
         .unwrap_or_default();
     let album_name = text_of(raw, &["AlbumName", "album_name", "albumName", "albumname"])
         .or_else(|| text_of(album, &["name", "album_name", "albumName"]))
@@ -436,6 +481,7 @@ fn track(raw: &Value) -> Option<Track> {
         cover_url: cover_of(raw),
         online_info: Some(folia_core::OnlineTrackInfo {
             album_id,
+            artists: catalog::references(raw),
             audio_id: text_of(audio, &["audio_id"])
                 .or_else(|| text_of(raw, &["Audioid", "AudioID", "audio_id"]))
                 .unwrap_or_default(),

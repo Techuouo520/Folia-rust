@@ -25,6 +25,8 @@ pub struct Playback {
     seeking: Option<f64>,
     /// Tracks that failed one after another; playback stops once the whole queue has failed.
     failures: usize,
+    /// Keep the requested direction while skipping unplayable candidates.
+    failure_forward: bool,
     /// Personal FM's feed while the queue is FM (`isFmMode`): stepping on near its end fetches another batch.
     fm: Option<Collection>,
     /// A batch is on its way; steps wait for it.
@@ -124,6 +126,7 @@ impl Playback {
             lyric_offset: 0.0,
             seeking: None,
             failures: 0,
+            failure_forward: true,
             fm: None,
             topping_up: false,
             notice: None,
@@ -524,21 +527,23 @@ impl Playback {
     }
 
     fn skip(&mut self, forward: bool) -> Task<Message> {
+        self.failures = 0;
         if forward {
             return self.advance(false);
         }
-        if self.queue.back().is_some() { self.start_current() } else { Task::none() }
+        if self.queue.back().is_some() { self.start_current_in_direction(false) } else { Task::none() }
     }
 
     fn fail(&mut self) -> Task<Message> {
         self.failures += 1;
         if self.failures >= self.queue.items().len() {
             self.failures = 0;
-            self.with_player(Player::stop);
-            self.refresh();
-            return Task::none();
+            return self.stop_current();
         }
-        self.advance(false)
+        if self.failure_forward {
+            return self.advance(false);
+        }
+        if self.queue.back().is_some() { self.start_current_in_direction(false) } else { self.stop_current() }
     }
 
     fn advance(&mut self, finished: bool) -> Task<Message> {
@@ -561,8 +566,12 @@ impl Playback {
 
     fn step(&mut self, finished: bool) -> Task<Message> {
         if self.queue.advance(finished).is_some() {
-            return self.start_current();
+            return self.start_current_in_direction(true);
         }
+        self.stop_current()
+    }
+
+    fn stop_current(&mut self) -> Task<Message> {
         self.audio_task = None;
         self.end_loading();
         self.loading_toast = false;
@@ -572,8 +581,15 @@ impl Playback {
         Task::none()
     }
 
-    /// Starts a fresh request, discarding only the previous play's source failures.
+    /// An explicit selection begins a new forward failure traversal.
     fn start_current(&mut self) -> Task<Message> {
+        self.failures = 0;
+        self.start_current_in_direction(true)
+    }
+
+    /// Advances within a traversal while retaining its consecutive failure budget.
+    fn start_current_in_direction(&mut self, forward: bool) -> Task<Message> {
+        self.failure_forward = forward;
         self.failed_inputs.clear();
         self.load_current()
     }

@@ -823,3 +823,14 @@ punch = "Pukulan"
 [timeline]
 title = "Timeline"
 noLyrics = "Tidak ada lirik"
+
+[catalog]
+songs = "Lagu"
+artists = "Artis"
+hotSongs = "Lagu populer"
+albums = "Album"
+error = "Detail gagal dimuat. Coba lagi."
+enqueueHot = "Antrekan lagu populer"
+moreSongs = "Lagu populer lainnya"
+moreAlbums = "Album lainnya"
+counts = "{{songs}} lagu · {{albums}} album"

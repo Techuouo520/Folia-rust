@@ -7,6 +7,35 @@ use folia_omni::{LoginQr, Omni, OmniError, cover_cache_key};
 
 mod like_capabilities;
 
+#[test]
+fn catalog_references_use_ids_without_splitting_or_matching_credit_names() {
+    use folia_core::{ArtistRef, OnlineId, OnlineTrackInfo, Track};
+    use folia_omni::TrackCatalog;
+    let mut track = Track {
+        artist: Some("Same / Name, Another".into()),
+        album: Some("Album".into()),
+        online: Some(OnlineId { provider: "qq".into(), id: "song-mid-1-media-mid".into() }),
+        ..Default::default()
+    };
+    assert_eq!(TrackCatalog::from_track(&track), TrackCatalog::default());
+    track.online_info = Some(OnlineTrackInfo {
+        album_id: "album-mid".into(),
+        artists: vec![
+            ArtistRef { id: "mid-2".into(), name: "Same / Name".into() },
+            ArtistRef { id: "mid-1".into(), name: "Same / Name".into() },
+            ArtistRef { id: String::new(), name: "Unresolved".into() },
+        ],
+        ..Default::default()
+    });
+    let catalog = TrackCatalog::from_track(&track);
+    assert_eq!(catalog.artists.iter().map(|artist| artist.id.as_str()).collect::<Vec<_>>(), ["mid-2", "mid-1"]);
+    let album = catalog.album.unwrap();
+    assert_eq!((album.provider.as_str(), album.id.as_str()), ("qq", "album-mid"));
+    assert_eq!(album.kind, folia_omni::CollectionKind::Album);
+    track.online = None;
+    assert_eq!(TrackCatalog::from_track(&track), TrackCatalog::default());
+}
+
 #[tokio::test]
 async fn qq_login_channels_reject_unknown_methods_and_stale_rounds() {
     use folia_omni::LoginState;

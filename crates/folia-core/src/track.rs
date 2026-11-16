@@ -5,11 +5,19 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// A credited artist identified within the track's platform, in the original credit order.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtistRef {
+    pub id: String,
+    pub name: String,
+}
+
 /// Optional platform metadata retained for external address resolvers; never contains account credentials.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OnlineTrackInfo {
     pub album_id: String,
+    pub artists: Vec<ArtistRef>,
     pub audio_id: String,
     pub quality_hashes: std::collections::BTreeMap<crate::AudioQuality, String>,
 }

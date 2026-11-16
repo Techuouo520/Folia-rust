@@ -435,6 +435,7 @@ pub fn adjacent(
 /// What the card's buttons do.
 #[derive(Debug, Clone)]
 pub enum Action {
+    Catalog(crate::catalog::Message),
     /// 「立即播放」, or pause / resume on the playing song.
     Play,
     /// 「进入」: the playing page.
@@ -446,6 +447,7 @@ pub enum Action {
 /// What the card shows of its song and the player.
 pub struct Card<'a> {
     pub track: &'a Track,
+    pub catalog: folia_omni::Capabilities,
     pub queued: bool,
     pub current: bool,
     pub playing: bool,
@@ -480,19 +482,24 @@ pub fn body<'a>(i18n: &'a I18n, card: Card<'a>, reveal: (f32, f32)) -> Element<'
     };
     let mark = |value: &'static str| text(value).size(17.0 * s).color(fade(0.85 * 0.5));
     let mut links: Vec<Element<'a, Action>> = Vec::new();
-    if let Some(artist) = card.track.artist.as_ref().filter(|artist| !artist.is_empty()) {
-        for (index, name) in artist.split(" / ").enumerate() {
-            if index > 0 {
-                links.push(mark(",").into());
-            }
-            links.push(link(name.to_owned()).into());
+    for (index, (name, action)) in crate::credits::artists(card.track, card.catalog.artists).into_iter().enumerate() {
+        if index > 0 {
+            links.push(mark(",").into());
         }
+        links
+            .push(button(link(name)).padding(0).on_press_maybe(action.map(Action::Catalog)).style(button::text).into());
     }
     if let Some(album) = card.track.album.as_ref().filter(|album| !album.is_empty()) {
         if !links.is_empty() {
             links.push(mark("·").into());
         }
-        links.push(link(album.clone()).into());
+        links.push(
+            button(link(album.clone()))
+                .padding(0)
+                .on_press_maybe(crate::credits::album(card.track, card.catalog.albums).map(Action::Catalog))
+                .style(button::text)
+                .into(),
+        );
     }
     if card.track.duration > 0.0 {
         links.push(mark("·").into());

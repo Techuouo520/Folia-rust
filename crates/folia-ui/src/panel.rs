@@ -57,6 +57,7 @@ pub enum Tab {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Catalog(crate::catalog::Message),
     TransparentBackground(bool),
     Toggle,
     /// Escape: the open panel closes and stays on the player page.
@@ -123,6 +124,7 @@ pub enum Message {
 }
 
 pub enum Effect {
+    Catalog(crate::catalog::Message),
     Background(folia_visualizer::Background),
     TransparentBackground(bool),
     None,
@@ -516,6 +518,7 @@ impl PlayerPanel {
             Message::Like => Effect::Like,
             Message::AddToPlaylist => Effect::AddToPlaylist,
             Message::CopySongInfo => Effect::CopySongInfo,
+            Message::Catalog(message) => Effect::Catalog(message.clone()),
             Message::Quick(key) => Effect::Quick(key),
             Message::Reroll => Effect::Reroll,
             Message::PoolOpen => {
@@ -674,6 +677,7 @@ pub struct View<'a> {
     pub width: f32,
     pub height: f32,
     pub track: Option<&'a Track>,
+    pub catalog: folia_omni::Capabilities,
     pub queue: &'a [Track],
     pub index: Option<usize>,
     pub volume: f32,
@@ -983,10 +987,17 @@ fn header<'a>(
         .on_press_maybe((view.track.is_some() && fold.under > 0.5).then_some(Message::CopySongInfo))
         .style(button::text),
         artists(view, big, 13.0, 20.0),
-        text(album)
-            .size(crate::typeface::size::HINT)
-            .line_height(LineHeight::Absolute(iced::Pixels(18.0)))
-            .color(big.t3),
+        button(
+            text(album)
+                .size(crate::typeface::size::HINT)
+                .line_height(LineHeight::Absolute(iced::Pixels(18.0)))
+                .color(big.t3)
+        )
+        .padding(0)
+        .on_press_maybe(
+            view.track.and_then(|track| crate::credits::album(track, view.catalog.albums)).map(Message::Catalog)
+        )
+        .style(button::text),
     ];
     let under = column![credits, actions(view, big, big_ink, swap)].padding(pad(14.0, 4.0, 0.0, 4.0));
 
@@ -1001,14 +1012,24 @@ fn header<'a>(
 }
 
 fn artists<'a>(view: View<'a>, tokens: Faded, size: f32, leading: f32) -> Element<'a, Message> {
-    let raw = view.track.and_then(|track| track.artist.as_deref()).unwrap_or("");
     let mut row = iced::widget::Row::new().spacing(0);
-    for (index, name) in raw.split(" / ").filter(|name| !name.is_empty()).enumerate() {
+    for (index, (name, action)) in view
+        .track
+        .map(|track| crate::credits::artists(track, view.catalog.artists))
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+    {
         if index > 0 {
             row = row
                 .push(text(" / ").size(size).line_height(LineHeight::Absolute(iced::Pixels(leading))).color(tokens.t3));
         }
-        row = row.push(text(name).size(size).line_height(LineHeight::Absolute(iced::Pixels(leading))).color(tokens.t2));
+        row = row.push(
+            button(text(name).size(size).line_height(LineHeight::Absolute(iced::Pixels(leading))).color(tokens.t2))
+                .padding(0)
+                .on_press_maybe(action.map(Message::Catalog))
+                .style(button::text),
+        );
     }
     row.into()
 }

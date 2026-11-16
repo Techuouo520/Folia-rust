@@ -392,14 +392,16 @@ pub async fn collection_detail(client: &Client, collection: &Collection) -> Resu
         CollectionKind::Album => {
             let id = digits(&collection.id)?;
             let songs =
-                song_pages(client, &format!("/api/service/album/music/{id}"), Vec::new(), 0, "resultList").await?;
-            let info = client.call(&format!("/api/service/album/{id}"), Call::default()).await.ok();
-            let published = info
-                .as_ref()
-                .and_then(|info| info.pointer("/data/albumInfo/showtime"))
-                .and_then(Value::as_str)
-                .and_then(date_millis);
-            Ok(CollectionDetail { tracks: songs, subscribed: None, owner: None, published })
+                song_pages(client, &format!("/api/service/album/music/{id}"), Vec::new(), 1, "resultList").await?;
+            let info = client.call(&format!("/api/service/album/{id}"), Call::default()).await?;
+            let published = info.pointer("/data/albumInfo/showtime").and_then(Value::as_str).and_then(date_millis);
+            Ok(CollectionDetail {
+                tracks: songs,
+                subscribed: None,
+                owner: None,
+                published,
+                artists: info.pointer("/data/albumInfo").map(super::artist_refs).unwrap_or_default(),
+            })
         }
         CollectionKind::PersonalFm => Ok(CollectionDetail { tracks: personal_fm(client).await?, ..Default::default() }),
         CollectionKind::DailySongs => Err(OmniError::Unsupported("daily songs")),
@@ -433,7 +435,7 @@ async fn song_pages(
     Ok(songs)
 }
 
-fn digits(id: &str) -> Result<&str, OmniError> {
+pub(super) fn digits(id: &str) -> Result<&str, OmniError> {
     if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) && !id.bytes().all(|b| b == b'0') {
         Ok(id)
     } else {

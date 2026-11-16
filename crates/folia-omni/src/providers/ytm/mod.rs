@@ -1,9 +1,10 @@
 // YouTube Music as a guest of InnerTube: search, timed lyrics, album and public playlist pages. The original signs
 // in through Google's web page in a browser it controls and plays with BotGuard tokens; neither exists here.
 
+mod catalog;
 mod innertube;
 
-use folia_core::{AudioQuality, OnlineId, Track};
+use folia_core::{AudioQuality, OnlineId, OnlineTrackInfo, Track};
 use folia_lyrics::Format;
 use serde_json::{Value, json};
 
@@ -45,6 +46,49 @@ impl Provider for Ytm {
     }
 
     /// `search_songs`: the songs shelf, walked by continuation and sliced to the offset (`createYtmPager`).
+    fn search_artists<'a>(
+        &'a self,
+        query: &'a str,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<crate::Artist>, OmniError>> {
+        Box::pin(catalog::search(&self.client, query, limit, offset))
+    }
+
+    fn artist_detail<'a>(&'a self, artist: &'a OnlineId) -> BoxFuture<'a, Result<crate::Artist, OmniError>> {
+        Box::pin(catalog::detail(&self.client, &artist.id))
+    }
+
+    fn artist_tracks<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Track>, OmniError>> {
+        Box::pin(catalog::songs(&self.client, &artist.id, limit, offset))
+    }
+
+    fn track_catalog<'a>(&'a self, track: &'a Track) -> BoxFuture<'a, Result<crate::TrackCatalog, OmniError>> {
+        Box::pin(catalog::references(&self.client, track))
+    }
+
+    fn artist_albums<'a>(
+        &'a self,
+        artist: &'a OnlineId,
+        limit: u32,
+        offset: u32,
+    ) -> BoxFuture<'a, Result<Page<Collection>, OmniError>> {
+        Box::pin(catalog::albums(&self.client, &artist.id, limit, offset))
+    }
+
+    fn album<'a>(&'a self, album: &'a OnlineId) -> BoxFuture<'a, Result<Collection, OmniError>> {
+        Box::pin(catalog::album(&self.client, &album.id))
+    }
+
+    fn capabilities(&self) -> crate::Capabilities {
+        crate::Capabilities { artist_search: true, artists: true, albums: true, ..Default::default() }
+    }
+
     fn search_songs<'a>(
         &'a self,
         query: &'a str,
@@ -183,7 +227,7 @@ impl Provider for Ytm {
     ) -> BoxFuture<'a, Result<CollectionDetail, OmniError>> {
         Box::pin(async move {
             match collection.kind {
-                CollectionKind::Album => self.album(&collection.id).await,
+                CollectionKind::Album => self.album_tracks(&collection.id).await,
                 CollectionKind::Playlist => self.playlist(&collection.id).await,
                 CollectionKind::DailySongs | CollectionKind::PersonalFm => Err(OmniError::SignedOut),
             }
@@ -226,7 +270,7 @@ impl Provider for Ytm {
 
 impl Ytm {
     /// `album`: the header's title, artists, picture and year; its rows take the album's name and picture.
-    async fn album(&self, id: &str) -> Result<CollectionDetail, OmniError> {
+    async fn album_tracks(&self, id: &str) -> Result<CollectionDetail, OmniError> {
         if !id.starts_with("MPRE") || !is_entity_id(id) {
             return Err(OmniError::Response("Invalid album id".to_owned()));
         }
@@ -239,9 +283,20 @@ impl Ytm {
             text.split(|c: char| !c.is_ascii_digit()).find(|part| part.len() == 4).and_then(|y| y.parse::<i64>().ok())
         });
         let shelf = find_first(&page, "musicShelfRenderer").unwrap_or(&Value::Null);
-        let tracks = rows(shelf, Some((name, cover)));
+        let artists = header.map(catalog::artist_refs).unwrap_or_default();
+        let tracks = rows(shelf, Some((name, cover)))
+            .into_iter()
+            .map(|mut track| {
+                let info = track.online_info.get_or_insert_default();
+                info.album_id = id.to_owned();
+                if info.artists.is_empty() {
+                    info.artists = artists.clone();
+                }
+                track
+            })
+            .collect();
         let published = year.map(|year| days_from_civil(year) * 86_400_000);
-        Ok(CollectionDetail { tracks, subscribed: None, owner: None, published })
+        Ok(CollectionDetail { tracks, subscribed: None, owner: None, published, artists })
     }
 
     /// `public_playlist`: the list as a guest sees it, page after page.
@@ -322,6 +377,7 @@ fn song(item: &Value, album: Option<&(Option<String>, Option<String>)>) -> Optio
     let title = runs_text(column(0))?;
     let mut artists = Vec::new();
     let mut album_name = album.and_then(|(name, _)| name.clone());
+    let mut album_id = String::new();
     let mut duration = None;
     for run in columns
         .iter()
@@ -333,7 +389,10 @@ fn song(item: &Value, album: Option<&(Option<String>, Option<String>)>) -> Optio
         let text = run.get("text").and_then(Value::as_str).unwrap_or_default();
         match run.pointer("/navigationEndpoint/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType").and_then(Value::as_str) {
             Some("MUSIC_PAGE_TYPE_ARTIST" | "MUSIC_PAGE_TYPE_USER_CHANNEL") => artists.push(text.to_owned()),
-            Some("MUSIC_PAGE_TYPE_ALBUM") => album_name = Some(text.to_owned()),
+            Some("MUSIC_PAGE_TYPE_ALBUM") => {
+                album_name = Some(text.to_owned());
+                album_id = run.pointer("/navigationEndpoint/browseEndpoint/browseId").and_then(Value::as_str).filter(|id| id.starts_with("MPRE")).unwrap_or_default().to_owned();
+            }
             _ => {
                 if let Some(seconds) = clock(text) {
                     duration = Some(seconds);
@@ -355,6 +414,7 @@ fn song(item: &Value, album: Option<&(Option<String>, Option<String>)>) -> Optio
         cover_url: cover,
         duration: duration.unwrap_or(0.0),
         online: Some(online),
+        online_info: Some(OnlineTrackInfo { artists: catalog::artist_refs(item), album_id, ..Default::default() }),
         ..Track::default()
     })
 }
