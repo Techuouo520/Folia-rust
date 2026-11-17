@@ -24,6 +24,12 @@ struct GpuTex {
     view: wgpu::TextureView,
 }
 
+impl Drop for GpuTex {
+    fn drop(&mut self) {
+        folia_render::release_source(&self.view);
+    }
+}
+
 impl GpuTex {
     fn size(&self) -> (u32, u32) {
         (self.texture.width(), self.texture.height())

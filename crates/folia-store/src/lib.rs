@@ -1,19 +1,24 @@
 // Settings persistence: each domain is one versioned TOML file in the config directory.
 
+mod ai;
 mod appearance;
 mod audio;
 mod developer;
 mod file_log;
 mod general;
+mod graphics;
 mod log_file;
 mod memory;
 mod playback;
 mod player;
 mod runtime_log;
+mod scene;
+mod smart_beat;
 mod sources;
 mod theme;
 mod visualizer;
 
+pub use ai::{AiProtocol, AiSettings, SongThemeSettings, ThemeGenerationSource};
 pub use appearance::{
     AppearanceSettings, FontSettings, FontStyle, FrameRate, RowSource, SubtitleContentMode, SubtitleLayout,
     SubtitleSettings, ThemeMode,
@@ -22,11 +27,16 @@ pub use audio::{AudioSettings, ReplayGainMode};
 pub use developer::{DeveloperSettings, LogMode, clamp_interval_ms};
 pub use file_log::FileLog;
 pub use general::{GeneralSettings, HomeTab};
+pub use graphics::{GpuPreference, GraphicsSettings, MotionSettings, MotionSurface};
 pub use log_file::{LOG_ENTRIES, LOG_LINES, LogFile};
 pub use memory::{MEMORY_HISTORY, MemoryHistory, MemoryMonitor, MemorySample};
 pub use playback::PlaybackSettings;
 pub use player::{BOTTOM_BAR_BASE, PlayerSettings, bottom_bar_max_offset, clamp_bottom_bar_offset};
 pub use runtime_log::{LogLine, RuntimeLog, clock, error_chain, iso};
+pub use scene::{SceneOptions, SceneSettings};
+pub use smart_beat::{
+    BeatEffectSetting, NEBBIA_AQUA_BEAT, NEBBIA_DRIZZLE_RIDE, SMART_BEAT_KEY, SmartBeatMode, SmartBeatSettings,
+};
 pub use sources::{CustomSource, SourceMetadata, SourcePlatform, SourceSettings};
 pub use theme::{DualTheme, StoredTheme, ThemeSettings, ThemeSource};
 pub use visualizer::VisualizerSettings;

@@ -3,6 +3,7 @@
 
 use crate::typeface::text;
 use crate::typeface::text_input;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use folia_core::{Lyrics, Theme};
@@ -80,17 +81,23 @@ pub enum FontTarget {
 
 #[derive(Clone, Debug)]
 pub enum Message {
+    PreviewArt(u64, usize, Result<Arc<crate::preview_art::Art>, String>),
+    PreviewBackground(u64, u64, Option<iced::widget::image::Handle>),
+    SmartBeat(crate::smart_beat::Change),
     Close,
     Tab(Tab),
     Source(Source),
     Sample(Sample),
     Pause,
     Style(Style),
+    RenderScale(Option<f32>),
+    RenderAntialias(Option<folia_core::LyricAntialias>),
     Slider(&'static str, f32),
     Commit,
     Toggle(&'static str, bool),
     Member(&'static str, &'static str, bool),
     Choice(&'static str, String),
+    Text(&'static str, String),
     Button(&'static str),
     Reset,
     Frame,
@@ -108,6 +115,8 @@ pub enum Message {
     BackgroundMode(Background),
     Vignette(bool),
     Geometric(bool),
+    CoverColor(bool),
+    CoverOpacity(f32),
     LatentMeshSpeed(f32),
     LatentDraft(folia_visualizer::LatentTuning),
     LatentSet(folia_visualizer::LatentTuning),
@@ -123,6 +132,8 @@ pub enum Message {
     SubtitleBackground(bool),
     SubtitleUpcomingBlur(bool),
     SubtitleHide(bool),
+    HarmonyShow(bool),
+    HarmonyBackground(bool),
     SubtitleInherits(bool),
     GridScrolled(Viewport),
     PageScrolled(Viewport),
@@ -132,6 +143,7 @@ pub enum Message {
 
 /// What the open workbench asks the shell to do.
 pub enum Effect {
+    SmartBeat(crate::smart_beat::Change),
     None,
     Close,
     /// Keep the tuning for the preview, and write the file on [`Effect::Save`].
@@ -201,6 +213,7 @@ pub fn scheduled_saves(effect: &Effect, appearance_changed: bool, flush_visualiz
     let mut visualizer = flush_visualizer;
     let mut appearance = false;
     match effect {
+        Effect::SmartBeat(change) => visualizer |= change.commits(),
         Effect::Save => {
             visualizer = true;
             appearance = appearance_changed;
@@ -215,15 +228,18 @@ pub fn scheduled_saves(effect: &Effect, appearance_changed: bool, flush_visualiz
 /// What the open workbench draws from the shell.
 #[derive(Clone, Copy)]
 pub struct Look<'a> {
+    pub portrait: Option<&'a iced::widget::image::Handle>,
+    pub smart_beat: crate::smart_beat::View<'a>,
     pub i18n: &'a I18n,
     pub theme: &'a Theme,
     pub daylight: bool,
     pub window: Size,
     pub style: Style,
     pub font_scale: f32,
-    pub live: Option<(&'a Lyrics, f64)>,
+    pub live: Option<Live<'a>>,
     pub audio: &'a folia_core::AudioFrame,
     pub appearance: &'a AppearanceSettings,
+    pub graphics: &'a folia_store::GraphicsSettings,
     pub fonts: &'a [String],
     pub dpi: f32,
     pub cover: &'a [folia_core::Rgb],
@@ -235,11 +251,52 @@ pub struct Look<'a> {
     pub has_background_upload: bool,
 }
 
+#[derive(Clone, Copy)]
+pub struct Live<'a> {
+    pub smart_beat: folia_core::SmartBeat<'a>,
+    pub lyrics: &'a Lyrics,
+    pub time: f64,
+    pub track: Option<&'a folia_core::Track>,
+    pub seed: &'a str,
+    pub audio: &'a folia_core::AudioFrame,
+    pub portrait: Option<&'a iced::widget::image::Handle>,
+    pub colors: &'a [folia_core::Rgb],
+    pub source: Option<&'a Arc<image::RgbaImage>>,
+}
+
 /// The font picker opened over the workbench.
 struct Picker {
     target: FontTarget,
     search: String,
     fallback: String,
+}
+
+struct LiveSnapshot {
+    smart_beat: crate::smart_beat::Snapshot,
+    lyrics: Lyrics,
+    time: f64,
+    audio: folia_core::AudioFrame,
+    portrait: Option<iced::widget::image::Handle>,
+    track: Option<folia_core::Track>,
+    seed: String,
+    colors: Vec<folia_core::Rgb>,
+    source: Option<Arc<image::RgbaImage>>,
+}
+
+impl LiveSnapshot {
+    fn view(&self, settings: &folia_store::SmartBeatSettings) -> Live<'_> {
+        Live {
+            smart_beat: self.smart_beat.frame(settings),
+            lyrics: &self.lyrics,
+            time: self.time,
+            track: self.track.as_ref(),
+            seed: &self.seed,
+            audio: &self.audio,
+            portrait: self.portrait.as_ref(),
+            colors: &self.colors,
+            source: self.source.as_ref(),
+        }
+    }
 }
 
 pub struct Workbench {
@@ -249,6 +306,7 @@ pub struct Workbench {
     paused: bool,
     origin: Instant,
     frozen: f64,
+    live_snapshot: Option<LiveSnapshot>,
     pictures: Pictures,
     pub values: Values,
     notice: Option<&'static str>,
@@ -259,6 +317,9 @@ pub struct Workbench {
     picker: Option<Picker>,
     /// Set while a slider is down. Release, blur, and leaving the page write the file once.
     pending: Pending,
+    preview_id: u64,
+    sample_art: [Option<Arc<crate::preview_art::Art>>; 2],
+    preview_poster: crate::background_image::Poster,
 }
 
 impl Workbench {
@@ -267,6 +328,7 @@ impl Workbench {
     }
 
     pub fn open() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
             tab: Tab::Lyrics,
             source: Source::Builtin,
@@ -274,6 +336,7 @@ impl Workbench {
             paused: false,
             origin: Instant::now(),
             frozen: 0.0,
+            live_snapshot: None,
             pictures: Pictures::default(),
             values: Values::default(),
             notice: None,
@@ -282,6 +345,9 @@ impl Workbench {
             scroll_dirty: false,
             picker: None,
             pending: Pending::None,
+            preview_id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            sample_art: [None, None],
+            preview_poster: Default::default(),
         }
     }
 
@@ -300,6 +366,14 @@ impl Workbench {
         self.pending = pending;
     }
 
+    pub(crate) fn uses_live_audio(&self) -> bool {
+        self.live_running()
+    }
+
+    pub fn live_running(&self) -> bool {
+        self.source == Source::Live && !self.paused
+    }
+
     pub fn update(
         &mut self,
         message: Message,
@@ -310,6 +384,27 @@ impl Workbench {
         let mut appearance = current.clone();
         let mut changed = false;
         let result = match message {
+            Message::PreviewArt(id, index, result) => {
+                if id == self.preview_id && index < self.sample_art.len() {
+                    match result {
+                        Ok(art) => self.sample_art[index] = Some(art),
+                        Err(error) => tracing::warn!(error = %error, "preview cover unavailable"),
+                    }
+                }
+                Update::effect(Effect::None)
+            }
+            Message::PreviewBackground(id, generation, image) => {
+                if id == self.preview_id {
+                    self.preview_poster.finish(generation, image);
+                }
+                Update::effect(Effect::None)
+            }
+            Message::SmartBeat(change) => {
+                if !change.commits() {
+                    self.hold(Pending::Visualizer);
+                }
+                Update::effect(Effect::SmartBeat(change))
+            }
             Message::Close => {
                 let released = self.release_drag();
                 if matches!(released, Effect::None) {
@@ -328,9 +423,10 @@ impl Workbench {
                 update
             }
             Message::Source(source) => {
-                self.frozen = self.clock(Instant::now());
                 self.source = source;
-                self.origin = Instant::now();
+                if source == Source::Builtin {
+                    self.live_snapshot = None;
+                }
                 Update::effect(Effect::None)
             }
             Message::Sample(sample) => {
@@ -342,6 +438,7 @@ impl Workbench {
                 if self.paused {
                     self.origin = now.checked_sub(Duration::from_secs_f64(self.frozen.max(0.0))).unwrap_or(now);
                     self.paused = false;
+                    self.live_snapshot = None;
                 } else {
                     self.frozen = self.clock(now);
                     self.paused = true;
@@ -355,8 +452,22 @@ impl Workbench {
                 update.flush_visualizer = matches!(released, Effect::Save);
                 update
             }
+            Message::RenderScale(scale) => {
+                changed = matches!(self.release_drag(), Effect::SaveAppearance);
+                let mut value = self.values.render_override();
+                value.scale = scale;
+                self.values.set_render_override(value);
+                Update::effect(Effect::Save)
+            }
+            Message::RenderAntialias(antialias) => {
+                changed = matches!(self.release_drag(), Effect::SaveAppearance);
+                let mut value = self.values.render_override();
+                value.antialias = antialias;
+                self.values.set_render_override(value);
+                Update::effect(Effect::Save)
+            }
             Message::Slider(key, value) => {
-                if manifest.locked(key) {
+                if !manifest.editable(&self.values, key, None) {
                     return Update::effect(Effect::None);
                 }
                 self.hold(Pending::Visualizer);
@@ -365,18 +476,21 @@ impl Workbench {
             }
             Message::Commit => Update::effect(self.release_drag()),
             Message::Toggle(key, on) => {
-                if manifest.locked(key) {
+                if !manifest.editable(&self.values, key, None) {
                     return Update::effect(Effect::None);
                 }
                 self.values.set_flag(manifest, key, on);
                 Update::effect(Effect::Save)
             }
             Message::Member(key, option, on) => {
+                if !manifest.editable(&self.values, key, Some(option)) {
+                    return Update::effect(Effect::None);
+                }
                 let _ = self.values.toggle_member(manifest, key, option, on);
                 Update::effect(Effect::Save)
             }
             Message::Choice(key, value) => {
-                if manifest.locked(key) {
+                if !manifest.editable(&self.values, key, None) {
                     return Update::effect(Effect::None);
                 }
                 let allowed = manifest.items().any(|item| match item {
@@ -404,24 +518,38 @@ impl Workbench {
                 }
             }
             Message::Button(key) => Update::effect(Effect::Button(key)),
+            Message::Text(key, value) => {
+                self.values.set_text(manifest, key, &value);
+                self.hold(Pending::Visualizer);
+                Update::effect(Effect::Draft)
+            }
             Message::Reset => match self.tab {
                 Tab::Lyrics => {
+                    self.pending = Pending::None;
                     self.values.reset(manifest);
                     self.notice = manifest.reset_key;
                     Update::effect(Effect::Save)
                 }
                 Tab::Background => {
-                    appearance.set_background_mode(None);
-                    appearance.disable_visualizer_vignette = false;
-                    appearance.disable_visualizer_geometric_background = false;
-                    let mut update = Update::appearance(Effect::Save, &appearance);
-                    update.latent = Some(folia_visualizer::LatentTuning::DEFAULT);
-                    update.sora = Some(folia_visualizer::SoraTuning::DEFAULT);
-                    update.monet = Some(folia_visualizer::monet_background::Tuning::DEFAULT);
-                    update.nomand = Some(folia_visualizer::nomand::Tuning::default());
+                    self.pending = Pending::None;
+                    let mut update = Update::effect(Effect::Save);
+                    match Background::resolve(appearance.stored_background_mode()) {
+                        Background::Common => {
+                            appearance.disable_visualizer_vignette = false;
+                            appearance.disable_visualizer_geometric_background = false;
+                            appearance.use_cover_color_bg = false;
+                            appearance.cover_background_opacity = 0.75;
+                            update = Update::appearance(Effect::SaveAppearance, &appearance);
+                        }
+                        Background::Latent => update.latent = Some(folia_visualizer::LatentTuning::DEFAULT),
+                        Background::Sora => update.sora = Some(folia_visualizer::SoraTuning::DEFAULT),
+                        Background::Monet => update.monet = Some(folia_visualizer::monet_background::Tuning::DEFAULT),
+                        Background::Nomand => update.nomand = Some(folia_visualizer::nomand::Tuning::default()),
+                    }
                     return update;
                 }
                 Tab::Font => {
+                    self.pending = Pending::None;
                     self.sample = Sample::Default;
                     appearance.lyrics_font = FontSettings::default();
                     appearance.lyrics_font_scale = 1.0;
@@ -430,11 +558,12 @@ impl Workbench {
                     Update::effect(Effect::Save)
                 }
                 Tab::Subtitle => {
+                    self.pending = Pending::None;
                     appearance.subtitle = Default::default();
                     changed = true;
                     Update::effect(Effect::Save)
                 }
-                Tab::Global => Update::effect(Effect::None),
+                Tab::Global => Update::effect(Effect::SmartBeat(crate::smart_beat::Change::Reset)),
             },
             Message::Frame => Update::effect(Effect::None),
             Message::GridScrolled(viewport) => {
@@ -573,6 +702,17 @@ impl Workbench {
                 changed = true;
                 Update::effect(Effect::Save)
             }
+            Message::CoverColor(on) => {
+                appearance.use_cover_color_bg = on;
+                changed = true;
+                Update::effect(Effect::SaveAppearance)
+            }
+            Message::CoverOpacity(value) => {
+                appearance.cover_background_opacity = value.clamp(0.0, 1.0);
+                self.hold(Pending::Appearance);
+                changed = true;
+                Update::effect(Effect::Appearance)
+            }
             Message::LatentMeshSpeed(value) => {
                 self.hold(Pending::Visualizer);
                 let mut tuning = latent;
@@ -654,6 +794,16 @@ impl Workbench {
                 changed = true;
                 Update::effect(Effect::Save)
             }
+            Message::HarmonyShow(show) => {
+                appearance.subtitle.show_harmony = show;
+                changed = true;
+                Update::effect(Effect::Save)
+            }
+            Message::HarmonyBackground(show) => {
+                appearance.subtitle.harmony_background = show;
+                changed = true;
+                Update::effect(Effect::Save)
+            }
             Message::SubtitleInherits(inherits) => {
                 appearance.subtitle.font_inherits_lyrics = inherits;
                 changed = true;
@@ -665,6 +815,96 @@ impl Workbench {
 
     pub fn ticking(&self) -> bool {
         self.source == Source::Builtin && !self.paused || self.scrolling()
+    }
+
+    /// Takes the live picture only in response to pause or choosing the live source.
+    pub fn capture_live(&mut self, live: Option<Live<'_>>, choosing_live: bool) {
+        if self.source != Source::Live && !choosing_live {
+            return;
+        }
+        if choosing_live && !self.paused {
+            self.live_snapshot = None;
+            return;
+        }
+        if self.paused && !choosing_live {
+            return;
+        }
+        self.live_snapshot = live.map(|live| LiveSnapshot {
+            smart_beat: crate::smart_beat::Snapshot::capture(live.smart_beat),
+            lyrics: live.lyrics.clone(),
+            time: live.time,
+            audio: *live.audio,
+            portrait: live.portrait.cloned(),
+            track: live.track.cloned(),
+            seed: live.seed.into(),
+            colors: live.colors.to_vec(),
+            source: live.source.cloned().or_else(|| crate::preview_art::source_of(live.portrait)),
+        });
+    }
+
+    pub fn load_art(&self) -> Task<Message> {
+        let id = self.preview_id;
+        Task::batch((0..2).map(|index| {
+            Task::perform(crate::background::blocking(move || crate::preview_art::load(index)), move |result| {
+                Message::PreviewArt(id, index, result.unwrap_or_else(|| Err("preview image worker stopped".into())))
+            })
+        }))
+    }
+
+    pub(crate) fn prepare_background(
+        &mut self,
+        theme: &Theme,
+        appearance: &AppearanceSettings,
+        tuning: folia_visualizer::monet_background::Tuning,
+        nomand: folia_visualizer::nomand::Tuning,
+        sources: (Option<&Arc<image::RgbaImage>>, Option<&Arc<image::RgbaImage>>),
+        window: Size,
+    ) -> Task<Message> {
+        let (cover, uploaded) = sources;
+        let mode = Background::resolve(appearance.stored_background_mode());
+        let common = mode == Background::Common && appearance.use_cover_color_bg;
+        if !common && !matches!(mode, Background::Monet | Background::Nomand) {
+            self.preview_poster.clear();
+            return Task::none();
+        }
+        let raw = mode == Background::Nomand;
+        let use_upload = if raw { nomand.uploaded } else { tuning.uploaded };
+        let cover = if self.source == Source::Builtin {
+            self.sample_art[usize::from(self.sample == Sample::Reserved)].as_ref().map(|art| &art.source)
+        } else if self.paused {
+            self.live_snapshot.as_ref().and_then(|snapshot| snapshot.source.as_ref())
+        } else {
+            cover
+        };
+        let source = if common {
+            cover
+        } else if use_upload {
+            uploaded.or(cover)
+        } else {
+            cover.or(uploaded)
+        };
+        let Some(job) = self.preview_poster.request(source, theme, tuning, raw, common.then_some(window)) else {
+            return Task::none();
+        };
+        let (id, generation) = (self.preview_id, job.generation);
+        Task::perform(crate::background::blocking(move || job.paint()), move |image| {
+            Message::PreviewBackground(id, generation, image)
+        })
+    }
+
+    /// Position shown by a preview host, including its held live frame.
+    pub fn position(&self, now: Instant, live: Option<f64>) -> f64 {
+        if self.source == Source::Live {
+            if self.paused
+                && let Some(snapshot) = &self.live_snapshot
+            {
+                return snapshot.time;
+            }
+            if let Some(time) = live {
+                return time;
+            }
+        }
+        self.clock(now)
     }
 
     /// A smooth scroll is moving, so the shell keeps sending frames.
@@ -701,7 +941,7 @@ impl Workbench {
         let now = Instant::now();
         let (lyrics, time, empty) = self.shown(now, live);
         let header = self.header(i18n, tokens);
-        let stage = self.stage(look, tokens, lyrics, time, empty);
+        let stage = self.stage(look, tokens, lyrics, time, empty, true);
         let column = self.column(look, tokens);
         let body = row![stage, container(column).width(COLUMN).height(Length::Fill)].height(Length::Fill);
         let inner = column![header, body].width(Length::Fill).height(Length::Fill);
@@ -752,12 +992,17 @@ impl Workbench {
         stack![backdrop, panel].into()
     }
 
-    fn shown<'a>(&'a self, now: Instant, live: Option<(&'a Lyrics, f64)>) -> (&'a Lyrics, f64, bool) {
+    fn shown<'a>(&'a self, now: Instant, live: Option<Live<'a>>) -> (&'a Lyrics, f64, bool) {
         if self.source == Source::Live
-            && let Some((lyrics, time)) = live
+            && self.paused
+            && let Some(snapshot) = &self.live_snapshot
         {
-            let shown = if self.paused { self.frozen } else { time };
-            return (lyrics, shown, false);
+            return (&snapshot.lyrics, snapshot.time, false);
+        }
+        if self.source == Source::Live
+            && let Some(live) = live
+        {
+            return (live.lyrics, self.position(now, Some(live.time)), false);
         }
         let lyrics = if self.sample == Sample::Reserved { reserved() } else { builtin() };
         (lyrics, self.clock(now), self.source == Source::Live)
@@ -786,27 +1031,52 @@ impl Workbench {
         lyrics: &'a Lyrics,
         time: f64,
         empty: bool,
+        picker: bool,
     ) -> Element<'a, crate::Message> {
         let Look { i18n, theme, style, font_scale, .. } = look;
-        let show = style.shows_shared_background();
+        let held = (self.source == Source::Live && self.paused).then_some(self.live_snapshot.as_ref()).flatten();
+        let live = (self.source == Source::Live)
+            .then(|| held.map(|snapshot| snapshot.view(look.smart_beat.settings)).or(look.live))
+            .flatten();
+        let art = (self.source == Source::Builtin)
+            .then(|| self.sample_art[usize::from(self.sample == Sample::Reserved)].as_deref())
+            .flatten();
+        let portrait = if self.values.choice(style.manifest(), "portraitSource") == "custom" {
+            look.portrait
+        } else if let Some(live) = live {
+            live.portrait
+        } else {
+            art.map(|art| &art.portrait)
+        };
+        let track = live.and_then(|live| live.track);
+        let seed = live.map_or(
+            if self.sample == Sample::Reserved { "vis-playground-reserved" } else { "vis-playground-default" },
+            |live| live.seed,
+        );
         let scene = Scene {
+            smart_beat: live.map_or_else(folia_core::SmartBeat::default, |live| live.smart_beat),
+            paused: self.paused,
+            daylight: look.daylight,
             style,
             lyrics,
             time,
             theme,
             font_scale,
-            seed: "lumiere",
+            seed,
             stage: None,
             tuning: self.values.clone(),
-            backdrop: !show,
-            title: lyrics.title.clone().unwrap_or_default(),
-            artist: lyrics.artist.clone().unwrap_or_default(),
-            album: String::new(),
-            portrait: None,
+            backdrop: true,
+            title: track.map_or_else(|| lyrics.title.clone().unwrap_or_default(), |track| track.title.clone()),
+            artist: track.and_then(|track| track.artist.clone()).or_else(|| lyrics.artist.clone()).unwrap_or_default(),
+            album: track.and_then(|track| track.album.clone()).unwrap_or_default(),
+            portrait: portrait.cloned(),
+            render_quality: self.values.render_quality(look.graphics.lyric_render_quality),
+            static_mode: look.graphics.static_mode,
             typography: fonts::typography(look.appearance),
             preview: true,
-            audio: look.audio,
+            audio: held.map_or(look.audio, |snapshot| &snapshot.audio),
         };
+        let scene = Scene { backdrop: !scene.shows_shared_background(), ..scene };
         let subtitle = if style.shared_subtitle() {
             crate::overlay::subtitle_rows_at(&lyrics.lines, time, &look.appearance.subtitle)
         } else {
@@ -831,21 +1101,27 @@ impl Workbench {
                 subtitle_opacity: look.appearance.subtitle.opacity,
                 subtitle_background: look.appearance.subtitle.background,
                 subtitle_blur: look.appearance.subtitle.upcoming_blur,
+                harmony: &look.appearance.subtitle,
                 subtitle_scale: look.appearance.subtitle.font_scale,
                 subtitle_font: fonts::resolve(font),
                 shared: crate::now_playing::Backdrop {
+                    static_mode: look.graphics.static_mode,
                     mode: Background::resolve(look.appearance.stored_background_mode()),
                     shapes: !look.appearance.disable_visualizer_geometric_background,
                     vignette: !look.appearance.disable_visualizer_vignette,
                     paused: self.paused,
                 },
-                cover: look.cover,
+                cover: live.map_or_else(|| art.map_or(&[][..], |art| art.colors.as_slice()), |live| live.colors),
+                cover_overlay: look.appearance.use_cover_color_bg.then_some(look.appearance.cover_background_opacity),
                 latent: look.latent,
                 daylight: look.daylight,
                 sora: look.sora,
                 monet: look.monet,
                 nomand: look.nomand,
-                picture: look.picture,
+                picture: self
+                    .preview_poster
+                    .image()
+                    .or_else(|| (self.source == Source::Live && !self.paused).then_some(look.picture).flatten()),
             },
             subtitle,
             crate::now_playing::Foot { bottom: 24.0, glass: false },
@@ -865,17 +1141,22 @@ impl Workbench {
             .into()
         });
         let bar = self.preview_bar(i18n, tokens);
-        let hotspots = canvas_widget(Hotspots {
-            theme,
-            active: self.tab,
-            labels: HotspotLabels {
-                background: i18n.t("options.previewBackgroundHotspot"),
-                visualizer: i18n.t("options.previewVisualizerHotspot"),
-                subtitle: i18n.t("options.previewSubtitleHotspot"),
-            },
-        })
-        .width(Length::Fill)
-        .height(Length::Fill);
+        let hotspots: Element<'a, crate::Message> = if picker {
+            canvas_widget(Hotspots {
+                theme,
+                active: self.tab,
+                labels: HotspotLabels {
+                    background: i18n.t("options.previewBackgroundHotspot"),
+                    visualizer: i18n.t("options.previewVisualizerHotspot"),
+                    subtitle: i18n.t("options.previewSubtitleHotspot"),
+                },
+            })
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+        } else {
+            space().into()
+        };
         let picture = stack![
             preview,
             hotspots,
@@ -890,12 +1171,18 @@ impl Workbench {
             Some(note) => picture.push(container(note).padding(12)),
             None => picture,
         };
-        let shelf = self.shelf(look, tokens);
-        column![picture, shelf]
+        let contents = if picker { column![picture, self.shelf(look, tokens)] } else { column![picture] };
+        contents
             .spacing(16)
             .padding(Padding { left: 16.0, right: 16.0, bottom: 24.0, top: 0.0 })
             .width(Length::Fill)
             .into()
+    }
+
+    pub(crate) fn preview_only<'a>(&'a self, look: Look<'a>) -> Element<'a, crate::Message> {
+        let tokens = Tokens::new(look.theme, look.daylight);
+        let (lyrics, time, empty) = self.shown(Instant::now(), look.live);
+        self.stage(look, tokens, lyrics, time, empty, false)
     }
 
     fn preview_bar<'a>(&'a self, i18n: &'a I18n, _tokens: Tokens) -> Element<'a, crate::Message> {
@@ -989,15 +1276,10 @@ impl Workbench {
             .map(|tab| (i18n.t(tab.key()).to_owned(), crate::Message::Workbench(Message::Tab(tab))))
             .collect();
         let chosen = Tab::ALL.iter().position(|tab| *tab == self.tab);
-        let reset_on = !matches!(self.tab, Tab::Global);
-        let reset = button(text(i18n.t("ui.default")).size(crate::typeface::size::CONTROL).color(if reset_on {
-            tokens.t1
-        } else {
-            tokens.t3
-        }))
-        .padding(Padding { left: 8.0, right: 8.0, ..Padding::ZERO })
-        .style(|_, _| button::Style::default());
-        let reset = if reset_on { reset.on_press(crate::Message::Workbench(Message::Reset)) } else { reset };
+        let reset = button(text(i18n.t("ui.default")).size(crate::typeface::size::CONTROL).color(tokens.t1))
+            .padding(Padding { left: 8.0, right: 8.0, ..Padding::ZERO })
+            .style(|_, _| button::Style::default())
+            .on_press(crate::Message::Workbench(Message::Reset));
         let tabs = row![kit::tabs(tokens, tabs, chosen, chosen.map(|index| index as f32), 8.0, 16.0), reset]
             .align_y(Alignment::Center);
         let page = self.page(look, tokens);
@@ -1018,11 +1300,18 @@ impl Workbench {
     fn page<'a>(&'a self, look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
         let Look { i18n, theme, style, font_scale, appearance, .. } = look;
         match self.tab {
-            Tab::Lyrics => style_page(i18n, tokens, theme, style.manifest(), &self.values),
+            Tab::Lyrics => {
+                let page =
+                    style_page(i18n, tokens, theme, style.manifest(), &self.values, look.graphics.lyric_render_quality);
+                match crate::smart_beat::effects_page(i18n, tokens, style, look.smart_beat) {
+                    Some(effects) => column![effects, page].into(),
+                    None => page,
+                }
+            }
             Tab::Background => background_page(look, tokens),
             Tab::Font => font_page(i18n, tokens, theme, style, self.sample, font_scale, appearance),
             Tab::Subtitle => subtitle_page(i18n, tokens, theme, appearance),
-            Tab::Global => global_page(i18n, tokens),
+            Tab::Global => crate::smart_beat::global_page(i18n, tokens, look.smart_beat),
         }
     }
 
@@ -1161,28 +1450,9 @@ fn item_label(item: Item) -> &'static str {
         | Item::Member { label_key, .. }
         | Item::Select { label_key, .. }
         | Item::Picture { label_key, .. }
+        | Item::Text { label_key, .. }
         | Item::Button { label_key, .. } => label_key,
     }
-}
-
-fn disabled_modes<'a>(tokens: Tokens, modes: Vec<String>) -> Element<'a, crate::Message> {
-    let mut row = row![].padding(2).spacing(0);
-    for (index, label) in modes.into_iter().enumerate() {
-        let on = index == 0;
-        let label = text(label).size(crate::typeface::size::CONTROL).color(if on {
-            tokens.t3
-        } else {
-            Color { a: tokens.t3.a * 0.7, ..tokens.t3 }
-        });
-        row = row.push(container(label).padding(Padding { left: 10.0, right: 10.0, top: 6.0, bottom: 6.0 }));
-    }
-    container(row)
-        .style(move |_| container::Style {
-            background: Some(tokens.fill.into()),
-            border: Border { radius: 8.0.into(), ..Border::default() },
-            ..container::Style::default()
-        })
-        .into()
 }
 
 fn style_page<'a>(
@@ -1191,15 +1461,8 @@ fn style_page<'a>(
     theme: &'a Theme,
     manifest: Manifest,
     values: &'a Values,
+    global: folia_core::LyricRenderQuality,
 ) -> Element<'a, crate::Message> {
-    if manifest.groups.is_empty() {
-        return container(
-            text(i18n.t("options.lyricStyleNoOptions")).size(crate::typeface::size::CONTROL).color(tokens.t3),
-        )
-        .padding(56)
-        .center_x(Length::Fill)
-        .into();
-    }
     let mut page = column![];
     for (index, group) in manifest.groups.iter().enumerate() {
         let mut rows = Vec::new();
@@ -1215,10 +1478,69 @@ fn style_page<'a>(
             index == 0,
         ));
         if let Some(foot) = group.foot_key {
-            page = page.push(text(i18n.t(foot)).size(crate::typeface::size::HINT).color(tokens.t3));
+            page = page
+                .push(text(i18n.t(manifest.label(values, foot))).size(crate::typeface::size::HINT).color(tokens.t3));
         }
     }
+    page = page.push(render_quality_group(i18n, tokens, values.render_override(), global, manifest.groups.is_empty()));
     page.padding(Padding { left: 24.0, right: 12.0, bottom: 40.0, top: 0.0 }).into()
+}
+
+fn render_quality_group<'a>(
+    i18n: &'a I18n,
+    tokens: Tokens,
+    value: folia_core::LyricRenderOverride,
+    global: folia_core::LyricRenderQuality,
+    first: bool,
+) -> Element<'a, crate::Message> {
+    use folia_core::LyricAntialias;
+    let global = global.normalized();
+    let follow = i18n.t("options.lyricRenderFollowGlobal");
+    let mut scales = vec![Choice { value: None, label: follow.to_owned() }];
+    scales
+        .extend(folia_core::LYRIC_RENDER_SCALES.map(|scale| Choice { value: Some(scale), label: format!("{scale}×") }));
+    let selected = Choice {
+        value: value.scale,
+        label: value.scale.map_or_else(|| follow.to_owned(), |scale| format!("{scale}×")),
+    };
+    let antialias = match global.antialias {
+        LyricAntialias::Auto => "options.lyricAntialiasAuto",
+        LyricAntialias::On => "options.lyricAntialiasOn",
+        LyricAntialias::Off => "options.lyricAntialiasOff",
+    };
+    let rows = vec![
+        Row {
+            label: i18n.t("options.lyricRenderScale").to_owned(),
+            hint: Some(i18n.format("options.lyricRenderScaleStyleHint", &[("value", &format!("{}×", global.scale))])),
+            sub: false,
+            below: None,
+            control: kit::select(tokens, scales, selected, |choice| {
+                crate::Message::Workbench(Message::RenderScale(choice.value))
+            }),
+        },
+        Row {
+            label: i18n.t("options.lyricAntialias").to_owned(),
+            hint: Some(i18n.format("options.lyricAntialiasStyleHint", &[("value", i18n.t(antialias))])),
+            sub: false,
+            below: None,
+            control: kit::segmented(
+                tokens,
+                vec![
+                    (None, follow.to_owned()),
+                    (Some(LyricAntialias::On), i18n.t("options.lyricAntialiasOn").to_owned()),
+                    (Some(LyricAntialias::Off), i18n.t("options.lyricAntialiasOff").to_owned()),
+                ],
+                value.antialias,
+                None,
+                |value| crate::Message::Workbench(Message::RenderAntialias(value)),
+            ),
+        },
+    ];
+    kit::group(
+        tokens,
+        Group { title: i18n.t("options.lyricRenderSection").to_owned(), bare: false, rows, foot: None },
+        first,
+    )
 }
 
 fn item_row<'a>(
@@ -1229,15 +1551,38 @@ fn item_row<'a>(
     values: &'a Values,
     item: Item,
 ) -> Row<'a, crate::Message> {
-    let locked = manifest.locked(item.key());
+    let member = match item {
+        Item::Member { option, .. } => Some(option),
+        _ => None,
+    };
+    let locked = !manifest.editable(values, item.key(), member);
     let mut below = None;
     let control = match item {
+        Item::Text { key, placeholder_key, .. } => {
+            below = Some(
+                text_input(i18n.t(placeholder_key), values.text(key))
+                    .size(crate::typeface::size::CONTROL)
+                    .padding([8, 10])
+                    .on_input(move |value| crate::Message::Workbench(Message::Text(key, value)))
+                    .on_submit(crate::Message::Workbench(Message::Commit))
+                    .style(move |_, _| text_input::Style {
+                        background: tokens.fill.into(),
+                        border: Border { color: tokens.line2, width: 1.0, radius: 8.0.into() },
+                        icon: tokens.t3,
+                        placeholder: tokens.t3,
+                        value: tokens.t1,
+                        selection: tokens.fill2,
+                    })
+                    .into(),
+            );
+            space().into()
+        }
         Item::Slider { key, step, .. } if locked => {
-            kit::value(tokens, format_value(values.number(manifest, key), step))
+            kit::value(tokens, format_item_value(manifest, key, values.number(manifest, key), step))
         }
         Item::Slider { key, min, max, step, .. } => {
             let value = values.number(manifest, key);
-            let shown = format_value(value, step);
+            let shown = format_item_value(manifest, key, value, step);
             below = Some(
                 slider(min..=max, value, move |next| crate::Message::Workbench(Message::Slider(key, next)))
                     .step(step)
@@ -1269,6 +1614,9 @@ fn item_row<'a>(
                 button.into()
             }
         }
+        Item::Member { key, option, .. } if locked => {
+            kit::toggle_fixed(tokens, f32::from(values.member(manifest, key, option)))
+        }
         Item::Member { key, option, .. } => {
             let on = values.member(manifest, key, option);
             kit::toggle(
@@ -1279,8 +1627,16 @@ fn item_row<'a>(
         }
         Item::Select { key, options, .. } => {
             let current = values.choice(manifest, key);
-            let choices = options.iter().map(|choice| (choice.value, i18n.t(choice.label_key).to_owned())).collect();
-            kit::segmented(tokens, choices, current, None, |value| {
+            let choices = options
+                .iter()
+                .map(|choice| (choice.value, i18n.t(manifest.label(values, choice.label_key)).to_owned()))
+                .collect();
+            let unavailable: Vec<_> = options
+                .iter()
+                .filter(|choice| locked || choice.requires.is_some_and(|path| values.path(path).is_none()))
+                .map(|choice| choice.value)
+                .collect();
+            kit::segmented_available(tokens, choices, current, &unavailable, |value| {
                 crate::Message::Workbench(Message::Choice(key, value.to_owned()))
             })
         }
@@ -1308,11 +1664,22 @@ fn item_row<'a>(
         Item::Slider { hint_key: Some(hint), .. }
         | Item::Switch { hint_key: Some(hint), .. }
         | Item::Select { hint_key: Some(hint), .. }
-        | Item::Picture { hint_key: Some(hint), .. } => Some(i18n.t(hint).to_owned()),
+        | Item::Picture { hint_key: Some(hint), .. } => Some(i18n.t(manifest.label(values, hint)).to_owned()),
         _ => None,
     };
-    let label = i18n.t(item_label(item)).to_owned();
-    Row { label, hint, sub: false, below, control }
+    let label = manifest
+        .labels_when
+        .iter()
+        .find(|(key, gate, _)| *key == item.key() && values.flag(manifest, gate))
+        .map_or(item_label(item), |(_, _, label)| label);
+    let label = i18n.t(manifest.label(values, label)).to_owned();
+    Row {
+        label,
+        hint,
+        sub: matches!(item, Item::Text { .. }) || manifest.indented.contains(&item.key()),
+        below,
+        control,
+    }
 }
 
 fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
@@ -1414,6 +1781,39 @@ fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Mes
                 rows: vec![vignette, geometric],
                 foot: None,
             },
+            false,
+        ));
+        let mut rows = vec![Row {
+            label: i18n.t("theme.addCoverColor").to_owned(),
+            hint: Some(i18n.t("options.coverColorBackgroundDesc").to_owned()),
+            sub: false,
+            below: None,
+            control: kit::toggle(
+                tokens,
+                f32::from(appearance.use_cover_color_bg),
+                crate::Message::Workbench(Message::CoverColor(!appearance.use_cover_color_bg)),
+            ),
+        }];
+        if appearance.use_cover_color_bg {
+            rows.push(Row {
+                label: i18n.t("options.previewCoverBackgroundOpacity").to_owned(),
+                hint: None,
+                sub: true,
+                control: kit::value(tokens, format!("{}%", (appearance.cover_background_opacity * 100.0).round())),
+                below: Some(
+                    slider(0.0_f32..=1.0, appearance.cover_background_opacity, |value| {
+                        crate::Message::Workbench(Message::CoverOpacity(value))
+                    })
+                    .step(0.05_f32)
+                    .on_release(crate::Message::Workbench(Message::Commit))
+                    .style(move |_, _| kit::slider_style(tokens))
+                    .into(),
+                ),
+            });
+        }
+        page = page.push(kit::group(
+            tokens,
+            Group { title: i18n.t("options.previewCoverBackgroundSettings").to_owned(), bare: false, rows, foot: None },
             false,
         ));
     }
@@ -2419,6 +2819,30 @@ fn subtitle_page<'a>(
             crate::Message::Workbench(Message::SubtitleUpcomingBlur(!subtitle.upcoming_blur)),
         ),
     });
+    subtitle_rows.push(Row {
+        label: i18n.t("options.showHarmonySubtitle").to_owned(),
+        hint: Some(i18n.t("options.showHarmonySubtitleDesc").to_owned()),
+        sub: false,
+        below: None,
+        control: kit::toggle(
+            tokens,
+            f32::from(subtitle.show_harmony),
+            crate::Message::Workbench(Message::HarmonyShow(!subtitle.show_harmony)),
+        ),
+    });
+    if subtitle.show_harmony {
+        subtitle_rows.push(Row {
+            label: i18n.t("options.harmonySubtitleBackground").to_owned(),
+            hint: Some(i18n.t("options.harmonySubtitleBackgroundDesc").to_owned()),
+            sub: true,
+            below: None,
+            control: kit::toggle(
+                tokens,
+                f32::from(subtitle.harmony_background),
+                crate::Message::Workbench(Message::HarmonyBackground(!subtitle.harmony_background)),
+            ),
+        });
+    }
     let mut font_rows = vec![Row {
         label: i18n.t("options.subtitleFontInheritsLyrics").to_owned(),
         hint: Some(i18n.t("options.subtitleFontInheritsLyricsDesc").to_owned()),
@@ -2542,32 +2966,6 @@ fn source_row<'a>(
     }
 }
 
-fn global_page<'a>(i18n: &'a I18n, tokens: Tokens) -> Element<'a, crate::Message> {
-    let modes = vec![
-        ("off", i18n.t("options.smartBeatOff").to_owned()),
-        ("cached", i18n.t("options.smartBeatCached").to_owned()),
-        ("on", i18n.t("options.smartBeatOn").to_owned()),
-    ];
-    let mode = Row {
-        label: i18n.t("options.smartBeatMode").to_owned(),
-        hint: Some(i18n.t("options.smartBeatDesc_off").to_owned()),
-        sub: false,
-        below: None,
-        control: disabled_modes(tokens, modes.into_iter().map(|(_, label)| label).collect()),
-    };
-    let locked = text(i18n.t("options.smartBeatUnavailable")).size(crate::typeface::size::HINT).color(tokens.t3);
-    column![
-        kit::group(
-            tokens,
-            Group { title: i18n.t("options.smartBeat").to_owned(), bare: false, rows: vec![mode], foot: None },
-            true
-        ),
-        locked,
-    ]
-    .padding(Padding { left: 24.0, right: 12.0, bottom: 40.0, top: 0.0 })
-    .into()
-}
-
 struct TileIn<'a> {
     i18n: &'a I18n,
     tokens: Tokens,
@@ -2584,6 +2982,9 @@ struct TileIn<'a> {
 fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
     let TileIn { i18n, tokens, theme, lyrics, style, font_scale, chosen, pictures, tuning, audio } = tile;
     let scene = Scene {
+        smart_beat: Default::default(),
+        paused: false,
+        daylight: false,
         style,
         lyrics,
         time: folia_visualizer::POSTER_TIME,
@@ -2597,6 +2998,8 @@ fn tile<'a>(tile: TileIn<'a>) -> Element<'a, crate::Message> {
         artist: lyrics.artist.clone().unwrap_or_default(),
         album: String::new(),
         portrait: None,
+        render_quality: folia_core::LyricRenderQuality::default(),
+        static_mode: false,
         typography: folia_visualizer::Typography::default(),
         preview: true,
         audio,
@@ -2645,6 +3048,19 @@ fn source_button<'a>(label: &'a str, on: bool, message: Message, ink: Color) -> 
             ..button::Style::default()
         });
     if on { button.into() } else { button.on_press(crate::Message::Workbench(message)).into() }
+}
+
+fn format_item_value(manifest: Manifest, key: &str, value: f32, step: f32) -> String {
+    use folia_visualizer::NumberFormat;
+    let prefix = |signed| if signed && value > 0.0 { "+" } else { "" };
+    match manifest.number_formats.iter().find(|(field, _)| *field == key).map(|(_, format)| *format) {
+        Some(NumberFormat::Times { base }) => format!("{:.2}x", value + base),
+        Some(NumberFormat::Percent { scale, signed }) => format!("{}{:.0}%", prefix(signed), value * scale),
+        Some(NumberFormat::Pixels { decimals, signed }) => format!("{}{value:.decimals$}px", prefix(signed)),
+        Some(NumberFormat::Degrees) => format!("{value:.0}°"),
+        Some(NumberFormat::Seconds) => format!("{value:.1}s"),
+        None => format_value(value, step),
+    }
 }
 
 fn format_value(value: f32, step: f32) -> String {

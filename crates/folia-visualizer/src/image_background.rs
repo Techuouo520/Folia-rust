@@ -91,7 +91,9 @@ impl<Message> shader::Program<Message> for Layer<'_, Message> {
             };
         }
         let tuning = self.ground.monet;
-        let moving = self.ground.player && tuning.drift && tuning.drift_strength > 0.0;
+        let common = self.ground.mode == crate::Background::Common;
+        let moving =
+            !common && self.ground.player && !self.ground.static_mode && tuning.drift && tuning.drift_strength > 0.0;
         let drift = if moving {
             state.drift.at((now - state.origin.get()) / 1000.0, tuning.drift_strength)
         } else {
@@ -107,12 +109,17 @@ impl<Message> shader::Program<Message> for Layer<'_, Message> {
             uniforms: {
                 let values = Uniforms {
                     size: [bounds.width, bounds.height, 1920.0, 1080.0],
-                    drift: [drift[0], drift[1], drift[2], tuning.overlay],
+                    drift: [
+                        drift[0],
+                        drift[1],
+                        drift[2],
+                        if common { self.ground.cover_overlay.unwrap_or(1.0).clamp(0.0, 1.0) } else { tuning.overlay },
+                    ],
                     background: rgb(self.ground.theme.background),
                     primary: rgb(self.ground.theme.primary),
                     accent: rgb(self.ground.theme.accent),
                     layout: [
-                        f32::from(tuning.half),
+                        if common { -1.0 } else { f32::from(tuning.half) },
                         tuning.offset,
                         f32::from(self.ground.daylight),
                         f32::from(self.ground.picture.is_some()),

@@ -1,0 +1,16 @@
+# Pinned MIT model exports used by the native WGSL analysis runtimes and release packaging.
+mirrors = ["https://github.com/chthollyphile/folia-major/releases/download/models-v1/{file}", "https://hf-mirror.com/HUAI4236/folia-models/resolve/main/{file}", "https://huggingface.co/HUAI4236/folia-models/resolve/main/{file}", "https://github.com/AZURE-HUAI/folia-models/releases/download/weights-v1/{file}"]
+
+[[models]]
+file = "beat_this-wgsl.bin"
+bytes = 41102271
+sha256 = "6365ae5ba2e42922772da01fbfd0bde8dd20b7362a679018e78a5f251fe8a967"
+license = "MIT"
+upstream = "https://github.com/CPJKU/beat_this"
+
+[[models]]
+file = "htdemucs-wgsl.bin"
+bytes = 91838176
+sha256 = "27d5331a74a4e23b18172b3d59d0378e698fd79bc0d0fed3316da77e3a37d8d1"
+license = "MIT"
+upstream = "https://huggingface.co/itamiArika/htdemucs-int8-memory"

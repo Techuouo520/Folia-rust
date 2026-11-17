@@ -5,7 +5,7 @@ use iced::widget::canvas::{Frame, Path};
 use iced::{Point, Rectangle, border::Radius};
 
 use crate::color;
-use crate::tuning::{Group, Item, Manifest, PictureChoice};
+use crate::tuning::{Group, Item, Manifest, NumberFormat, PictureChoice};
 
 fn scheme_bars(frame: &mut Frame, rect: Rectangle, theme: &Theme, upright: iced::Color, slanted: iced::Color) {
     frame.fill_rectangle(rect.position(), rect.size(), color(theme.background, 1.0));
@@ -96,5 +96,9 @@ const GROUPS: &[Group] = &[Group { id: "vis-tilt", title_key: "options.tiltSetti
 pub fn manifest() -> Manifest {
     let mut manifest = Manifest::plain("tilt_tuning", &[], GROUPS);
     manifest.reset_key = Some("notifications.tiltReset");
+    manifest.number_formats = &[
+        ("splitProbability", NumberFormat::Percent { scale: 100.0, signed: false }),
+        ("tiltStyleProbability", NumberFormat::Percent { scale: 100.0, signed: false }),
+    ];
     manifest
 }

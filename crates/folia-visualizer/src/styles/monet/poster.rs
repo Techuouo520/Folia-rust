@@ -23,6 +23,8 @@ pub struct Cache {
     rail: Rail,
     artist: Option<(ArtistKey, Option<Raster>)>,
     pin: Pin,
+    description_hover: Hover,
+    portrait_hover: Hover,
     hangers: Vec<(([u32; 6], folia_core::Rgb), Handle)>,
     /// Wall clock of the latest frame, for the hanger's pulse.
     now: Option<Instant>,
@@ -30,6 +32,41 @@ pub struct Cache {
 
 /// What the artist raster was made for: label, size, colour, pixel density and the width it was cut to.
 type ArtistKey = (String, u32, [u8; 4], u32, u32, iced::Font);
+
+#[derive(Default)]
+struct Hover {
+    on: bool,
+    from: f32,
+    changed: Option<Instant>,
+}
+
+impl Hover {
+    fn opacity(&self, now: Instant) -> f32 {
+        let target = if self.on { 1.0 } else { 0.0 };
+        let Some(changed) = self.changed else { return target };
+        crate::tween(
+            f64::from(self.from),
+            f64::from(target),
+            now.saturating_duration_since(changed).as_secs_f64(),
+            0.2,
+            crate::Ease::new(0.4, 0.0, 0.2, 1.0),
+        ) as f32
+    }
+
+    fn set(&mut self, on: bool, now: Instant) -> bool {
+        if self.on == on {
+            return false;
+        }
+        self.from = self.opacity(now);
+        self.on = on;
+        self.changed = Some(now);
+        true
+    }
+
+    fn animating(&self, now: Instant) -> bool {
+        self.changed.is_some_and(|changed| now.saturating_duration_since(changed).as_secs_f64() < 0.2)
+    }
+}
 
 /// The hanger: a click enters edit mode, a drag moves the portrait, a click again leaves.
 #[derive(Debug, Default)]
@@ -73,7 +110,12 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size,
     let rail_p = intro(time, 0.65, 1.2);
     rail::draw(frame, place, scene, &layout, &mut cache.rail, rail_p, 20.0 * (1.0 - rail_p));
     if let Some(capsule) = layout.capsule {
-        description(frame, scene, &layout, capsule, intro(time, 0.95, 1.0));
+        let opacity = if values.choice(manifest, "descriptionVisibility") == "always" {
+            1.0
+        } else {
+            cache.description_hover.opacity(cache.now.unwrap_or_else(Instant::now))
+        };
+        description(frame, scene, &layout, capsule, intro(time, 0.95, 1.0), opacity);
     }
     let square = values.choice(manifest, "portraitStyle") == "square";
     let hanger = values.flag(manifest, "showPortraitDragHanger");
@@ -90,6 +132,7 @@ fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Lay
     let theme = scene.theme;
     let time = scene.time;
     let artist_p = intro(time, 0.15, 1.2);
+    let side = if layout.mirrored { -1.0 } else { 1.0 };
     if artist_p > 0.0 {
         let label = if scene.artist.trim().is_empty() { "Monet" } else { scene.artist.trim() };
         let ink = color(theme.primary, 0.96);
@@ -120,13 +163,14 @@ fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Lay
         }
         if let Some((_, Some(raster))) = &cache.artist {
             let at = Point::new(
-                layout.artist.x - 30.0 * (1.0 - artist_p) - raster.left,
+                layout.artist.x + if layout.mirrored { layout.artist.width - raster.width } else { -raster.left }
+                    - 30.0 * (1.0 - artist_p) * side,
                 layout.artist.y - 10.0 * (1.0 - artist_p),
             );
             let bounds = Rectangle::new(at, Size::new(raster.width, raster.height));
             place.clip(
                 frame,
-                Rectangle { x: layout.artist.x - 30.0, width: layout.header_width + 30.0, ..bounds },
+                Rectangle { x: layout.artist.x - 30.0, width: layout.header_width + 60.0, ..bounds },
                 |inner| {
                     inner.draw_image(bounds, canvas::Image::new(raster.handle.clone()).opacity(artist_p));
                 },
@@ -146,16 +190,22 @@ fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Lay
     if title_p <= 0.0 {
         return;
     }
-    let dx = -40.0 * (1.0 - title_p);
+    let dx = -40.0 * (1.0 - title_p) * side;
     let title = if scene.title.trim().is_empty() { "Monet" } else { scene.title.trim() };
     let rows = title_rows(title, layout.title_px, layout.header_width, scene.typography.font(SEMIBOLD));
     let line_height = layout.title_px * 1.06;
     let shadow = ink::blur_offsets(18.0, (0.0, 14.0));
     let shade = color(theme.background, ink::split_alpha(0.28 * title_p, shadow.len()));
     for (index, row) in rows.iter().enumerate() {
+        let x = if layout.mirrored {
+            layout.title.x + layout.title.width
+                - text::shape(row, layout.title_px, scene.typography.font(SEMIBOLD)).width
+        } else {
+            layout.title.x
+        };
         let pen = ink::Line {
             content: row,
-            at: Point::new(layout.title.x + dx, layout.title.y + index as f32 * line_height),
+            at: Point::new(x + dx, layout.title.y + index as f32 * line_height),
             px: layout.title_px,
             line_height,
             font: scene.typography.font(SEMIBOLD),
@@ -174,7 +224,16 @@ fn heading(frame: &mut Frame, scene: &Scene<'_>, cache: &mut Cache, layout: &Lay
     put_text(
         frame,
         &album,
-        Point::new(layout.album.x + dx, layout.album.y),
+        Point::new(
+            layout.album.x
+                + dx
+                + if layout.mirrored {
+                    layout.album.width - text::shape(&album, 14.0, iced::Font::DEFAULT).width
+                } else {
+                    0.0
+                },
+            layout.album.y,
+        ),
         14.0,
         20.0,
         iced::Font::DEFAULT,
@@ -237,8 +296,8 @@ fn put_text(frame: &mut Frame, content: &str, at: Point, px: f32, line_height: f
 }
 
 /// The capsule: accent dot and the theme's description or name (`VisualizerMonet.tsx` 333-353).
-fn description(frame: &mut Frame, scene: &Scene<'_>, layout: &Layout, rect: Rectangle, progress: f32) {
-    if progress <= 0.0 {
+fn description(frame: &mut Frame, scene: &Scene<'_>, layout: &Layout, rect: Rectangle, progress: f32, opacity: f32) {
+    if progress <= 0.0 || opacity <= 0.0 {
         return;
     }
     let theme = scene.theme;
@@ -248,6 +307,7 @@ fn description(frame: &mut Frame, scene: &Scene<'_>, layout: &Layout, rect: Rect
         frame.translate(Vector::new(origin.x, origin.y + 10.0 * (1.0 - progress)));
         frame.scale(scale);
         frame.translate(Vector::new(-origin.x, -origin.y));
+        let progress = progress * opacity;
         let pill = Path::rounded_rectangle(rect.position(), rect.size(), Radius::from(rect.height / 2.0));
         frame.fill(&pill, color(theme.background, 0.18 * progress));
         let edge = Rectangle { x: rect.x + 0.5, y: rect.y + 0.5, width: rect.width - 1.0, height: rect.height - 1.0 };
@@ -280,7 +340,7 @@ fn portrait(
     square: bool,
     hanger: bool,
 ) {
-    let (Some(column), Some(rect), Some(wrapper)) = (layout.column, layout.portrait, layout.wrapper) else { return };
+    let (Some(column), Some(rect)) = (layout.column, layout.portrait) else { return };
     let time = scene.time;
     let progress = intro(time, 0.25, 1.6);
     if progress <= 0.0 {
@@ -289,7 +349,7 @@ fn portrait(
     let theme = scene.theme;
     let grow = 0.95 + 0.05 * progress;
     let center = column.center();
-    let shift = Vector::new(50.0 * (1.0 - progress), 0.0);
+    let shift = Vector::new(50.0 * (1.0 - progress) * if layout.mirrored { -1.0 } else { 1.0 }, 0.0);
     let moved = |r: Rectangle| Rectangle {
         x: center.x + (r.x - center.x) * grow + shift.x,
         y: center.y + (r.y - center.y) * grow,
@@ -299,15 +359,10 @@ fn portrait(
     let sway = if theme.intensity == AnimationIntensity::Chaotic { motion::portrait_sway(time) } else { (0.0, 0.0) };
     let swayed = |r: Rectangle| Rectangle { x: r.x + sway.0, y: r.y + sway.1, ..moved(r) };
     let box_ = swayed(rect);
-    if cache.pin.editing.is_some() {
-        let left = if square { wrapper.x - wrapper.width * 0.35135 } else { wrapper.x } - 150.0;
-        let range = moved(Rectangle {
-            x: left,
-            y: wrapper.y - 12.0,
-            width: wrapper.x + wrapper.width - left,
-            height: wrapper.height + 24.0,
-        });
-        draw_range(frame, scene, range, grow);
+    if cache.pin.editing.is_some()
+        && let Some(range) = edit_range(scene, layout)
+    {
+        draw_range(frame, scene, moved(range), grow);
     }
     if square {
         let radius = 32.0 * grow;
@@ -341,7 +396,14 @@ fn portrait(
         plate(frame, scene, place, inner, 29.6 * grow, progress);
     }
     if hanger && let Some(pin) = layout.hanger {
-        draw_hanger(frame, scene, cache, swayed(pin), progress, grow);
+        let opacity = if cache.pin.editing.is_some()
+            || scene.tuning.choice(tuning::manifest(), "portraitHangerVisibility") == "always"
+        {
+            1.0
+        } else {
+            cache.portrait_hover.opacity(cache.now.unwrap_or_else(Instant::now))
+        };
+        draw_hanger(frame, scene, cache, swayed(pin), progress * opacity, grow);
     }
 }
 
@@ -379,7 +441,7 @@ fn draw_range(frame: &mut Frame, scene: &Scene<'_>, range: Rectangle, grow: f32)
             .with_width(2.0)
             .with_color(color(theme.primary, 0.24)),
     );
-    let button = reset_button(range);
+    let button = reset_button(range, scene.tuning.flag(tuning::manifest(), "mirrorLayout"));
     let center = button.center();
     ink::box_shadow(frame, button, button.width / 2.0, 4.0, 12.0, Color { a: 0.12, ..Color::BLACK });
     frame.fill(&Path::circle(center, button.width / 2.0), color(theme.background, 0.86));
@@ -525,20 +587,21 @@ fn rounded_distance(x: f32, y: f32, rect: Rectangle, radius: f32) -> f32 {
     (qx.max(0.0).hypot(qy.max(0.0))) + qx.max(qy).min(0.0) - radius
 }
 
-fn reset_button(range: Rectangle) -> Rectangle {
-    Rectangle { x: range.x + range.width - 32.0, y: range.y - 40.0, width: 32.0, height: 32.0 }
+fn reset_button(range: Rectangle, mirrored: bool) -> Rectangle {
+    Rectangle {
+        x: if mirrored { range.x } else { range.x + range.width - 32.0 },
+        y: range.y - 40.0,
+        width: 32.0,
+        height: 32.0,
+    }
 }
 
 fn edit_range(scene: &Scene<'_>, layout: &Layout) -> Option<Rectangle> {
     let wrapper = layout.wrapper?;
     let square = scene.tuning.choice(tuning::manifest(), "portraitStyle") == "square";
-    let left = if square { wrapper.x - wrapper.width * 0.35135 } else { wrapper.x } - 150.0;
-    Some(Rectangle {
-        x: left,
-        y: wrapper.y - 12.0,
-        width: wrapper.x + wrapper.width - left,
-        height: wrapper.height + 24.0,
-    })
+    let reach = if square { wrapper.width * 0.35135 } else { 0.0 } + 150.0;
+    let left = if layout.mirrored { wrapper.x } else { wrapper.x - reach };
+    Some(Rectangle { x: left, y: wrapper.y - 12.0, width: wrapper.width + reach, height: wrapper.height + 24.0 })
 }
 
 /// Pointer and wheel input on a live stage. The drag preview stays in the canvas state; letting go publishes one
@@ -563,7 +626,11 @@ pub fn update<Message: From<super::Event>>(
     match event {
         canvas::Event::Window(iced::window::Event::RedrawRequested(now)) => {
             cache.now = Some(*now);
-            if cache.pin.editing.is_some() || rail::settling(&cache.rail, *now) {
+            if cache.pin.editing.is_some()
+                || rail::settling(&cache.rail, *now)
+                || cache.description_hover.animating(*now)
+                || cache.portrait_hover.animating(*now)
+            {
                 return Some(canvas::Action::request_redraw());
             }
             rail::release_due(&cache.rail).map(canvas::Action::request_redraw_at)
@@ -588,7 +655,9 @@ pub fn update<Message: From<super::Event>>(
             let hanger = hanger?;
             let pin = &mut cache.pin;
             if pin.editing.is_some()
-                && edit_range(scene, &layout).map(reset_button).is_some_and(|button| button.contains(at))
+                && edit_range(scene, &layout)
+                    .map(|range| reset_button(range, layout.mirrored))
+                    .is_some_and(|button| button.contains(at))
             {
                 pin.live = Some(0.0);
                 return Some(canvas::Action::request_redraw().and_capture());
@@ -599,7 +668,21 @@ pub fn update<Message: From<super::Event>>(
             pin.down = Some(Down { grab: at.x, from: offset, moved: false });
             Some(canvas::Action::request_redraw().and_capture())
         }
-        canvas::Event::Mouse(mouse::Event::CursorMoved { .. }) => {
+        canvas::Event::Mouse(mouse::Event::CursorMoved { .. } | mouse::Event::CursorLeft) => {
+            let now = Instant::now();
+            let description = layout.capsule.map(|rect| Rectangle {
+                x: rect.x - 24.0,
+                y: rect.y - 16.0,
+                width: rect.width + 48.0,
+                height: rect.height + 40.0,
+            });
+            let description_changed =
+                cache.description_hover.set(description.zip(at).is_some_and(|(rect, at)| rect.contains(at)), now);
+            let portrait_changed = cache.portrait_hover.set(
+                layout.portrait.zip(at).is_some_and(|(rect, at)| rect.contains(at))
+                    || hanger.zip(at).is_some_and(|(rect, at)| rect.expand(12.0).contains(at)),
+                now,
+            );
             let pin = &mut cache.pin;
             let hover = hanger.zip(at).is_some_and(|(hanger, at)| hanger.contains(at));
             let hovered = hover != pin.hover;
@@ -607,10 +690,11 @@ pub fn update<Message: From<super::Event>>(
             match (pin.down.as_mut(), pin.editing, at) {
                 (Some(down), Some(_), Some(at)) if down.moved || (at.x - down.grab).abs() > 3.0 => {
                     down.moved = true;
-                    pin.live = Some((down.from + at.x - down.grab).clamp(-150.0, 0.0));
+                    let side = if layout.mirrored { -1.0 } else { 1.0 };
+                    pin.live = Some((down.from + (at.x - down.grab) * side).clamp(-150.0, 0.0));
                     Some(canvas::Action::request_redraw().and_capture())
                 }
-                _ => hovered.then(canvas::Action::request_redraw),
+                _ => (hovered || description_changed || portrait_changed).then(canvas::Action::request_redraw),
             }
         }
         canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
@@ -651,7 +735,9 @@ pub fn interaction(scene: &Scene<'_>, cache: &Cache, size: Size, at: Option<Poin
         return mouse::Interaction::None;
     }
     let over_reset = cache.pin.editing.is_some()
-        && edit_range(scene, &layout).map(reset_button).is_some_and(|button| button.contains(at));
+        && edit_range(scene, &layout)
+            .map(|range| reset_button(range, layout.mirrored))
+            .is_some_and(|button| button.contains(at));
     if over_reset || layout.hanger.is_some_and(|hanger| hanger.contains(at)) {
         mouse::Interaction::Pointer
     } else {

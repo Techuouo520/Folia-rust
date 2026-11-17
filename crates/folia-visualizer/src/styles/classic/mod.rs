@@ -35,6 +35,7 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<LineLayout>, frame: &mut 
         breathing: f64::from(scene.tuning.number(manifest, "breathingFloatMultiplier")),
         word_spacing: f64::from(scene.tuning.number(manifest, "wordSpacing")),
         legacy: scene.tuning.choice(manifest, "useLegacyLayout") == "true",
+        avoid_overlap: scene.tuning.flag(manifest, "avoidOverlap"),
     };
     let salt = scene.layout_key();
     let theme = scene.theme;
@@ -63,12 +64,32 @@ pub fn draw(scene: &Scene<'_>, cache: &mut LayoutCache<LineLayout>, frame: &mut 
 }
 
 fn build(line: &Line, scene: &Scene<'_>, size: Size, tuning: ClassicTuning) -> Rc<LineLayout> {
-    let font_px = font_px(size.width, scene.font_scale);
+    let original_font = font_px(size.width, scene.font_scale);
+    let mut font_px = original_font;
     let words = if tuning.legacy {
         line.words.clone()
     } else {
         folia_lyrics::display_words(line, &folia_lyrics::layout_units(line, true))
     };
+    loop {
+        let (configs, height, centers) = arrange(line, scene, size, tuning, &words, font_px);
+        let fit = ((size.height * 0.7 - PADDING * 2.0).max(1.0) / height).min(1.0);
+        let next = (font_px * fit * 0.98).max(original_font * 0.5);
+        if !tuning.avoid_overlap || tuning.legacy || fit >= 1.0 || next >= font_px - original_font * 0.005 {
+            return Rc::new(LineLayout { words, configs, centers, font_px });
+        }
+        font_px = next;
+    }
+}
+
+fn arrange(
+    line: &Line,
+    scene: &Scene<'_>,
+    size: Size,
+    tuning: ClassicTuning,
+    words: &[Word],
+    font_px: f32,
+) -> (Vec<WordConfig>, f32, Vec<Point>) {
     let widths: Vec<f32> = words
         .iter()
         .map(|word| measure(&word.text, font_px, scene.typography.font(crate::BOLD), f32::INFINITY).width)
@@ -80,7 +101,22 @@ fn build(line: &Line, scene: &Scene<'_>, size: Size, tuning: ClassicTuning) -> R
     let max_width = (size.width - PADDING * 2.0).clamp(1.0, MAX_LINE_WIDTH);
     let left = (size.width - max_width) / 2.0;
     let justify = justify(seed, scene.theme.intensity, interlude);
-    let placed = wrap(&widths, &margins, font_px * LINE_HEIGHT, max_width, left, size.height / 2.0, justify);
-    let centers = placed.iter().map(|p| Point::new(p.x, p.y)).collect();
-    Rc::new(LineLayout { words, configs, centers, font_px })
+    let (mut top, mut bottom) = (0.0_f64, 0.0_f64);
+    if tuning.avoid_overlap && !tuning.legacy && !interlude {
+        for (width, config) in widths.iter().zip(&configs) {
+            let reach = glow::word_reach(f64::from(*width), f64::from(font_px), config);
+            let over = reach[1] - f64::from(font_px * LINE_HEIGHT) / 2.0;
+            top = top.max(over - config.y);
+            bottom = bottom.max(over + config.y);
+        }
+    }
+    let gap = (top + bottom).ceil() as f32;
+    let (top, bottom) = (top.ceil() as f32, bottom.ceil() as f32);
+    let placed = wrap(&widths, &margins, font_px * LINE_HEIGHT + gap, max_width, left, size.height / 2.0, justify);
+    let height = placed.last().zip(placed.first()).map_or(0.0, |(last, first)| last.y - first.y)
+        + font_px * LINE_HEIGHT
+        + top
+        + bottom;
+    let centers = placed.iter().map(|p| Point::new(p.x, p.y + (top - bottom) / 2.0)).collect();
+    (configs, height, centers)
 }

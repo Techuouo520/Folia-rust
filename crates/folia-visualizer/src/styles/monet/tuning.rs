@@ -5,11 +5,18 @@ use iced::widget::canvas::{Frame, LineCap, Path, Stroke};
 use iced::{Point, Rectangle, border::Radius};
 
 use crate::color;
-use crate::tuning::{Choice, Group, Item, Manifest, PictureChoice};
+use crate::tuning::{Choice, Group, Item, Manifest, NumberFormat, PictureChoice};
 
 const SOURCE: &[Choice] = &[
     Choice { value: "cover", label_key: "options.monetPortraitSourceCover", requires: None },
     Choice { value: "custom", label_key: "options.monetPortraitSourceCustom", requires: Some("portraitPath") },
+    Choice { value: "none", label_key: "options.monetPortraitSourceNone", requires: None },
+];
+
+const VISIBILITY: &[Choice] = &[
+    Choice { value: "auto", label_key: "options.monetChromeVisibilityAuto", requires: None },
+    Choice { value: "always", label_key: "options.monetChromeVisibilityAlways", requires: None },
+    Choice { value: "hidden", label_key: "options.monetChromeVisibilityHidden", requires: None },
 ];
 
 fn square_portrait(frame: &mut Frame, rect: Rectangle, theme: &Theme) {
@@ -88,6 +95,7 @@ const LYRICS: &[Item] = &[
         step: 0.05,
         default: 1.2,
     },
+    Item::Switch { key: "mirrorLayout", label_key: "options.monetMirrorLayout", hint_key: None, default: false },
     Item::Switch {
         key: "keywordColoringEnabled",
         label_key: "options.monetKeywordColoring",
@@ -95,6 +103,19 @@ const LYRICS: &[Item] = &[
         default: true,
     },
     Item::Switch { key: "showDescription", label_key: "options.monetShowDescription", hint_key: None, default: true },
+    Item::Select {
+        key: "descriptionVisibility",
+        label_key: "options.monetShowDescription",
+        hint_key: None,
+        options: VISIBILITY,
+        default: "auto",
+    },
+    Item::Text {
+        key: "customDescription",
+        label_key: "options.monetCustomDescription",
+        placeholder_key: "options.monetCustomDescriptionPlaceholder",
+        max_length: 120,
+    },
 ];
 
 const PORTRAIT: &[Item] = &[
@@ -119,6 +140,13 @@ const PORTRAIT: &[Item] = &[
         label_key: "options.monetPortraitDragHanger",
         hint_key: None,
         default: true,
+    },
+    Item::Select {
+        key: "portraitHangerVisibility",
+        label_key: "options.monetPortraitDragHanger",
+        hint_key: None,
+        options: VISIBILITY,
+        default: "auto",
     },
     Item::Slider {
         key: "portraitOffsetX",
@@ -158,8 +186,17 @@ pub fn manifest() -> Manifest {
     // `MonetSettingsPanel.tsx` reveals the audio style only while the spectrum is on.
     manifest.hidden_unless = &[("audioStyle", "showAudioVisualization")];
     manifest.paths = &["portraitPath"];
-    manifest.concealed = &["portraitOffsetX"];
+    manifest.concealed = &["portraitOffsetX", "showDescription", "showPortraitDragHanger"];
+    manifest.hidden_choices = &[
+        ("customDescription", "descriptionVisibility", "hidden"),
+        ("portraitStyle", "portraitSource", "none"),
+        ("portraitHangerVisibility", "portraitSource", "none"),
+    ];
+    manifest.visibility_switches =
+        &[("descriptionVisibility", "showDescription"), ("portraitHangerVisibility", "showPortraitDragHanger")];
+    manifest.labels_when = &[("portraitSource", "mirrorLayout", "options.monetPortraitSourceMirrored")];
     manifest.reset_key = Some("notifications.monetReset");
+    manifest.number_formats = &[("fontScale", NumberFormat::Times { base: 0.0 })];
     manifest
 }
 

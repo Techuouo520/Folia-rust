@@ -14,6 +14,7 @@ pub const ITALIC: iced::Font = iced::Font { style: iced::font::Style::Italic, ..
 /// Every box of the poster in stage pixels.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
+    pub mirrored: bool,
     pub lyric_px: f32,
     pub inactive_px: f32,
     pub translation_px: f32,
@@ -86,15 +87,16 @@ pub fn layout(scene: &Scene<'_>, size: Size, offset: f32) -> Layout {
     let title_px = clamp_font(1.45, 3.3, fixed3(2.8 * large), w, 1.0);
     let artist_px = clamp_font(1.0, 1.8, fixed3(1.8 * large), w, 1.0);
     let row_x = (w - row_width) / 2.0;
-    let shows_portrait = w >= 768.0;
+    let shows_portrait = w >= 768.0 && values.choice(manifest, "portraitSource") != "none";
     let column_width = if shows_portrait { (0.28 * w).clamp(220.0, portrait_max.max(220.0)) } else { 0.0 };
     let pad_x = by_width(w, 20.0, 32.0, 56.0, 80.0);
     let pad_y = by_width(w, 20.0, 24.0, 32.0, 32.0);
     let content_x = row_x + pad_x;
     let content_width = (row_width - column_width - pad_x * 2.0).max(0.0);
     let inner_width = (0.26 * w).clamp(210.0, inner_max.max(210.0));
-    let bleed = if square { (0.35135 * inner_width - 3.0 * REM).max(0.0) } else { 0.0 };
-    let header_width = (content_width - bleed - saved.min(0.0).abs()).max(12.0 * REM).min(content_width);
+    let bleed = if square && shows_portrait { (0.35135 * inner_width - 3.0 * REM).max(0.0) } else { 0.0 };
+    let shift = if shows_portrait { saved.min(0.0).abs() } else { 0.0 };
+    let header_width = (content_width - bleed - shift).max(12.0 * REM).min(content_width);
 
     let artist_box = artist_px * 1.5;
     let title_text = if scene.title.is_empty() { "Monet" } else { scene.title.as_str() };
@@ -174,7 +176,8 @@ pub fn layout(scene: &Scene<'_>, size: Size, offset: f32) -> Layout {
     let audio_pad = by_width(w, 20.0, 32.0, 56.0, 56.0);
     let audio_width = (0.55 * w).min(450.0);
     let audio = Rectangle { x: audio_pad, y: h - 40.0, width: (audio_width - audio_pad * 2.0).max(0.0), height: 40.0 };
-    Layout {
+    let mut layout = Layout {
+        mirrored: values.flag(manifest, "mirrorLayout"),
         lyric_px,
         inactive_px,
         translation_px,
@@ -196,7 +199,24 @@ pub fn layout(scene: &Scene<'_>, size: Size, offset: f32) -> Layout {
         portrait,
         hanger,
         audio,
+    };
+    if layout.mirrored {
+        let reflect = |rect: Rectangle| Rectangle { x: w - rect.x - rect.width, ..rect };
+        layout.artist = reflect(layout.artist);
+        layout.rule = reflect(layout.rule);
+        layout.title = reflect(layout.title);
+        layout.album = reflect(layout.album);
+        layout.heading = reflect(layout.heading);
+        layout.rail = reflect(layout.rail);
+        layout.capsule = layout.capsule.map(reflect);
+        layout.description = reflect(layout.description);
+        layout.column = layout.column.map(reflect);
+        layout.wrapper = layout.wrapper.map(reflect);
+        layout.portrait = layout.portrait.map(reflect);
+        layout.hanger = layout.hanger.map(reflect);
+        layout.audio = reflect(layout.audio);
     }
+    layout
 }
 
 /// The right column's left padding and content width: `px-3 pr-5 sm:pr-8 lg:pr-10 xl:pr-12`.
@@ -207,7 +227,11 @@ fn column_box(width: f32, column: f32) -> (f32, f32) {
 
 /// `theme.description || theme.name || 'Monet'`, upper-cased like the capsule's `uppercase`.
 pub fn capsule_label(scene: &Scene<'_>) -> String {
-    let name =
-        scene.theme.description.as_deref().filter(|text| !text.trim().is_empty()).unwrap_or(&scene.theme.name).trim();
+    let custom = scene.tuning.text("customDescription").trim();
+    let name = if custom.is_empty() {
+        scene.theme.description.as_deref().filter(|text| !text.trim().is_empty()).unwrap_or(&scene.theme.name).trim()
+    } else {
+        custom
+    };
     if name.is_empty() { "MONET".to_owned() } else { name.to_uppercase() }
 }

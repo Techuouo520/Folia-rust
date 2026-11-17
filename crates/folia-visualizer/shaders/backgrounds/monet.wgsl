@@ -40,6 +40,11 @@ fn stop4(x: f32, positions: vec4<f32>, values: vec4<f32>) -> f32 {
 }
 @fragment
 fn fs(in: Vertex) -> @location(0) vec4<f32> {
+    if (u.placement.x < 0.) {
+        let image = textureSample(poster, poster_sampler, in.uv);
+        let base = mix(u.background.rgb, image.rgb, image.a * u.placement.w);
+        return vec4<f32>(mix(base, u.background.rgb, u.drift.w), 1.);
+    }
     let half_pane = u.placement.x > .5;
     let pane = select(1., select(.72, select(.68, .60, u.size.x >= 1024.), u.size.x >= 640.), half_pane);
     var uv = in.uv;

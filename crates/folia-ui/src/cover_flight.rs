@@ -75,6 +75,9 @@ impl Flight {
     }
 
     fn elapsed(&self, now: Instant) -> f32 {
+        if crate::motion::reduced(folia_store::MotionSurface::CollectionMorph) {
+            return self.duration() + LANDING_WAIT_MS;
+        }
         now.saturating_duration_since(self.started).as_secs_f32() * 1000.0
     }
 

@@ -8,6 +8,7 @@ pub mod glyphs;
 mod pipeline;
 mod plate;
 mod prepared;
+pub mod quality;
 mod scene;
 pub mod text_run;
 pub mod typeface;
@@ -16,13 +17,13 @@ mod wash;
 pub use backdrop::{
     GlassBench, Image as CoverImage, Program as Backdrop, PublisherGuard, Quad as CoverQuad, Scene as BackdropScene,
     Shot, UnderlayOverlay, bench_glass, blur_source, copy_underlay, draw_source, image_key, paint_external,
-    paint_over_underlay, preview_wall, read_picture, release as release_backdrop, release_underlay, resident_bytes,
-    underlay_held, was_wanted as blur_wanted,
+    paint_over_underlay, preview_wall, read_picture, release as release_backdrop, release_source, release_underlay,
+    resident_bytes, underlay_held, was_wanted as blur_wanted,
 };
 #[cfg(feature = "dev")]
-pub use backdrop::{external_paints, underlay_binds};
-pub use blur::{Pyramid, levels_for_radius, pyramid_bytes};
-pub use frame::grain_frame;
+pub use backdrop::{external_paints, foreground_held, underlay_binds};
+pub use blur::{Pyramid, levels_for_radius, pyramid_bytes, source_size};
+pub use frame::{frames_at, grain_frame};
 pub use plate::{Plate, compile_plate, css_saturate, glass_over, source_over, to_linear_channel, to_srgb_channel};
 pub use scene::{Program as StyleScene, capture as capture_canvas, capture_layers};
 pub use wash::{Glow, Veil, Wash};

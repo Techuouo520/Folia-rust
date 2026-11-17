@@ -51,6 +51,16 @@ impl Style {
         !matches!(self, Style::Still | Style::Nebbia)
     }
 
+    pub fn analysis_sources(
+        self,
+        tables: &std::collections::BTreeMap<String, toml::Value>,
+    ) -> folia_core::AnalysisSources {
+        match self {
+            Self::Nebbia => crate::styles::nebbia::analysis_sources(&self.load(tables)),
+            _ => folia_core::AnalysisSources::default(),
+        }
+    }
+
     /// The style a song draws when the random setting is on: stable for one song, spread over all styles.
     pub fn random_for(song_id: i64) -> Style {
         let mixed = (song_id as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29);

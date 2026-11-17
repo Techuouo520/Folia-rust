@@ -76,6 +76,9 @@ impl SeamFlip {
     }
 
     fn elapsed(&self, now: Instant) -> f32 {
+        if crate::motion::reduced(folia_store::MotionSurface::CollectionMorph) {
+            return OUT_MS + IN_MS;
+        }
         now.saturating_duration_since(self.at).as_secs_f32() * 1000.0
     }
 }

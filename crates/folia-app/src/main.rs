@@ -77,9 +77,27 @@ fn main() -> anyhow::Result<()> {
     tracing::info!(config = %store.dir().display(), language = i18n.language().code(), "starting");
     folia_ui::install_fonts();
     let graphics_failure = i18n.t("status.graphicsInitializationFailed").to_owned();
+    let graphics: folia_store::GraphicsSettings = store.load_or_default();
+    let system_reduced_motion = graphics.motion.follow_system
+        && folia_ui::graphics::system_preference().unwrap_or_else(|error| {
+            tracing::warn!(%error, "cannot read initial system animation preference");
+            false
+        });
+    folia_render::backend::configure_power_preference(folia_ui::graphics::power_preference(graphics.gpu_preference));
 
     let init = Init {
-        appearance: store.load_or_default::<AppearanceSettings>(),
+        appearance: AppearanceSettings::load(&store).unwrap_or_else(|err| {
+            tracing::warn!(error = &err as &dyn std::error::Error, "appearance settings unreadable, using defaults");
+            AppearanceSettings::default()
+        }),
+        graphics,
+        scene: store.load_or_default::<folia_store::SceneSettings>(),
+        system_reduced_motion,
+        analysis_models: std::env::current_exe()?
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("assets")
+            .join("models"),
         theme: store.load_or_default::<folia_store::ThemeSettings>(),
         audio: store.load_or_default::<folia_store::AudioSettings>(),
         playback: store.load_or_default::<PlaybackSettings>(),

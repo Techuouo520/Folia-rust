@@ -25,23 +25,24 @@ pub fn open(
     shared: Arc<Shared>,
     tap: Producer<f32>,
     equalizer: rtrb::Consumer<Parameters>,
-) -> Result<(Output, Producer<f32>), PlayerError> {
+) -> Result<(Output, Producer<f32>, crate::room_mix::Control), PlayerError> {
     let device = cpal::default_host().default_output_device().ok_or(PlayerError::NoDevice)?;
     let supported = device.default_output_config().map_err(PlayerError::Device)?;
     let config = supported.config();
     let channels = usize::from(config.channels);
     let capacity = (f64::from(config.sample_rate) * BUFFER_SECONDS) as usize * channels;
     let (producer, consumer) = RingBuffer::new(capacity);
+    let (room, room_mixer) = crate::room_mix::Control::pair(config.sample_rate);
 
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => build::<f32>(&device, config, consumer, tap, shared, equalizer),
-        SampleFormat::F64 => build::<f64>(&device, config, consumer, tap, shared, equalizer),
-        SampleFormat::I16 => build::<i16>(&device, config, consumer, tap, shared, equalizer),
-        SampleFormat::I32 => build::<i32>(&device, config, consumer, tap, shared, equalizer),
-        SampleFormat::U16 => build::<u16>(&device, config, consumer, tap, shared, equalizer),
+        SampleFormat::F32 => build::<f32>(&device, config, consumer, tap, shared, equalizer, room_mixer),
+        SampleFormat::F64 => build::<f64>(&device, config, consumer, tap, shared, equalizer, room_mixer),
+        SampleFormat::I16 => build::<i16>(&device, config, consumer, tap, shared, equalizer, room_mixer),
+        SampleFormat::I32 => build::<i32>(&device, config, consumer, tap, shared, equalizer, room_mixer),
+        SampleFormat::U16 => build::<u16>(&device, config, consumer, tap, shared, equalizer, room_mixer),
         other => return Err(PlayerError::UnsupportedFormat(format!("{other:?}"))),
     }?;
-    Ok((Output { stream, rate: config.sample_rate, channels }, producer))
+    Ok((Output { stream, rate: config.sample_rate, channels }, producer, room))
 }
 
 fn build<T>(
@@ -51,21 +52,25 @@ fn build<T>(
     mut tap: Producer<f32>,
     shared: Arc<Shared>,
     mut equalizer: rtrb::Consumer<Parameters>,
+    mut room: crate::room_mix::Mixer,
 ) -> Result<Stream, PlayerError>
 where
     T: SizedSample + FromSample<f32>,
 {
     let channels = usize::from(config.channels);
     let mut processor = Processor::new(config.sample_rate as f32);
-    let callback = move |out: &mut [T], _: &cpal::OutputCallbackInfo| {
+    let callback = move |out: &mut [T], info: &cpal::OutputCallbackInfo| {
         processor.drain(&mut equalizer);
+        room.drain();
         if shared.take_flush() {
+            room.reset();
             let stale = consumer.slots();
             if let Ok(chunk) = consumer.read_chunk(stale) {
                 chunk.commit_all();
             }
         }
         if shared.state() != PlayerState::Playing {
+            room.silent(out.len() / channels);
             shared.starved.store(false, std::sync::atomic::Ordering::Release);
             out.fill(T::EQUILIBRIUM);
             return;
@@ -91,6 +96,7 @@ where
                 }
                 let (mut left, mut right) = (values[0], values[if channels > 1 { 1 } else { 0 }]);
                 processor.process(&mut left, &mut right);
+                room.process(&mut left, &mut right);
                 frame[0] = T::from_sample(left * volume);
                 if channels > 1 {
                     frame[1] = T::from_sample(right * volume);
@@ -112,6 +118,11 @@ where
         }
         out[available..].fill(T::EQUILIBRIUM);
         shared.add_played((available / channels) as u64);
+        shared.record_output(
+            u64::try_from(info.timestamp().playback.as_nanos()).unwrap_or(u64::MAX),
+            (available / channels) as u64,
+            config.sample_rate,
+        );
 
         if available == 0 && decoder_done {
             shared.set_state(PlayerState::Ended);

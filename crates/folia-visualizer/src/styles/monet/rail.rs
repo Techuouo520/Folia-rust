@@ -700,8 +700,9 @@ impl Paint<'_> {
             return;
         }
         let glow = self.layout.glow;
-        let origin = Point::new(self.rail.x + glow, self.rail.y + visual.y);
         let width = (self.rail.width - glow * 2.0) * scale;
+        let x = if self.layout.mirrored { self.rail.x + self.rail.width - glow - width } else { self.rail.x + glow };
+        let origin = Point::new(x, self.rail.y + visual.y);
         let theme = self.scene.theme;
         let active = visual.status == Status::Active;
         let placed = Placed { line, visual, origin, scale, opacity };
@@ -735,15 +736,16 @@ impl Paint<'_> {
         let still = self.manual && !active;
         for (row_index, row) in measured.rows.iter().take(measured.visible).enumerate() {
             let content = line.text.get(row.start..row.end).unwrap_or_default();
-            let at =
-                Point::new(origin.x, origin.y + (measured.pad_top + row_index as f32 * measured.line_height) * scale);
+            let row_width = measured.shaped.x_at(row.end) - measured.shaped.x_at(row.start);
+            let x = if self.layout.mirrored { origin.x + width - row_width * scale } else { origin.x };
+            let at = Point::new(x, origin.y + (measured.pad_top + row_index as f32 * measured.line_height) * scale);
             let pen = ink::Line { content, at, px, line_height, font: self.scene.typography.font(SEMIBOLD) };
             let band = clip_to(
                 Rectangle { x: block.x, y: at.y - line_height * 0.3, width: block.width, height: line_height * 1.6 },
                 block,
             );
             let row_x = measured.shaped.x_at(row.start);
-            let to_x = |byte: usize| origin.x + (measured.shaped.x_at(byte) - row_x) * scale;
+            let to_x = |byte: usize| at.x + (measured.shaped.x_at(byte) - row_x) * scale;
             let ink_row = RowInk { pen, measured, span: *row, to_x: &to_x, band, base, word, opacity };
             if active {
                 let shadow = ink::blur_offsets(17.0 * scale, (0.0, 14.0 * scale));
@@ -934,14 +936,14 @@ impl Paint<'_> {
         );
         for (index, row) in track.rows.iter().enumerate() {
             let content = track.text.get(row.start..row.end).unwrap_or_default();
-            let at = Point::new(origin.x, box_top + (track.pad_top + index as f32 * track.line_height) * scale);
-            let pen = ink::Line {
-                content,
-                at,
-                px: track.px * scale,
-                line_height: track.line_height * scale,
-                font: self.scene.typography.subtitle.unwrap_or_else(|| self.scene.typography.font(MEDIUM)),
+            let font = self.scene.typography.subtitle.unwrap_or_else(|| self.scene.typography.font(MEDIUM));
+            let x = if self.layout.mirrored {
+                self.rail.x + self.rail.width - self.layout.glow - text::shape(content, track.px, font).width * scale
+            } else {
+                origin.x
             };
+            let at = Point::new(x, box_top + (track.pad_top + index as f32 * track.line_height) * scale);
+            let pen = ink::Line { content, at, px: track.px * scale, line_height: track.line_height * scale, font };
             ink::masked(frame, self.place, pen, tint, region, &mask);
         }
     }

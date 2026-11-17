@@ -54,11 +54,20 @@ pub struct Cache {
 /// The graphics and text groups for one frame. Only the foreground bokeh and the frame are drawn above it.
 pub struct Field<'a, Message> {
     scene: Scene<'a>,
+    capture: bool,
     _message: PhantomData<Message>,
 }
 
 pub fn field_view<'a, Message>(scene: Scene<'a>) -> Field<'a, Message> {
-    Field { scene, _message: PhantomData }
+    let capture = scene.publishes_blur();
+    Field { scene, capture, _message: PhantomData }
+}
+
+impl<Message> Field<'_, Message> {
+    pub fn capture_blur(mut self, capture: bool) -> Self {
+        self.capture = capture;
+        self
+    }
 }
 
 /// The dark-field sprite under the lights: theme background × 0.06 at the resolved alpha.
@@ -117,7 +126,7 @@ impl<Message> shader::Program<Message> for Field<'_, Message> {
         let mut pass = stage_pass(&mut cache, &self.scene, &view, tuning, heard);
         pass.slot = Arc::as_ptr(&state.owner) as u64;
         pass.owner = Arc::downgrade(&state.owner);
-        pass.publish_blur = !self.scene.preview;
+        pass.publish_blur = self.capture;
         pass
     }
 }

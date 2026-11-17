@@ -1,0 +1,16 @@
+Native cinema geometry and attribution
+
+The cinema meshes are derived from the original Folia project's procedural geometry
+at commit 8006b40f6e7b26198ac964e9e1255c3ca23bd935.
+Source files are src/components/scenes/cinema/cinemaGeometry.ts and cinemaLayout.ts.
+Original project https://github.com/chthollyphile/folia-major
+The scene code and geometry are distributed under AGPL-3.0-only.
+
+Seat and audience rounded boxes, spheres and cylinders use Three.js 0.185.1.
+The accompanying THREE-LICENSE.txt contains the MIT license and copyright notice.
+
+Mesh files contain FCRM, little-endian version 1, vertex count and index count.
+Each 40-byte vertex contains position[3], normal[3], uv[2], material and shade.
+The remaining data contains little-endian u32 triangle indices.
+Instance files contain column-major f32 4x4 matrices.
+glows.bin contains f32 position[3], linear color[3], diameter and kind.

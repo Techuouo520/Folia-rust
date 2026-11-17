@@ -12,7 +12,7 @@ use folia_store::{ReplayGainMode, ThemeMode, ThemeSource};
 use folia_visualizer::{Ease, QuickControl, QuickKind, Style};
 use iced::widget::text::LineHeight;
 use iced::widget::{button, column, container, image, mouse_area, row, shader, slider, space, stack, tooltip};
-use iced::{Alignment, Background, Border, Color, Element, Length, Size, Task, Theme as IcedTheme};
+use iced::{Alignment, Background, Border, Color, Element, Length, Size, Task, Theme as IcedTheme, mouse};
 use lucide_static_svg::Icon;
 
 use crate::icons::{Variant, icon, variant};
@@ -80,6 +80,7 @@ pub enum Message {
     Home,
     Locate,
     Settings,
+    Scene,
     Theme(ThemeMode),
     Picker(mode_picker::Message),
     Intensity,
@@ -108,6 +109,7 @@ pub enum Message {
     EqualizerOpen,
     /// The theme source's segments and the quick editor.
     ThemeSource(folia_store::ThemeSource),
+    GenerateTheme,
     QuickEditOpen,
     /// The lyric tab's buttons.
     MatchOnline,
@@ -132,6 +134,7 @@ pub enum Effect {
     Locate,
     Settings,
     Workbench,
+    Scene,
     Playback(playback::Message),
     Intensity,
     Theme(ThemeMode),
@@ -148,6 +151,7 @@ pub enum Effect {
     PoolToggle(String),
     EqualizerOpen,
     ThemeSource(folia_store::ThemeSource),
+    GenerateTheme,
     QuickEditOpen,
     MatchOnline,
     LyricFileOpen,
@@ -400,11 +404,19 @@ impl PlayerPanel {
     }
 
     pub fn animating(&self, now: Instant) -> bool {
+        self.controls_animating(now) || self.visualizing()
+    }
+
+    pub(crate) fn visualizing(&self) -> bool {
+        self.open && self.pickers.visualizing()
+    }
+
+    pub(crate) fn controls_animating(&self, now: Instant) -> bool {
         [self.surface, self.handle, self.handle_tone, self.handle_hover, self.grow, self.page, self.like_swap]
             .iter()
             .chain(&self.fold)
             .any(|tween| tween.running(now))
-            || (self.open && self.pickers.animating(now))
+            || (self.open && self.pickers.controls_animating(now))
             || self.quality.animating(now)
             || (self.open && self.tab == Tab::Queue && self.queue.animating(now))
     }
@@ -488,6 +500,10 @@ impl PlayerPanel {
                 self.set_open(false, now);
                 Effect::Settings
             }
+            Message::Scene => {
+                self.set_open(false, now);
+                Effect::Scene
+            }
             Message::Theme(mode) => Effect::Theme(*mode),
             Message::TransparentBackground(enabled) => Effect::TransparentBackground(*enabled),
             Message::Picker(message) => match self.pickers.update(message.clone(), style_id, room.background, now) {
@@ -532,6 +548,7 @@ impl PlayerPanel {
             Message::PoolToggle(style) => Effect::PoolToggle(style.clone()),
             Message::EqualizerOpen => Effect::EqualizerOpen,
             Message::ThemeSource(source) => Effect::ThemeSource(*source),
+            Message::GenerateTheme => Effect::GenerateTheme,
             Message::QuickEditOpen => Effect::QuickEditOpen,
             Message::MatchOnline => Effect::MatchOnline,
             Message::LyricFileOpen => Effect::LyricFileOpen,
@@ -688,6 +705,7 @@ pub struct View<'a> {
     pub bottom: f32,
     pub repeat: Repeat,
     pub style_id: &'a str,
+    pub scene: Option<folia_core::SceneId>,
     pub has_lyrics: bool,
     /// `lyricsFontScale`, for the style pictures.
     pub font_scale: f32,
@@ -718,6 +736,8 @@ pub struct View<'a> {
     pub theme_source: ThemeSource,
     pub transparent_background: bool,
     pub has_custom_theme: bool,
+    pub can_generate_theme: bool,
+    pub generating_theme: bool,
     /// The random pool (style ids), or every style when `None`.
     pub random_pool: Option<&'a [String]>,
     pub all_styles: &'a [Style],
@@ -1327,6 +1347,26 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
         .padding(pad(4.0, 0.0, 0.0, 0.0))
     });
     let background = pickers.row(look, mode_picker::Row::Background, None, now);
+    let scene = mouse_area(
+        container(
+            row![
+                text(view.i18n.t("ui.scene"))
+                    .size(crate::typeface::size::BODY)
+                    .color(fade(tokens.t2, ink.a))
+                    .width(Length::Fill),
+                text(view.i18n.t(if view.scene.is_some() { "ui.sceneCinema" } else { "ui.sceneNone" }))
+                    .size(crate::typeface::size::BODY)
+                    .color(fade(tokens.t2, ink.a)),
+                icon(Icon::ChevronRight, 15.0, fade(tokens.t2, ink.a)),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .height(44)
+        .align_y(Alignment::Center),
+    )
+    .on_press(Message::Scene)
+    .interaction(mouse::Interaction::Pointer);
     let transparent = row![
         container(
             text(view.i18n.t("options.transparentPlayerBackground"))
@@ -1353,7 +1393,13 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
                 view.theme_source == ThemeSource::Default,
                 Some(Message::ThemeSource(ThemeSource::Default))
             ),
-            source_seg(tokens, ink, view.i18n.t("ui.aiTheme"), false, Some(view.i18n.t("ui.aiThemeUnavailable")),),
+            source_seg_press(
+                tokens,
+                ink,
+                view.i18n.t("ui.aiTheme"),
+                view.theme_source == ThemeSource::Ai,
+                Some(Message::ThemeSource(ThemeSource::Ai))
+            ),
             source_seg_press(
                 tokens,
                 ink,
@@ -1374,7 +1420,8 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
         border: Border { radius: 8.0.into(), ..Border::default() },
         ..container::Style::default()
     });
-    let palette_tip = if custom {
+    let editable = custom || view.theme_source == ThemeSource::Ai;
+    let palette_tip = if editable {
         view.i18n.t("options.customThemeQuickEditTitle").to_owned()
     } else {
         view.i18n.t("options.themeQuickEditUnavailable").to_owned()
@@ -1385,15 +1432,15 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
             tokens,
             Icon::Palette,
             (15.0, 28.0),
-            if custom { fade(tokens.t2, ink.a) } else { fade(tokens.t2, ink.a * 0.4) },
+            if editable { fade(tokens.t2, ink.a) } else { fade(tokens.t2, ink.a * 0.4) },
             Some(tokens.fill),
             palette_tip,
-            custom.then_some(Message::QuickEditOpen)
+            editable.then_some(Message::QuickEditOpen)
         ),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
-    let theme_name = if view.theme_source == ThemeSource::Custom {
+    let theme_name = if view.theme_source != ThemeSource::Default {
         view.theme.name.to_string()
     } else if view.daylight {
         view.i18n.t("theme.daylightDefault").to_owned()
@@ -1403,7 +1450,11 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
     let name_row = row![
         text(theme_name).size(crate::typeface::size::CONTROL).color(fade(tokens.t2, ink.a)).width(Length::Fill),
         day_night(tokens, ink, view.daylight),
-        text_btn(view.i18n.t("ui.generateAITheme"), fade(tokens.t2, ink.a * 0.4), None),
+        text_btn(
+            view.i18n.t(if view.generating_theme { "ui.generatingTheme" } else { "ui.generateAITheme" }),
+            fade(tokens.t2, ink.a * if view.can_generate_theme { 1.0 } else { 0.4 }),
+            view.can_generate_theme.then_some(Message::GenerateTheme)
+        ),
     ]
     .spacing(6)
     .align_y(Alignment::Center);
@@ -1414,7 +1465,7 @@ fn controls<'a>(view: View<'a>, tokens: Faded, ink: Color, rows: Rows<'a>) -> El
     if let Some(random) = random {
         column = column.push(random);
     }
-    column.push(background).push(transparent).push(hairline(tokens)).push(sources).push(name_row).into()
+    column.push(background).push(transparent).push(scene).push(hairline(tokens)).push(sources).push(name_row).into()
 }
 
 /// `renderQuickControls`: the style's own chips and toggles under its row.
@@ -2121,27 +2172,6 @@ fn source_seg_press<'a>(
             }
         })
         .into()
-}
-
-fn source_seg<'a>(tokens: Faded, ink: Color, label: &'a str, on: bool, tip: Option<&'a str>) -> Element<'a, Message> {
-    let label =
-        text(label).size(crate::typeface::size::CONTROL).color(if on { ink } else { fade(tokens.t2, ink.a * 0.4) });
-    let button = button(container(label).center_x(Length::Fill).center_y(Length::Fill))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(0)
-        .on_press_maybe(None)
-        .style(move |_theme: &IcedTheme, _status| button::Style {
-            background: on.then_some(Background::Color(tokens.raise)),
-            border: Border { radius: 6.0.into(), ..Border::default() },
-            ..button::Style::default()
-        });
-    match tip {
-        Some(tip) => tooltip(button, text(tip).size(crate::typeface::size::HINT), tooltip::Position::Top)
-            .style(tokens.tip())
-            .into(),
-        None => button.into(),
-    }
 }
 
 fn day_night<'a>(tokens: Faded, ink: Color, daylight: bool) -> Element<'a, Message> {

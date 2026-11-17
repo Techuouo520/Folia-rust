@@ -75,11 +75,32 @@ pub fn quick_controls(style: Style, values: &Values) -> Vec<QuickControl> {
             toggle("overlayFrame", "options.lumiereOverlayFrame", "frame"),
             toggle("hideTrails", "options.lumiereHideTrails", "eye-off"),
         ],
-        Style::Monet => vec![
-            toggle("showDescription", "options.monetShowDescription", "align-left"),
-            toggle("showPortraitDragHanger", "options.monetPortraitDragHanger", "move"),
-            toggle("showAudioVisualization", "options.monetShowAudioVisualization", "audio"),
-        ],
+        Style::Monet => {
+            let visibility = |key, choice, tip_key, glyph| {
+                let value = values.choice(manifest, choice);
+                QuickControl {
+                    key,
+                    label_key: match value {
+                        "always" => "options.monetChromeVisibilityAlways",
+                        "hidden" => "options.monetChromeVisibilityHidden",
+                        _ => "options.monetChromeVisibilityAuto",
+                    },
+                    tip_key,
+                    glyph,
+                    kind: QuickKind::Toggle { on: value != "hidden" },
+                }
+            };
+            vec![
+                visibility("showDescription", "descriptionVisibility", "options.monetShowDescription", "align-left"),
+                visibility(
+                    "showPortraitDragHanger",
+                    "portraitHangerVisibility",
+                    "options.monetPortraitDragHanger",
+                    "move",
+                ),
+                toggle("showAudioVisualization", "options.monetShowAudioVisualization", "audio"),
+            ]
+        }
         Style::Nebbia => vec![
             QuickControl {
                 key: "appear",
@@ -123,6 +144,16 @@ fn nebbia_label(
 pub fn apply_quick(style: Style, values: &mut Values, key: &str) -> bool {
     let manifest = style.manifest();
     match (style, key) {
+        (Style::Monet, "showDescription" | "showPortraitDragHanger") => {
+            let choice = if key == "showDescription" { "descriptionVisibility" } else { "portraitHangerVisibility" };
+            let next = match values.choice(manifest, choice) {
+                "auto" => "always",
+                "always" => "hidden",
+                _ => "auto",
+            };
+            values.set_choice(manifest, choice, next);
+            true
+        }
         (Style::Tilt, "colorScheme") => {
             let options: Vec<&str> = manifest
                 .items()

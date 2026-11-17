@@ -19,7 +19,7 @@ impl iced::advanced::widget::Operation for Labels {
     }
 }
 
-fn click(shell: &mut Shell, renderer: &mut iced::Renderer, cache: &mut Cache, size: Size, label: &str) {
+pub(super) fn click(shell: &mut Shell, renderer: &mut iced::Renderer, cache: &mut Cache, size: Size, label: &str) {
     let mut ui = UserInterface::build(shell.view(), size, std::mem::take(cache), renderer);
     let mut labels = Labels::default();
     ui.operate(renderer, &mut labels);
@@ -124,4 +124,66 @@ fn background_selection_updates_settings_without_changing_style_pictures() {
         click(&mut shell, &mut renderer, &mut cache, size, "流光");
         picture(&shell, &mut renderer, &mut cache, size);
     }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn appearance_opens_the_workbench_and_returns_to_its_settings() {
+    if run_gpu_child("picker::appearance_opens_the_workbench_and_returns_to_its_settings") {
+        return;
+    }
+    folia_ui::install_fonts();
+    let directory = tempfile::tempdir().unwrap();
+    let mut setup = init(directory.path());
+    setup.appearance.visualizer = "monet".into();
+    let store = setup.store.clone();
+    let (mut shell, initial) = Shell::new(setup);
+    complete(&mut shell, initial);
+    drop(shell.update(Message::SplashFrame));
+    std::thread::sleep(Duration::from_millis(350));
+    drop(shell.update(Message::SplashFrame));
+    drop(shell.update(Message::OpenSettings));
+    std::thread::sleep(Duration::from_millis(350));
+    let mut renderer =
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, iced::Pixels(16.0), None))
+            .unwrap();
+    let mut cache = Cache::default();
+    click(&mut shell, &mut renderer, &mut cache, WINDOW, "歌词动画样式");
+    let task = shell.update(Message::Workbench(folia_ui::WorkbenchMessage::Toggle("mirrorLayout", true)));
+    complete(&mut shell, task);
+    let task = shell
+        .update(Message::Workbench(folia_ui::WorkbenchMessage::Text("customDescription", "Custom description".into())));
+    complete(&mut shell, task);
+    let mut ui = UserInterface::build(shell.view(), WINDOW, cache, &mut renderer);
+    let mut labels = Labels::default();
+    ui.operate(&renderer, &mut labels);
+    assert!(labels.0.iter().any(|(label, _)| label == "歌词左右镜像"));
+    assert!(labels.0.iter().any(|(label, _)| label == "自定义描述"));
+    ui.draw(
+        &mut renderer,
+        &shell.theme(),
+        &iced::advanced::renderer::Style { text_color: Color::BLACK },
+        iced::mouse::Cursor::Unavailable,
+    );
+    if let Some(directory) = std::env::var_os("FOLIA_APPEARANCE_CAPTURE") {
+        std::fs::create_dir_all(&directory).unwrap();
+        let pixels = renderer.screenshot(
+            &iced::advanced::graphics::Viewport::with_physical_size(Size::new(1200, 800), 1.0),
+            Color::WHITE,
+        );
+        image::RgbaImage::from_raw(1200, 800, pixels)
+            .unwrap()
+            .save(std::path::PathBuf::from(directory).join("appearance-workbench.png"))
+            .unwrap();
+    }
+    cache = ui.into_cache();
+    let task = shell.update(Message::Workbench(folia_ui::WorkbenchMessage::Close));
+    complete(&mut shell, task);
+    let stored: folia_store::VisualizerSettings = store.load().unwrap();
+    let values = folia_visualizer::Style::Monet.load(&stored.tables);
+    assert_eq!(values.text("customDescription"), "Custom description");
+    assert!(values.flag(folia_visualizer::Style::Monet.manifest(), "mirrorLayout"));
+    click(&mut shell, &mut renderer, &mut cache, WINDOW, "深色");
+    assert_eq!(folia_store::AppearanceSettings::load(&store).unwrap().theme, folia_store::ThemeMode::Dark);
+    click(&mut shell, &mut renderer, &mut cache, WINDOW, "莫奈");
 }

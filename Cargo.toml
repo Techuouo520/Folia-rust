@@ -20,6 +20,8 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 unicode-script = "0.5.8"
 unicode-vo = "0.1.0"
 folia-core = { path = "crates/folia-core" }
+folia-ai = { path = "crates/folia-ai" }
+folia-acoustics = { path = "crates/folia-acoustics" }
 folia-store = { path = "crates/folia-store" }
 folia-i18n = { path = "crates/folia-i18n" }
 folia-ui = { path = "crates/folia-ui" }
@@ -29,6 +31,7 @@ folia-omni = { path = "crates/folia-omni" }
 folia-player = { path = "crates/folia-player" }
 folia-visualizer = { path = "crates/folia-visualizer" }
 folia-render = { path = "crates/folia-render" }
+folia-analysis = { path = "crates/folia-analysis" }
 
 aes = "=0.8.4"
 anyhow = "1.0.104"
@@ -53,6 +56,7 @@ librespot-audio = { version = "=0.8.0", default-features = false, features = ["r
 librespot-core = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
 librespot-metadata = { version = "=0.8.0", default-features = false, features = ["rustls-tls-webpki-roots"] }
 lofty = "0.25.5"
+libloading = "0.9.1"
 lucide-static-svg = "1.65.0"
 md-5 = "=0.10.6"
 num-bigint = "=0.4.8"
@@ -82,7 +86,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 walkdir = "2.5.0"
 winresource = { version = "0.1.34", default-features = false }
 winit = "=0.30.13"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 zhconv = "0.4.2"
 
 [workspace.lints.rust]

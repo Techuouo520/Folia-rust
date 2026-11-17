@@ -167,7 +167,9 @@ struct Ink {
 }
 
 /// What the shared background draws for one frame. `publish` hands the picture to the playing page's glass blur.
+#[derive(Clone, Copy)]
 pub struct Ground<'a> {
+    pub static_mode: bool,
     pub mode: Background,
     pub seed: &'a str,
     pub time: f64,
@@ -181,6 +183,8 @@ pub struct Ground<'a> {
     pub player: bool,
     /// Representative colours of the current cover, heaviest first. Empty uses the theme.
     pub cover: &'a [folia_core::Rgb],
+    /// Common cover layer's theme-colour overlay, absent when that layer is disabled.
+    pub cover_overlay: Option<f32>,
     pub latent: crate::latent::Tuning,
     /// The app's light mode. Sora's field is white then, and black otherwise.
     pub daylight: bool,
@@ -193,10 +197,15 @@ pub struct Ground<'a> {
 /// The shared background. Styles that hide it do not mount this.
 pub fn background_view<'a, Message: 'a>(ground: Ground<'a>) -> Element<'a, Message> {
     match ground.mode {
-        Background::Common => iced::widget::canvas(Common { ground, _message: PhantomData })
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into(),
+        Background::Common => {
+            let shapes =
+                iced::widget::canvas(Common { ground, _message: PhantomData }).width(Length::Fill).height(Length::Fill);
+            if ground.cover_overlay.is_some() {
+                iced::widget::stack![crate::image_background::view(ground), shapes].into()
+            } else {
+                shapes.into()
+            }
+        }
         Background::Latent => crate::latent::view(ground),
         Background::Sora => crate::sora::view(ground),
         Background::Monet => crate::image_background::view(ground),
@@ -365,9 +374,12 @@ fn picture(
     size: iced::Size,
     ground: &Ground<'_>,
     time: f64,
-    ink: Ink,
+    mut ink: Ink,
     scales: [f32; SHAPES],
 ) -> Geometry {
+    if ground.cover_overlay.is_some() {
+        ink.ground.a = 0.0;
+    }
     let mut frame = Frame::new(renderer, size);
     paint(
         &mut frame,
@@ -377,8 +389,8 @@ fn picture(
             time,
             ink,
             scales: &scales,
-            shapes: ground.shapes,
-            vignette: ground.vignette,
+            shapes: ground.shapes && !ground.static_mode,
+            vignette: ground.vignette && !ground.static_mode,
             icons: &ground.theme.lyrics_icons,
         },
     );
@@ -558,4 +570,54 @@ fn radial_vignette(frame: &mut Frame, size: iced::Size) {
         .add_stop(1.0, iced::Color::from_rgba(0.0, 0.0, 0.0, 0.6));
         frame.fill(&path, gradient);
     }
+}
+
+// Matches FluidBackground's 320px canvas, 40px blur at 1.5x zoom and 40% overlay blend.
+pub fn common_cover_image(source: &image::RgbaImage, theme: &Theme, size: iced::Size) -> iced::widget::image::Handle {
+    let width = 320;
+    let height = (320.0 * size.height / size.width.max(1.0)).round().clamp(1.0, 1280.0) as u32;
+    let aspect = width as f32 / height as f32;
+    let crop_width = (source.height() as f32 * aspect).round().clamp(1.0, source.width() as f32) as u32;
+    let crop_height = (source.width() as f32 / aspect).round().clamp(1.0, source.height() as f32) as u32;
+    let source = image::imageops::crop_imm(
+        source,
+        (source.width() - crop_width) / 2,
+        (source.height() - crop_height) / 2,
+        crop_width,
+        crop_height,
+    );
+    let scaled = image::imageops::resize(
+        &source.to_image(),
+        width * 3 / 2,
+        height * 3 / 2,
+        image::imageops::FilterType::Triangle,
+    );
+    let blurred = image::imageops::blur(&scaled, 60.0 * 320.0 / size.width.max(1.0));
+    let mut image = image::imageops::crop_imm(
+        &blurred,
+        (blurred.width() - width) / 2,
+        (blurred.height() - height) / 2,
+        width,
+        height,
+    )
+    .to_image();
+    let diagonal = ((width * width + height * height) as f32).sqrt();
+    let half = (width * height) as f32 / diagonal;
+    let dx = height as f32 / diagonal * half;
+    let dy = width as f32 / diagonal * half;
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        let t = (((x as f32 - width as f32 / 2.0) * dx + (y as f32 - height as f32 / 2.0) * dy)
+            / (2.0 * (dx * dx + dy * dy))
+            + 0.5)
+            .clamp(0.0, 1.0);
+        let color = if t < 0.5 { theme.primary } else { theme.secondary };
+        let alpha = (t * 2.0 - 1.0).abs() * 0.4;
+        for (channel, tint) in pixel.0[..3].iter_mut().zip([color.r, color.g, color.b]) {
+            let base = f32::from(*channel) / 255.0;
+            let tint = f32::from(tint) / 255.0;
+            let blended = if base < 0.5 { 2.0 * base * tint } else { 1.0 - 2.0 * (1.0 - base) * (1.0 - tint) };
+            *channel = ((base + (blended - base) * alpha) * 255.0).round() as u8;
+        }
+    }
+    iced::widget::image::Handle::from_rgba(width, height, image.into_raw())
 }

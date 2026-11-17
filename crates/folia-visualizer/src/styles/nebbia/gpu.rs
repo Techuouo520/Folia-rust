@@ -51,19 +51,51 @@ pub struct Uniforms {
     pub lobes: [[f32; 4]; 8],
     /// Eight (shape, dense) pairs, two per vec4.
     pub lobe_sd: [[f32; 4]; 4],
+    /// Scene, glass style, scenery/rain bit mask, and transparent glass.
+    pub environment: [f32; 4],
+    pub water: [f32; 4],
+    pub mist_tint: [f32; 4],
+    pub jelly: [[f32; 4]; 24],
+    pub jelly_c: [[f32; 4]; 24],
+    pub bursts: [[f32; 4]; 12],
+    pub sway: [f32; 4],
+    pub aqua: [f32; 4],
+    pub aqua_motion: [f32; 4],
+    pub snow: [f32; 4],
+    pub motion: [f32; 4],
 }
 
 /// One frame for the window shader. Segments and drops belong to this frame, not a process-wide buffer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Pass {
     pub uniforms: Uniforms,
     pub segments: Vec<super::place::Segment>,
     pub drops: Vec<super::place::Drop>,
+    /// Local environment time advanced this frame, independent of lyric seeks, clamped to 100 ms.
+    pub elapsed: f32,
     /// The playing page publishes into the shared glass source. A second scene must not replace it.
     pub publish_blur: bool,
+    pub(super) knobs: Knobs,
+    pub(super) ice: Vec<[f32; 6]>,
+    pub(super) sweeps: Vec<place::WetSegment>,
+    pub(super) wet: Vec<place::WetSegment>,
+    motion: super::beats::DropsMotion,
+}
+
+impl std::fmt::Debug for Pass {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Pass")
+            .field("uniforms", &self.uniforms)
+            .field("segments", &self.segments.len())
+            .field("drops", &self.drops.len())
+            .finish_non_exhaustive()
+    }
 }
 
 pub(super) struct FrameIn<'a> {
+    pub render_scale: f32,
+    pub static_mode: bool,
     pub lyrics: &'a folia_core::Lyrics,
     pub time: f64,
     pub size: Size,
@@ -71,7 +103,13 @@ pub(super) struct FrameIn<'a> {
     pub font_scale: f32,
     pub tuning: &'a crate::tuning::Values,
     pub energy: f32,
+    pub elapsed: f32,
     pub publish_blur: bool,
+    pub see_through: bool,
+    pub daylight: bool,
+    pub smart: folia_core::SmartBeat<'a>,
+    pub voice: &'a mut super::beats::VocalRain,
+    pub motion: &'a mut super::beats::Motion,
 }
 
 /// One frame: lays out the song (cached), collects this frame's wipes and drops, fills the uniforms.
@@ -85,62 +123,160 @@ pub fn frame(
     energy: f32,
 ) -> Pass {
     let mut paint = place::Paint::default();
-    frame_in(FrameIn { lyrics, time, size, theme, font_scale, tuning, energy, publish_blur: false }, &mut paint)
+    let mut voice = super::beats::VocalRain::default();
+    let mut motion = super::beats::Motion::default();
+    frame_in(
+        FrameIn {
+            render_scale: 1.0,
+            static_mode: false,
+            lyrics,
+            time,
+            size,
+            theme,
+            font_scale,
+            tuning,
+            energy,
+            elapsed: 0.0,
+            publish_blur: false,
+            see_through: false,
+            daylight: false,
+            smart: Default::default(),
+            voice: &mut voice,
+            motion: &mut motion,
+        },
+        &mut paint,
+    )
 }
 
 pub(super) fn frame_in(frame: FrameIn<'_>, paint: &mut place::Paint) -> Pass {
-    let FrameIn { lyrics, time, size, theme, font_scale, tuning, energy, publish_blur } = frame;
+    let FrameIn {
+        render_scale,
+        static_mode,
+        lyrics,
+        time,
+        size,
+        theme,
+        font_scale,
+        tuning,
+        energy,
+        elapsed,
+        publish_blur,
+        see_through,
+        daylight,
+        smart,
+        voice,
+        motion,
+    } = frame;
     super::ink::warm(lyrics);
     let list = super::tuning::manifest();
     let (width, height) = (size.width.max(1.0), size.height.max(1.0));
     let scene = super::scene::scene(lyrics, width, height, font_scale, tuning);
+    let dew = tuning.choice(list, "glass") == "dew";
+    let snowy = tuning.choice(list, "glass") == "snow";
+    let rainy = !dew && !snowy;
+    let aquarium = tuning.choice(list, "behind") == "aquarium";
     let knobs = Knobs {
         stroke_width: tuning.number(list, "strokeWidth"),
         write_speed: tuning.number(list, "writeSpeed").max(0.4),
         refog: f64::from(tuning.number(list, "refog")).max(0.5),
-        rain_hit: tuning.number(list, "rainHit"),
-        rain_big: tuning.number(list, "rainBig"),
+        rain_hit: if rainy && !static_mode { tuning.number(list, "rainHit") * smart.rain_strength } else { 0.0 },
+        rain_big: if rainy { tuning.number(list, "rainBig") * smart.rain_strength } else { 0.0 },
+        ice: tuning.choice(list, "glass") == "snow",
+        ice_scale: height / 1000.0,
+        water: !rainy,
     };
-    let drive = place::paint(&scene, time, width, height, &knobs, energy, paint);
-    let (segments, drops) = paint.take_sprites();
+    voice.update(smart.vocal, &scene, [width, height]);
+    let drive = place::paint_with_voice(
+        &scene,
+        time,
+        [width, height],
+        &knobs,
+        (energy, voice.active().then_some(&*voice)),
+        paint,
+    );
+    let (mut segments, mut drops, ice) = paint.take_sprites();
+    if render_scale != 1.0 {
+        for segment in &mut segments {
+            for coordinate in &mut segment[..5] {
+                *coordinate *= render_scale;
+            }
+        }
+    }
     let colors = palette(theme);
+    let beat = motion.step(smart, time, [width, height], tuning, &colors);
+    beat.drops.apply(&mut drops);
     let aspect = width / height;
+    let (jelly, jelly_c) = if let Some(jelly) = beat.jelly {
+        jelly
+    } else if aquarium {
+        super::aquarium::jellies(time, aspect, tuning.number(list, "jellySize"), &colors)
+    } else {
+        ([[0.0; 4]; 24], [[0.0; 4]; 24])
+    };
     let spot_x = tuning.number(list, "spotX");
     let pad = |rgb: [f32; 3]| [rgb[0], rgb[1], rgb[2], 0.0];
     let [sx, sy, sr, si] = drive.spot;
     Pass {
         uniforms: Uniforms {
             resolution: [width, height],
-            mask_size: mask_size(width, height).map(|v| v as f32),
+            mask_size: mask_size(width * render_scale, height * render_scale).map(|v| v as f32),
             time: time as f32,
             bus: tuning.number(list, "busSpeed"),
             neon: tuning.number(list, "neon"),
             mist: tuning.number(list, "mist"),
-            spot_i: si * tuning.number(list, "spot"),
-            spot_r: (sr / height * 0.75).max(0.02),
+            spot_i: if tuning.member(list, "scenery", "spot") { si * tuning.number(list, "spot") } else { 0.0 },
+            spot_r: (sr / height * 0.75).max(0.02) * beat.spot_scale,
             scale: 1.0,
             encode: 0.0,
             spot_tgt: [sx / width * aspect, sy / height],
             spot_src: [spot_x * aspect, (1.0 - spot_x) * aspect],
             sky0: {
                 let mut color = pad(colors.sky0);
-                color[3] = tuning.number(list, "bump");
+                color[3] = if aquarium || static_mode { 0.0 } else { tuning.number(list, "bump") };
                 color
             },
-            sky1: {
-                let mut color = pad(colors.sky1);
-                color[3] = tuning.number(list, "resolution");
-                color
-            },
+            sky1: pad(colors.sky1),
             la: pad(colors.la),
             lb: pad(colors.lb),
             lc: pad(colors.lc),
             lobes: drive.lobes,
             lobe_sd: drive.lobe_sd,
+            environment: [
+                f32::from(aquarium),
+                if snowy { 2.0 } else { f32::from(dew) },
+                super::tuning::scenery(tuning) as f32,
+                f32::from(see_through || tuning.choice(list, "behind") == "backdrop"),
+            ],
+            water: [tuning.number(list, "dew"), tuning.number(list, "dewSize"), tuning.number(list, "dewGlint"), 0.0],
+            mist_tint: if daylight { [0.86, 0.89, 0.92, 0.0] } else { [0.07, 0.08, 0.1, 0.0] },
+            jelly,
+            jelly_c,
+            bursts: beat.bursts,
+            sway: beat.sway,
+            aqua: [
+                tuning.number(list, "jellies").round(),
+                tuning.number(list, "bubbles"),
+                beat.burst_count,
+                beat.beat_rows,
+            ],
+            aqua_motion: [beat.weed_idle, 0.0, 0.0, 0.0],
+            snow: [
+                tuning.number(list, "snow"),
+                tuning.number(list, "snowSize"),
+                tuning.number(list, "snowMelt"),
+                tuning.number(list, "hold"),
+            ],
+            motion: [beat.drops.shift[0] / width, beat.drops.shift[1] / height, f32::from(beat.drops.driven), 0.0],
         },
         segments,
         drops,
         publish_blur,
+        elapsed: elapsed.clamp(0.0, 0.1),
+        knobs,
+        ice,
+        sweeps: std::mem::take(&mut paint.sweeps),
+        wet: std::mem::take(&mut paint.wet),
+        motion: beat.drops,
     }
 }
 
@@ -178,13 +314,15 @@ impl Instances {
 struct Targets {
     css: [u32; 2],
     canvas: [u32; 2],
+    mask_size: [u32; 2],
     mask: wgpu::TextureView,
     drops: wgpu::TextureView,
     field: wgpu::TextureView,
     field_dirty: AtomicBool,
     bind: wgpu::BindGroup,
     buildings: Buildings,
-    fog: [wgpu::TextureView; 2],
+    fog: [wgpu::TextureView; 3],
+    dew: bool,
     fog_bind: wgpu::BindGroup,
     noise: wgpu::TextureView,
     noise_dirty: AtomicBool,
@@ -194,7 +332,7 @@ struct Targets {
 pub struct Renderer {
     window: wgpu::RenderPipeline,
     fill: wgpu::RenderPipeline,
-    fog: [wgpu::RenderPipeline; 2],
+    fog: [wgpu::RenderPipeline; 3],
     noise: wgpu::RenderPipeline,
     noise_bind: wgpu::BindGroup,
     mask: wgpu::RenderPipeline,
@@ -210,6 +348,21 @@ pub struct Renderer {
     drops: Instances,
     field: Instances,
     field_key: u64,
+    base_field: Vec<super::place::Drop>,
+    field_sprites: Vec<super::place::Drop>,
+    field_was_moving: bool,
+    moving_field: super::drops::MotionField,
+    combined_drops: Vec<super::place::Drop>,
+    condensation: super::condensation::Condensation,
+    snow: super::snow::Snow,
+    particles: super::particles::Gpu,
+    fireflies: super::condensation::fireflies::Fireflies,
+    active_snow: bool,
+    active_dew: bool,
+    mask_segments: Vec<super::place::Segment>,
+    stamp: u64,
+    environment: [f32; 2],
+    environment_frame: u64,
     encode: bool,
     bounds: [f32; 4],
     device: wgpu::Device,
@@ -219,7 +372,12 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let window_module = shader_module(device, include_str!("../../../shaders/nebbia/window.wgsl"));
+        let window_source = [
+            include_str!("../../../shaders/nebbia/window.wgsl"),
+            include_str!("../../../shaders/nebbia/aquarium.wgsl"),
+        ]
+        .concat();
+        let window_module = shader_module(device, &window_source);
         let glass_module = shader_module(device, include_str!("../../../shaders/nebbia/glass.wgsl"));
         let mut window_entries = vec![
             uniform_entry(0),
@@ -230,7 +388,13 @@ impl Renderer {
             uniform_entry(5),
         ];
         window_entries.extend((6..12).map(texture_entry));
-        window_entries.extend([sampler_entry(12), texture_entry(13), texture_entry(14), texture_entry(15)]);
+        window_entries.extend([
+            sampler_entry(12),
+            texture_entry(13),
+            texture_entry(14),
+            texture_entry(15),
+            texture_entry(17),
+        ]);
         let window_layout = layout(device, &window_entries);
         let mut fog_entries = vec![uniform_entry(0), uniform_entry(5), sampler_entry(12)];
         fog_entries.extend((6..12).map(texture_entry));
@@ -295,6 +459,7 @@ impl Renderer {
             },
         };
         let glass = Stage { device, layout: &glass_layout, module: &glass_module };
+        let (particles, lumps) = super::particles::Gpu::new(device, queue, format);
         Self {
             fill: Stage { device, layout: &fill_layout, module: &window_module }.pipeline(
                 "vs",
@@ -303,7 +468,7 @@ impl Renderer {
                 wgpu::BlendState::REPLACE,
                 false,
             ),
-            fog: ["fs_fog_blur", "fs_fog_glow"].map(|entry| {
+            fog: ["fs_fog_blur", "fs_fog_glow", "fs_fog_sharp"].map(|entry| {
                 Stage { device, layout: &fog_layout, module: &window_module }.pipeline(
                     "vs",
                     entry,
@@ -326,7 +491,7 @@ impl Renderer {
                 "vs",
                 "fs",
                 format,
-                wgpu::BlendState::REPLACE,
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
                 false,
             ),
             mask: glass.pipeline("vs_mask", "fs_mask", wgpu::TextureFormat::R8Unorm, max, true),
@@ -340,6 +505,21 @@ impl Renderer {
             drops: Instances::new(device),
             field: Instances::new(device),
             field_key: 0,
+            base_field: Vec::new(),
+            field_sprites: Vec::new(),
+            field_was_moving: false,
+            moving_field: Default::default(),
+            combined_drops: Vec::new(),
+            condensation: super::condensation::Condensation::default(),
+            snow: super::snow::Snow::new(lumps),
+            particles,
+            fireflies: Default::default(),
+            active_snow: false,
+            active_dew: false,
+            mask_segments: Vec::new(),
+            stamp: 0,
+            environment: [-1.0; 2],
+            environment_frame: 0,
             encode: format.is_srgb(),
             bounds: [0.0; 4],
             device: device.clone(),
@@ -351,26 +531,149 @@ impl Renderer {
     /// Uploads this frame. `bounds` is the drawing area in physical pixels, `scale` physical per CSS pixel.
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pass: &Pass, bounds: [f32; 4], scale: f32) {
         let uniforms = Uniforms { scale, encode: if self.encode { 1.0 } else { 0.0 }, ..pass.uniforms };
+        let environment = [uniforms.environment[0], uniforms.environment[1]];
+        if environment != self.environment {
+            self.environment = environment;
+            self.snow.clear();
+            self.condensation = Default::default();
+            self.fireflies = Default::default();
+        }
+        if pass.elapsed > 0.0 {
+            self.environment_frame = self.environment_frame.wrapping_add(1);
+        }
+        use std::hash::Hasher;
+        let mut hash = std::hash::DefaultHasher::new();
+        hash.write(bytemuck::bytes_of(&uniforms));
+        hash.write(bytemuck::cast_slice(&pass.segments));
+        hash.write(bytemuck::cast_slice(&pass.drops));
+        hash.write_u64(self.environment_frame);
+        self.stamp = hash.finish();
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
         self.bounds = bounds;
         let [width, height] = uniforms.resolution;
         let css = [width.round().max(1.0) as u32, height.round().max(1.0) as u32];
         let canvas = [(width * scale).round().max(1.0) as u32, (height * scale).round().max(1.0) as u32];
-        if self.targets.as_ref().is_none_or(|targets| targets.css != css || targets.canvas != canvas) {
-            self.targets = Some(self.targets_for(device, css, canvas, mask_size(width, height)));
+        let limit = device.limits().max_texture_dimension_2d as f32;
+        let mask = uniforms.mask_size.map(|side| side.round().clamp(1.0, limit) as u32);
+        let dew = uniforms.environment[1] == 1.0;
+        if self.targets.as_ref().is_none_or(|targets| {
+            targets.css != css || targets.canvas != canvas || targets.mask_size != mask || targets.dew != dew
+        }) {
+            self.targets = Some(self.targets_for(device, css, canvas, mask, dew));
+            self.condensation.invalidate();
+            if let Some(targets) = &self.targets {
+                self.particles.bind(device, &targets.fog[1], &targets.fog[0]);
+            }
         }
         if let Some(targets) = &mut self.targets {
             targets.buildings.prepare(queue, &uniforms);
         }
-        self.segments.write(device, queue, &pass.segments);
         self.drops.write(device, queue, &pass.drops);
-        let field = &mut self.field;
-        let field_key = super::drops::field(width, height, self.field_key, |drops| field.write(device, queue, drops));
-        if field_key != self.field_key
-            && let Some(targets) = &self.targets
-        {
-            targets.field_dirty.store(true, Ordering::Relaxed);
+        self.active_snow = uniforms.environment[1] == 2.0;
+        self.active_dew = dew;
+        if self.active_snow {
+            self.snow.prepare(pass);
+            self.particles.snow(device, queue, &uniforms, self.encode, &self.snow.flakes);
+            self.mask_segments.clear();
+            self.mask_segments.extend_from_slice(&pass.segments);
+            let mask_scale = uniforms.mask_size[0] / width;
+            self.mask_segments.extend(self.snow.fog.iter().map(|segment| {
+                let mut segment = *segment;
+                for value in &mut segment[..5] {
+                    *value *= mask_scale;
+                }
+                segment
+            }));
+            self.segments.write(device, queue, &self.mask_segments);
+            self.field.write(device, queue, &self.snow.drops);
+            if let Some(targets) = &self.targets {
+                targets.field_dirty.store(true, Ordering::Relaxed);
+            }
+            self.field_key = 0;
+            self.condensation.invalidate();
+            return;
         }
+        self.segments.write(device, queue, &pass.segments);
+        if uniforms.environment[1] == 1.0 {
+            let rgb = |color: [f32; 4]| [color[0], color[1], color[2]];
+            let colors = super::palette::Palette {
+                sky0: rgb(uniforms.sky0),
+                sky1: rgb(uniforms.sky1),
+                la: rgb(uniforms.la),
+                lb: rgb(uniforms.lb),
+                lc: rgb(uniforms.lc),
+            };
+            let flies = self.fireflies.update([width, height], pass.elapsed, &colors);
+            self.particles.fireflies(device, queue, &uniforms, self.encode, flies);
+            if let Some(drops) = self.condensation.update(
+                [width, height],
+                pass.elapsed,
+                [uniforms.water[0], uniforms.water[1]],
+                &pass.sweeps,
+                &pass.wet,
+            ) {
+                self.field.write(device, queue, drops);
+                if let Some(targets) = &self.targets {
+                    targets.field_dirty.store(true, Ordering::Relaxed);
+                }
+            }
+            self.field_key = 0;
+            return;
+        }
+        self.condensation.invalidate();
+        let base = &mut self.base_field;
+        let field_key = super::drops::field(width, height, self.field_key, |drops| {
+            base.clear();
+            base.extend_from_slice(drops);
+        });
+        if field_key != self.field_key {
+            self.moving_field.clear();
+        }
+        if self.moving_field.update(
+            &self.base_field,
+            &pass.motion,
+            uniforms.bus,
+            uniforms.snow[3],
+            pass.knobs.refog as f32,
+            height,
+        ) {
+            self.field.write(device, queue, &self.moving_field.sprites);
+            if !self.moving_field.drops.is_empty() {
+                self.combined_drops.clear();
+                self.combined_drops.extend_from_slice(&pass.drops);
+                self.combined_drops.extend_from_slice(&self.moving_field.drops);
+                self.drops.write(device, queue, &self.combined_drops);
+            }
+            if !self.moving_field.fog.is_empty() {
+                let scale = uniforms.mask_size[0] / width;
+                self.mask_segments.clear();
+                self.mask_segments.extend_from_slice(&pass.segments);
+                self.mask_segments.extend(self.moving_field.fog.iter().map(|segment| {
+                    let mut segment = *segment;
+                    for value in &mut segment[..5] {
+                        *value *= scale;
+                    }
+                    segment
+                }));
+                self.segments.write(device, queue, &self.mask_segments);
+            }
+            if let Some(targets) = &self.targets {
+                targets.field_dirty.store(true, Ordering::Relaxed);
+            }
+            self.field_key = field_key;
+            self.field_was_moving = true;
+            return;
+        }
+        if field_key != self.field_key || pass.motion.active || self.field_was_moving {
+            self.field_sprites.clear();
+            self.field_sprites.extend_from_slice(&self.base_field);
+            pass.motion.apply(&mut self.field_sprites);
+            self.field.write(device, queue, &self.field_sprites);
+            if let Some(targets) = &self.targets {
+                targets.field_dirty.store(true, Ordering::Relaxed);
+            }
+        }
+        self.field_was_moving = pass.motion.active;
         self.field_key = field_key;
     }
 
@@ -386,7 +689,7 @@ impl Renderer {
         if targets.noise_dirty.swap(false, Ordering::Relaxed) {
             fullscreen(encoder, &targets.noise, &self.noise, &self.noise_bind);
         }
-        for (view, pipeline) in targets.fog.iter().zip(&self.fog) {
+        for (view, pipeline) in targets.fog.iter().zip(&self.fog).take(if targets.dew { 3 } else { 2 }) {
             fullscreen(encoder, view, pipeline, &targets.fog_bind);
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -407,11 +710,15 @@ impl Renderer {
         pass.set_pipeline(&self.window);
         pass.set_bind_group(0, &targets.bind, &[]);
         pass.draw(0..3, 0..1);
+        drop(pass);
+        if self.active_snow || self.active_dew {
+            self.particles.render(encoder, target, self.bounds, clip);
+        }
     }
 
     /// The same window pass, into the glass blur's quarter-resolution picture.
-    fn paint_blur(&self, encoder: &mut wgpu::CommandEncoder, time: f32, window: [f32; 2]) {
-        let stamp = (time * 30.0).round() as i32 as u64;
+    fn paint_blur(&self, encoder: &mut wgpu::CommandEncoder, window: [f32; 2]) {
+        let stamp = self.stamp;
         let drew =
             folia_render::draw_source(&self.device, &self.queue, self.format, window, stamp, |view, width, height| {
                 let Some(targets) = self.targets.as_ref() else { return };
@@ -432,6 +739,15 @@ impl Renderer {
                 pass.set_pipeline(&self.window);
                 pass.set_bind_group(0, &targets.bind, &[]);
                 pass.draw(0..3, 0..1);
+                drop(pass);
+                if self.active_snow || self.active_dew {
+                    self.particles.render(
+                        encoder,
+                        view,
+                        [0.0, 0.0, width as f32, height as f32],
+                        [0, 0, width, height],
+                    );
+                }
             });
         if drew {
             folia_render::blur_source(encoder);
@@ -469,13 +785,26 @@ impl Renderer {
         pass.draw(0..4, 0..items.count);
     }
 
-    fn targets_for(&self, device: &wgpu::Device, css: [u32; 2], canvas: [u32; 2], mask: [u32; 2]) -> Targets {
+    fn targets_for(
+        &self,
+        device: &wgpu::Device,
+        css: [u32; 2],
+        canvas: [u32; 2],
+        mask: [u32; 2],
+        dew: bool,
+    ) -> Targets {
+        let mask_size = mask;
         let mask = target_view(device, mask, wgpu::TextureFormat::R8Unorm);
-        let drops = target_view(device, css, wgpu::TextureFormat::Rgba8Unorm);
-        let field = target_view(device, css, wgpu::TextureFormat::Rgba8Unorm);
+        let drops = target_view(device, mask_size, wgpu::TextureFormat::Rgba8Unorm);
+        let field = target_view(device, mask_size, wgpu::TextureFormat::Rgba8Unorm);
         let buildings = Buildings::new(device, &self.uniform, canvas);
-        let fog =
-            [4, 8].map(|div| target_view(device, canvas.map(|v| v.div_ceil(div)), wgpu::TextureFormat::Rgba16Float));
+        let fog = [4, 8, if dew { 4 } else { 0 }].map(|div| {
+            target_view(
+                device,
+                if div == 0 { [1, 1] } else { canvas.map(|v| v.div_ceil(div)) },
+                wgpu::TextureFormat::Rgba16Float,
+            )
+        });
         let noise = target_view(device, canvas, wgpu::TextureFormat::Rgba8Unorm);
         let mut fog_entries = vec![
             wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
@@ -496,6 +825,7 @@ impl Renderer {
             wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(&fog[0]) },
             wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(&fog[1]) },
             wgpu::BindGroupEntry { binding: 15, resource: wgpu::BindingResource::TextureView(&noise) },
+            wgpu::BindGroupEntry { binding: 17, resource: wgpu::BindingResource::TextureView(&fog[2]) },
         ]);
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("folia-nebbia-window"),
@@ -503,8 +833,10 @@ impl Renderer {
             entries: &entries,
         });
         Targets {
+            dew,
             css,
             canvas,
+            mask_size,
             mask,
             drops,
             field,
@@ -625,7 +957,7 @@ pub(super) fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+pub(super) fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -718,6 +1050,15 @@ impl Drop for LivePass {
         if self.frame.drops.capacity() > pooled.drops.capacity() {
             std::mem::swap(&mut pooled.drops, &mut self.frame.drops);
         }
+        if self.frame.ice.capacity() > pooled.ice.capacity() {
+            std::mem::swap(&mut pooled.ice, &mut self.frame.ice);
+        }
+        if self.frame.sweeps.capacity() > pooled.sweeps.capacity() {
+            std::mem::swap(&mut pooled.sweeps, &mut self.frame.sweeps);
+        }
+        if self.frame.wet.capacity() > pooled.wet.capacity() {
+            std::mem::swap(&mut pooled.wet, &mut self.frame.wet);
+        }
     }
 }
 
@@ -751,7 +1092,7 @@ impl ShaderPrimitive for LivePass {
         renderer.render(encoder, target, [clip_bounds.x, clip_bounds.y, clip_bounds.width, clip_bounds.height]);
         if self.frame.publish_blur {
             let window = self.frame.uniforms.resolution;
-            renderer.paint_blur(encoder, self.frame.uniforms.time, window);
+            renderer.paint_blur(encoder, window);
         }
     }
 }

@@ -11,6 +11,7 @@ use folia_player::{Analyser, Player, PlayerState, TAP_CAPACITY, map_channels, pu
 
 mod equalizer;
 mod progressive;
+mod room;
 
 #[test]
 fn maps_channels() {
@@ -60,7 +61,7 @@ fn wait_for(player: &Player, timeout: Duration, done: impl Fn(&folia_player::Sta
 
 #[test]
 fn plays_seeks_and_ends() {
-    let Ok(player) = Player::new() else {
+    let Ok(mut player) = Player::new() else {
         eprintln!("no audio device, skipping");
         return;
     };
@@ -73,17 +74,24 @@ fn plays_seeks_and_ends() {
     let status = wait_for(&player, Duration::from_secs(2), |s| s.position > 0.3);
     assert_eq!(status.state, PlayerState::Playing);
     assert!((status.duration - 1.5).abs() < 0.01, "{status:?}");
+    let heard = player.heard_position();
+    assert!(heard >= status.position - 0.25 && heard <= player.status().position, "heard={heard},status={status:?}");
 
     player.pause();
     let paused_at = player.status().position;
     sleep(Duration::from_millis(200));
     assert!((player.status().position - paused_at).abs() < 0.05, "position holds while paused");
+    assert!(
+        (player.heard_position() - paused_at).abs() < 0.05,
+        "output clock advances through queued audio then holds"
+    );
 
     player.seek(1.0);
     sleep(Duration::from_millis(100));
     let after_seek = player.status();
     assert_eq!(after_seek.state, PlayerState::Paused);
     assert!((after_seek.position - 1.0).abs() < 0.05, "{after_seek:?}");
+    assert!((player.heard_position() - 1.0).abs() < 0.05, "seek must discard the old output clock");
 
     player.resume();
     let ended = wait_for(&player, Duration::from_secs(3), |s| s.state == PlayerState::Ended);
@@ -93,6 +101,25 @@ fn plays_seeks_and_ends() {
     player.stop();
     sleep(Duration::from_millis(50));
     assert_eq!(player.status().state, PlayerState::Idle);
+    assert_eq!(player.heard_position(), 0.0);
+    let response = folia_core::RoomImpulseResponse {
+        sample_rate: player.sample_rate(),
+        channels: std::array::from_fn(|_| vec![0.0; 256]),
+        gain: 1.0,
+    };
+    player.set_room(Some(Box::new(folia_player::RoomConvolver::new(&response).unwrap()))).unwrap();
+    player.set_room(None).unwrap();
+    assert!(!player.finish_room_change(), "stopped callback has not acknowledged the release yet");
+    player.stop();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !player.finish_room_change() {
+        assert!(Instant::now() < deadline, "stopping transport interrupted the room's release callback");
+        sleep(Duration::from_millis(20));
+    }
+    player.load(&wav);
+    let restarted = wait_for(&player, Duration::from_secs(2), |s| s.position > 0.1);
+    assert_eq!(restarted.state, PlayerState::Playing);
+    player.stop();
 }
 
 #[test]

@@ -20,7 +20,7 @@ pub const STAGE_HEIGHT: f32 = 800.0;
 /// The four lines of the sample, with words timed evenly like `createCharacterWords` / `createTokenWords`.
 pub fn preview_lyrics() -> Lyrics {
     let translation = "编织那没有诗意，却能将你带到现实的神文之诗。";
-    let lines = vec![
+    let mut lines = vec![
         line(0.7, 3.6, "詩情を持たずとも、あなたを現実へと導くその神文の詩を紡ぐ。", None, translation),
         line(
             4.2,
@@ -38,12 +38,39 @@ pub fn preview_lyrics() -> Lyrics {
         ),
         line(11.5, 14.4, translation, None, translation),
     ];
+    let romanization = [
+        "Shijō o motazu tomo, anata o genjitsu e to michibiku sono shinbun no shi o tsumugu.",
+        "Weave that prosaic divine poem that leads you to reality.",
+        "Tisse ce poème divin sans poésie qui te mène au réel.",
+        "Biānzhī nà méiyǒu shīyì, què néng jiāng nǐ dài dào xiànshí de shénwén zhī shī.",
+    ];
+    for (line, romanization) in lines.iter_mut().zip(romanization) {
+        line.romanization = Some(romanization.into());
+    }
+    lines[0].background_vocals.push(vocal(
+        1.3,
+        3.1,
+        "of course i still love you",
+        Some(&["of", "course", "i", "still", "love", "you"]),
+        "当然，我依然爱你。",
+        "of course i still love you",
+    ));
+    for (index, start, end) in [(1, 4.8, 6.6), (2, 8.4, 10.2)] {
+        lines[index].background_vocals.push(vocal(
+            start,
+            end,
+            "もちろん、今でもあなたを愛してるよ",
+            None,
+            "当然，我依然爱你。",
+            "Mochiron, ima demo anata o aishiteru yo.",
+        ));
+    }
     Lyrics { lines, title: Some("神文之诗".to_owned()), word_timed: true, ..Lyrics::default() }
 }
 
 /// The second built-in sample, `reserved` in `PreviewPlaceholder.ts`. It loops at 13.6s.
 pub fn preview_reserved() -> Lyrics {
-    let lines = vec![
+    let mut lines = vec![
         line(
             0.0,
             3.1,
@@ -61,7 +88,47 @@ pub fn preview_reserved() -> Lyrics {
         ),
         line(10.8, 13.6, "一切冰冷的事物。", None, "all that is cold."),
     ];
+    let romanization = [
+        "You and the others who think",
+        "Shinjitsu no tame ni ikite iru to omou hitotachi,",
+        "et, par extension, ki em",
+        "Yīqiè bīnglěng de shìwù.",
+    ];
+    for (line, romanization) in lines.iter_mut().zip(romanization) {
+        line.romanization = Some(romanization.into());
+    }
+    lines[1].background_vocals.push(vocal(
+        4.2,
+        6.6,
+        "Soon this will all feel like a distant dream.",
+        Some(&["Soon", "this", "will", "all", "feel", "like", "a", "distant", "dream."]),
+        "很快，这一切都会像一场遥远的梦。",
+        "Soon this will all feel like a distant dream.",
+    ));
     Lyrics { lines, title: Some("野芝麻".to_owned()), word_timed: true, ..Lyrics::default() }
+}
+
+fn vocal(
+    start: f64,
+    end: f64,
+    text: &str,
+    tokens: Option<&[&str]>,
+    translation: &str,
+    romanization: &str,
+) -> folia_core::BackgroundVocal {
+    let mut row = line(start, end, text, tokens, translation);
+    for word in &mut row.words {
+        word.text = word.text.trim_end().to_owned();
+    }
+    folia_core::BackgroundVocal {
+        words: row.words,
+        start,
+        end,
+        text: text.into(),
+        translation: Some(translation.into()),
+        romanization: Some(romanization.into()),
+        agent_id: None,
+    }
 }
 
 pub const RESERVED_LOOP: f64 = 13.6;

@@ -1,0 +1,23 @@
+[package]
+name = "folia-ai"
+description = "Native AI connections and per-song colour themes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+folia-core.workspace = true
+folia-store.workspace = true
+keyring.workspace = true
+reqwest = { workspace = true, features = ["system-proxy"] }
+ring.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

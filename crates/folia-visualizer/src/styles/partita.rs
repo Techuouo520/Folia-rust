@@ -209,7 +209,96 @@ fn build(
         row.center = Point::new(size.width / 2.0, y + row.height / 2.0);
         y += row.height + margin_bottom;
     }
+    let font_px = if scene.tuning.flag(manifest(), "avoidOverlap") {
+        fit_overlap(&mut rows, scene, size, font_px, margin_bottom)
+    } else {
+        font_px
+    };
     Rc::new(PartitaLayout { rows, font_px })
+}
+
+fn fit_overlap(rows: &mut [Row], scene: &Scene<'_>, size: Size, original_font: f32, margin: f32) -> f32 {
+    let widths: Vec<Vec<f64>> = rows
+        .iter()
+        .map(|row| {
+            row.words
+                .iter()
+                .map(|word| {
+                    f64::from(measure(&word.text, 100.0, scene.typography.font(crate::BOLD), f32::INFINITY).width)
+                        / 100.0
+                })
+                .collect()
+        })
+        .collect();
+    let mut font_px = original_font;
+    loop {
+        let height = space_overlap(rows, &widths, font_px, size, margin);
+        let widest = rows.iter().map(|row| row.width).fold(0.0_f32, f32::max);
+        let ratio = ((size.height * 0.7 - 64.0).max(1.0) / height).min((size.width - 64.0).max(1.0) / widest);
+        let next = (font_px * ratio * 0.98).max(original_font * 0.5);
+        if ratio >= 1.0 || next >= font_px - original_font * 0.005 {
+            return font_px;
+        }
+        font_px = next;
+    }
+}
+
+fn space_overlap(rows: &mut [Row], widths: &[Vec<f64>], font_px: f32, size: Size, margin: f32) -> f32 {
+    let mut reaches = Vec::with_capacity(rows.len());
+    for (row, widths) in rows.iter_mut().zip(widths) {
+        let mut over_em = f64::NEG_INFINITY;
+        let mut top_px = f64::NEG_INFINITY;
+        let mut bottom_px = f64::NEG_INFINITY;
+        let mut row_width_em = 0.0;
+        let mut cursor = PAD_X;
+        for (index, (width, config)) in widths.iter().zip(&row.configs).enumerate() {
+            let reach = glow::word_reach(*width, 1.0, config);
+            over_em = over_em.max(reach[1] - 1.22 / 2.0);
+            top_px = top_px.max(-config.y);
+            bottom_px = bottom_px.max(config.y);
+            row_width_em += width.max(2.0 * reach[0]) + 0.8;
+            let word_width = (*width * f64::from(font_px)) as f32;
+            row.offsets[index] = cursor + word_width / 2.0;
+            let gap = if let Some(next) = row.configs.get(index + 1) {
+                glow::word_pair_gap(
+                    [f64::from(word_width), widths[index + 1] * f64::from(font_px)],
+                    [config, next],
+                    f64::from(font_px),
+                ) + 0.05 * f64::from(font_px)
+            } else {
+                f64::from(WORD_GAP)
+            };
+            cursor += word_width + (gap as f32).max(WORD_GAP);
+        }
+        row.width = cursor + PAD_X;
+        row.height = font_px * 1.22 + PAD_Y * 2.0;
+        for offset in &mut row.offsets {
+            *offset -= row.width / 2.0;
+        }
+        let turn = row_width_em / 2.0 * row.rotate.to_radians().sin().abs();
+        reaches.push([
+            ((over_em + turn) * f64::from(font_px) + top_px) as f32,
+            ((over_em + turn) * f64::from(font_px) + bottom_px) as f32,
+        ]);
+    }
+    let top = reaches.first().map_or(0.0, |reach| (reach[0] - PAD_Y).max(0.0));
+    let margins: Vec<_> = reaches
+        .iter()
+        .enumerate()
+        .map(|(index, reach)| {
+            let needed = reaches
+                .get(index + 1)
+                .map_or(reach[1] - PAD_Y, |below| reach[1] + below[0] + 0.05 * font_px - PAD_Y * 2.0);
+            margin.max(needed)
+        })
+        .collect();
+    let total = top + rows.iter().zip(&margins).map(|(row, margin)| row.height + margin).sum::<f32>();
+    let mut y = (size.height - total) / 2.0 + top;
+    for (row, margin) in rows.iter_mut().zip(margins) {
+        row.center = Point::new(size.width / 2.0, y + row.height / 2.0);
+        y += row.height + margin;
+    }
+    total
 }
 
 /// Splits units into `count` rows of roughly even, seeded-random lengths, as the original does.
@@ -285,6 +374,12 @@ const PARTITA: &[crate::tuning::Item] = &[
         max: 180.0,
         step: 5.0,
         default: 100.0,
+    },
+    crate::tuning::Item::Switch {
+        key: "avoidOverlap",
+        label_key: "options.avoidOverlap",
+        hint_key: Some("options.avoidOverlapHint"),
+        default: false,
     },
 ];
 

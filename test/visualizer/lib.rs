@@ -22,6 +22,7 @@ use folia_visualizer::{Ease, Style, keyframes, spring, tween};
 
 #[test]
 fn tuning_round_trip_and_member_lock() {
+    use folia_core::{LyricAntialias, LyricRenderOverride, LyricRenderQuality};
     use folia_visualizer::{Style, Values};
     let manifest = Style::Classic.manifest();
     let mut values = Values::default();
@@ -38,6 +39,54 @@ fn tuning_round_trip_and_member_lock() {
     assert!(!values.toggle_member(manifest, "appear", "fade", false));
     assert!(values.member(manifest, "appear", "fade"));
     assert_eq!(Style::Cadenza.manifest().older_keys, ["cadenze_tuning"]);
+    for style in Style::ALL {
+        let manifest = style.manifest();
+        let mut values = Values::default();
+        let global = LyricRenderQuality { scale: 0.75, antialias: LyricAntialias::On };
+        assert_eq!(values.render_quality(global), global);
+        let override_value = LyricRenderOverride { scale: Some(2.0), antialias: Some(LyricAntialias::Off) };
+        values.set_render_override(override_value);
+        let mut loaded = Values::from_table(manifest, Some(&values.to_table(manifest)));
+        assert_eq!(loaded.render_override(), override_value);
+        assert_eq!(loaded.render_quality(global), LyricRenderQuality { scale: 2.0, antialias: LyricAntialias::Off });
+        loaded.reset(manifest);
+        assert_eq!(loaded.render_quality(global), global);
+        assert!(!loaded.to_table(manifest).contains_key("render"));
+    }
+    let nebbia = Style::Nebbia.manifest();
+    for (resolution, expected) in [
+        (0.5, Some(0.5)),
+        (0.625, Some(0.75)),
+        (0.875, Some(1.0)),
+        (1.0, None),
+        (1.25, Some(1.5)),
+        (1.75, Some(2.0)),
+        (3.0, Some(2.0)),
+    ] {
+        let mut table = toml::map::Map::new();
+        table.insert("resolution".into(), toml::Value::Float(resolution));
+        table.insert("busSpeed".into(), toml::Value::Float(1.35));
+        let tables = [("nebbia_tuning".into(), toml::Value::Table(table))].into_iter().collect();
+        let mut values = Style::Nebbia.load(&tables);
+        assert_eq!(values.render_override().scale, expected, "legacy resolution {resolution}");
+        assert_eq!(values.number(nebbia, "busSpeed"), 1.35);
+        let saved = values.to_table(nebbia);
+        assert!(!saved.contains_key("resolution"));
+        assert_eq!(Values::from_table(nebbia, Some(&saved)).render_override(), values.render_override());
+        values.reset(nebbia);
+        let saved = values.to_table(nebbia);
+        assert!(!saved.contains_key("render") && !saved.contains_key("resolution"));
+    }
+    for scale in [None, Some(0.75)] {
+        let render = scale.map_or_else(toml::map::Map::new, |scale| {
+            [("scale".into(), toml::Value::Float(scale))].into_iter().collect()
+        });
+        let table = [("resolution".into(), toml::Value::Float(2.0)), ("render".into(), toml::Value::Table(render))]
+            .into_iter()
+            .collect();
+        let tables = [("nebbia_tuning".into(), toml::Value::Table(table))].into_iter().collect();
+        assert_eq!(Style::Nebbia.load(&tables).render_override().scale, scale.map(|value| value as f32));
+    }
 }
 
 fn nebbia_strokes_path() -> std::path::PathBuf {

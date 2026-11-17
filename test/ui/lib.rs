@@ -17,6 +17,7 @@ mod player_bar;
 mod player_fixture;
 mod polish;
 mod reorder;
+mod scene;
 mod scroll_timeline;
 mod seam_title;
 #[cfg(all(feature = "stress", not(feature = "ci")))]
@@ -325,3 +326,6 @@ mod provider_highlight;
 
 #[cfg(test)]
 mod playback_navigation;
+
+#[cfg(test)]
+mod themes;

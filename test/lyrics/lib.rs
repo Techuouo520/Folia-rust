@@ -161,6 +161,30 @@ fn ttml_line_timing() {
     assert_eq!(parse(Format::Ttml, "<tt><p>broken", "", "").lines.len(), 0);
 }
 
+#[test]
+fn ttml_background_vocals_keep_their_own_timing_and_agent_boundaries() {
+    let source = r#"<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata"><body><div>
+<p begin="1s" end="4s" ttm:agent="v1"><span begin="1s" end="4s">Main</span><span ttm:role="x-bg" begin="2s" end="6s"><span begin="2s" end="3s">echo</span><span begin="3s" end="6s">es</span><span ttm:role="x-translation">回声</span><span ttm:role="x-roman">echoes</span></span><span ttm:role="x-translation">主行</span></p>
+<p begin="3s" end="7s" ttm:agent="v2">Harmony<span ttm:role="x-translation">和声</span></p>
+<p begin="4s" end="8s" ttm:agent="v3">Next</p>
+</div><div><p begin="3s" end="8s" ttm:agent="v4">Other block</p></div></body></tt>"#;
+    let lyrics = parse(Format::Ttml, source, "", "");
+    let main = lyrics.lines.iter().find(|line| line.text == "Main").unwrap();
+    assert_eq!(main.translation.as_deref(), Some("主行"));
+    assert_eq!(main.background_vocals.len(), 2);
+    let vocal = &main.background_vocals[0];
+    assert_eq!((&*vocal.text, vocal.start, vocal.end), ("echoes", 2.0, 6.0));
+    assert_eq!(vocal.words.len(), 1);
+    assert_eq!((vocal.words[0].start, vocal.words[0].end), (2.0, 6.0));
+    assert_eq!(vocal.alternate(folia_core::SubtitleContentMode::Both), Some("回声"));
+    assert_eq!(vocal.alternate(folia_core::SubtitleContentMode::Romanization), Some("echoes"));
+    assert_eq!(main.background_vocals[1].agent_id.as_deref(), Some("v2"));
+    assert!(lyrics.lines.iter().any(|line| line.text == "Next"));
+    assert!(lyrics.lines.iter().any(|line| line.text == "Other block"));
+    let same_agent = parse(Format::Ttml, &source.replace("ttm:agent=\"v2\"", "ttm:agent=\"v1\""), "", "");
+    assert!(same_agent.lines.iter().any(|line| line.text == "Harmony"));
+}
+
 fn timed(texts: &[&str]) -> Line {
     let words: Vec<folia_core::Word> = texts
         .iter()

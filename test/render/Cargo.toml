@@ -10,6 +10,7 @@ path = "lib.rs"
 [dependencies]
 tempfile.workspace = true
 folia-core.workspace = true
+folia-store.workspace = true
 folia-i18n.workspace = true
 folia-render.workspace = true
 folia-ui.workspace = true

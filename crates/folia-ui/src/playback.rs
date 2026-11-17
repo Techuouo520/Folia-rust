@@ -16,10 +16,12 @@ pub struct Playback {
     omni: Option<Omni>,
     pub queue: Queue<Track>,
     pub lyrics: Option<Lyrics>,
+    lyrics_pending: bool,
     pub status: Status,
     pub settings: PlaybackSettings,
     /// Silenced without losing `settings.volume`, like the original `isMuted`.
     pub muted: bool,
+    queue_ended: bool,
     /// Seconds the playing song's lyrics are moved later (`lyricTimelineOffsetMs`); every song starts at 0.
     pub lyric_offset: f64,
     seeking: Option<f64>,
@@ -120,9 +122,11 @@ impl Playback {
             omni,
             queue,
             lyrics: None,
+            lyrics_pending: false,
             status,
             settings,
             muted: false,
+            queue_ended: false,
             lyric_offset: 0.0,
             seeking: None,
             failures: 0,
@@ -157,8 +161,23 @@ impl Playback {
         self.queue.current()
     }
 
+    /// The exact representation currently heard, shared with cancellable offline analysis readers.
+    pub fn analysis_input(&self) -> Option<AudioInput> {
+        if !matches!(self.status.state, PlayerState::Playing | PlayerState::Paused) {
+            return None;
+        }
+        self.active_input
+            .clone()
+            .or_else(|| self.current().filter(|track| track.online.is_none()).map(|track| track.path.clone().into()))
+    }
+
     pub fn is_playing(&self) -> bool {
         self.status.state == PlayerState::Playing
+    }
+
+    /// A natural end of the last queue item, until playback starts again.
+    pub fn queue_ended(&self) -> bool {
+        self.queue_ended
     }
 
     pub fn is_buffering(&self) -> bool {
@@ -170,6 +189,21 @@ impl Playback {
         if let Some(player) = self.player.as_mut() {
             player.set_equalizer(parameters);
         }
+    }
+
+    pub fn room_sample_rate(&self) -> Option<u32> {
+        self.player.as_ref().map(Player::sample_rate)
+    }
+
+    pub fn set_room(
+        &mut self,
+        convolver: Option<Box<folia_player::RoomConvolver>>,
+    ) -> Result<(), folia_player::RoomError> {
+        self.player.as_mut().map_or(Ok(()), |player| player.set_room(convolver))
+    }
+
+    pub fn finish_room_change(&mut self) -> bool {
+        self.player.as_mut().is_none_or(Player::finish_room_change)
     }
 
     /// `replayGainMode` and the gains of the song that is playing.
@@ -186,6 +220,11 @@ impl Playback {
     /// Replaces the shown lyrics, for a match or an imported file.
     pub fn set_lyrics(&mut self, lyrics: Option<Lyrics>) {
         self.lyrics = lyrics;
+        self.lyrics_pending = false;
+    }
+
+    pub fn lyrics_loading(&self) -> bool {
+        self.lyrics_pending
     }
 
     /// The gain the mode applies to the playing song's tags.
@@ -226,6 +265,10 @@ impl Playback {
     /// The position to show: the slider's value while it is being dragged.
     pub fn position(&self) -> f64 {
         self.seeking.unwrap_or(self.status.position)
+    }
+
+    pub fn heard_position(&self) -> f64 {
+        self.seeking.unwrap_or_else(|| self.player.as_ref().map_or(self.status.position, Player::heard_position))
     }
 
     /// The time the lyrics are drawn at: a positive offset holds them back (`audioTime - offset`).
@@ -292,6 +335,8 @@ impl Playback {
 
     /// Empties the queue and stops, as signing out of the active platform does (`resetForProviderSwitch`).
     pub fn clear(&mut self) {
+        self.lyrics_pending = false;
+        self.queue_ended = false;
         self.active_input = None;
         self.failed_inputs.clear();
         self.audio_task = None;
@@ -415,6 +460,7 @@ impl Playback {
             Message::LyricsLoaded(request, id, lyrics, kept) => {
                 if request == self.request && self.current().is_some_and(|track| track.id == id) {
                     self.lyrics = lyrics;
+                    self.lyrics_pending = false;
                     self.kept_chorus = kept.map(|ranges| (id, ranges));
                 }
                 Task::none()
@@ -568,6 +614,7 @@ impl Playback {
         if self.queue.advance(finished).is_some() {
             return self.start_current_in_direction(true);
         }
+        self.queue_ended |= finished;
         self.stop_current()
     }
 
@@ -595,6 +642,8 @@ impl Playback {
     }
 
     fn load_current(&mut self) -> Task<Message> {
+        self.lyrics_pending = false;
+        self.queue_ended = false;
         self.active_input = None;
         self.prefetch_dirty = true;
         self.audio_task = None;
@@ -609,6 +658,7 @@ impl Playback {
         };
         self.request = self.request.wrapping_add(1);
         let request = self.request;
+        self.lyrics_pending = true;
         // A track started any other way overtakes a personal FM batch on its way.
         self.topping_up = false;
         self.notice = None;
@@ -686,7 +736,8 @@ impl Playback {
     }
 
     fn refresh(&mut self) {
-        if let Some(player) = &self.player {
+        if let Some(player) = &mut self.player {
+            player.collect_room();
             self.status = player.status();
         }
     }

@@ -35,6 +35,7 @@ fn manifests_match_the_original_control_list() {
         for (item, row) in items.iter().zip(rows) {
             assert_eq!(item.key(), row.key.as_str(), "{}", spec.id);
             match (item, row.kind.as_str()) {
+                (Item::Text { max_length, .. }, "text") => assert_eq!(*max_length, row.number as usize),
                 (Item::Switch { default, .. }, "switch") => assert_eq!(*default, row.flag, "{} {}", spec.id, row.key),
                 (Item::Slider { min, max, step, default, .. }, "slider") => {
                     assert_eq!(
@@ -84,6 +85,68 @@ fn classic_legacy_layout_uses_a_fixed_gap() {
     let legacy_gap = word_configs(3.0, AnimationIntensity::Normal, false, &[40.0, 40.0], 60.0, legacy);
     assert!((legacy_gap[0].margin_right - 12.8).abs() < 1.0e-6);
     assert!((modern_gap[0].margin_right - legacy_gap[0].margin_right).abs() > 1.0);
+    let protected = ClassicTuning { avoid_overlap: true, word_spacing: 0.0, ..modern };
+    let widths = [180.0, 30.0, 240.0, 90.0];
+    for seed in [0.0, 1.5, 3.25, 10.0] {
+        let words = word_configs(seed, AnimationIntensity::Chaotic, false, &widths, 60.0, protected);
+        for index in 0..words.len() - 1 {
+            let pair = folia_visualizer::styles::glow::word_pair_gap(
+                [f64::from(widths[index]), f64::from(widths[index + 1])],
+                [&words[index], &words[index + 1]],
+                60.0,
+            );
+            assert!(words[index].margin_right >= pair + 3.0, "word spacing zero closed a protected gap");
+        }
+    }
+    assert_eq!(
+        legacy_gap,
+        word_configs(
+            3.0,
+            AnimationIntensity::Normal,
+            false,
+            &[40.0, 40.0],
+            60.0,
+            ClassicTuning { avoid_overlap: true, ..legacy }
+        ),
+    );
+}
+
+#[test]
+fn glow_overlap_bounds_match_the_original_turn_samples() {
+    use folia_visualizer::styles::glow::{WordConfig, word_reach};
+    for (width, font, scale, rotate, passed, expected) in [
+        (120.0, 72.0, 1.2, 5.0, 22.5, [105.68760488902632, 71.56476814622162]),
+        (36.0, 48.0, 0.85, -30.0, 20.0, [32.83026414906268, 35.44368553208356]),
+        (320.0, 64.0, 1.65, 3.0, -9.0, [372.9621499307688, 93.16206463645011]),
+        (40.0, 16.0, 0.9, 0.0, 0.0, [25.2, 10.08]),
+    ] {
+        let config = WordConfig { scale, rotate, passed_rotate: passed, x: 0.0, y: 0.0, margin_right: 0.0 };
+        let actual = word_reach(width, font, &config);
+        assert!((actual[0] - expected[0]).abs() < 1e-10 && (actual[1] - expected[1]).abs() < 1e-10);
+    }
+}
+
+#[test]
+fn monet_visibility_migrates_switches_and_limits_description() {
+    let manifest = Style::Monet.manifest();
+    let table: toml::Table = toml::from_str("showDescription = false\nshowPortraitDragHanger = true\n").unwrap();
+    let mut values = Values::from_table(manifest, Some(&table));
+    assert_eq!(values.choice(manifest, "descriptionVisibility"), "hidden");
+    assert_eq!(values.choice(manifest, "portraitHangerVisibility"), "auto");
+    assert!(manifest.hidden(&values, "customDescription"));
+    values.set_choice(manifest, "descriptionVisibility", "always");
+    assert!(values.flag(manifest, "showDescription"));
+    values.set_text(manifest, "customDescription", &"🎵".repeat(100));
+    assert_eq!(values.text("customDescription").encode_utf16().count(), 120);
+    values.set_choice(manifest, "portraitSource", "none");
+    assert!(manifest.hidden(&values, "portraitStyle"));
+    assert!(manifest.hidden(&values, "portraitHangerVisibility"));
+    let restored = Values::from_table(manifest, Some(&values.to_table(manifest)));
+    assert_eq!(restored.to_table(manifest), values.to_table(manifest));
+    values.reset(manifest);
+    assert_eq!(values.choice(manifest, "descriptionVisibility"), "auto");
+    assert_eq!(values.text("customDescription"), "");
+    assert_eq!(values.choice(manifest, "portraitSource"), "cover");
 }
 
 #[test]
@@ -250,6 +313,7 @@ fn parse(text: &str) -> Vec<Spec> {
             "picture" => spec.rows.push(row(head, parts)),
             "member" => spec.rows.push(row(head, parts)),
             "button" => spec.rows.push(row(head, parts)),
+            "text" => spec.rows.push(row(head, parts)),
             other => panic!("bad fixture line {other}"),
         }
     }
@@ -274,6 +338,7 @@ fn row<'a>(kind: &str, mut parts: impl Iterator<Item = &'a str>) -> Row {
         options: Vec::new(),
     };
     match kind {
+        "text" => row.number = parts.next().unwrap().parse().unwrap(),
         "switch" => row.flag = parts.next().unwrap() == "true",
         "slider" => {
             row.min = parts.next().unwrap().parse().unwrap();

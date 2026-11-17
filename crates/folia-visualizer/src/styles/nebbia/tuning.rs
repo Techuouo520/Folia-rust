@@ -1,6 +1,156 @@
 // Nebbia's settings, copied from the original `nebbia/tuning.ts` and `NebbiaSettingsPanel.tsx`.
 
-use crate::tuning::{Group, Item, Manifest, Values};
+use crate::tuning::{Choice, Group, Item, Manifest, NumberFormat, Values};
+
+const BEHIND: &[Choice] = &[
+    Choice { value: "night", label_key: "options.nebbiaBehind_night", requires: None },
+    Choice { value: "aquarium", label_key: "options.nebbiaBehind_aquarium", requires: None },
+    Choice { value: "backdrop", label_key: "options.nebbiaBehind_backdrop", requires: None },
+];
+const RAIN: &[Choice] = &[
+    Choice { value: "slant", label_key: "options.nebbiaRain_slant", requires: None },
+    Choice { value: "straight", label_key: "options.nebbiaRain_straight", requires: None },
+    Choice { value: "off", label_key: "options.nebbiaRain_off", requires: None },
+];
+const GLASS_STYLES: &[Choice] = &[
+    Choice { value: "rain", label_key: "options.nebbiaGlass_rain", requires: None },
+    Choice { value: "dew", label_key: "options.nebbiaGlass_dew", requires: None },
+    Choice { value: "snow", label_key: "options.nebbiaGlass_snow", requires: None },
+];
+const SCENERY: &[Item] = &[
+    Item::Select {
+        key: "behind",
+        label_key: "options.nebbiaBehind",
+        hint_key: Some("options.nebbiaBehindHint"),
+        options: BEHIND,
+        default: "night",
+    },
+    Item::Slider {
+        key: "jellies",
+        label_key: "options.nebbiaJellies",
+        hint_key: None,
+        min: 0.0,
+        max: 24.0,
+        step: 1.0,
+        default: 16.0,
+    },
+    Item::Slider {
+        key: "jellySize",
+        label_key: "options.nebbiaJellySize",
+        hint_key: None,
+        min: 0.5,
+        max: 1.8,
+        step: 0.05,
+        default: 1.0,
+    },
+    Item::Slider {
+        key: "bubbles",
+        label_key: "options.nebbiaBubbles",
+        hint_key: None,
+        min: 0.0,
+        max: 1.0,
+        step: 0.05,
+        default: 0.6,
+    },
+    Item::Member { key: "scenery", option: "spot", label_key: "options.nebbiaScenery_spot", default_on: true },
+    Item::Member {
+        key: "scenery",
+        option: "buildings",
+        label_key: "options.nebbiaScenery_buildings",
+        default_on: true,
+    },
+    Item::Member { key: "scenery", option: "lights", label_key: "options.nebbiaScenery_lights", default_on: true },
+    Item::Member { key: "scenery", option: "cars", label_key: "options.nebbiaScenery_cars", default_on: true },
+    Item::Member { key: "scenery", option: "road", label_key: "options.nebbiaScenery_road", default_on: true },
+    Item::Select {
+        key: "rain",
+        label_key: "options.nebbiaRain",
+        hint_key: Some("options.nebbiaRainHint"),
+        options: RAIN,
+        default: "slant",
+    },
+];
+const GLASS: &[Item] = &[
+    Item::Select {
+        key: "glass",
+        label_key: "options.nebbiaGlassStyle",
+        hint_key: Some("options.nebbiaGlassHint"),
+        options: GLASS_STYLES,
+        default: "rain",
+    },
+    Item::Slider {
+        key: "rainHit",
+        label_key: "options.nebbiaRainHit",
+        hint_key: None,
+        min: 0.0,
+        max: 3.0,
+        step: 0.05,
+        default: 1.0,
+    },
+    Item::Slider {
+        key: "rainBig",
+        label_key: "options.nebbiaRainBig",
+        hint_key: None,
+        min: 0.0,
+        max: 2.0,
+        step: 0.05,
+        default: 1.0,
+    },
+    Item::Slider {
+        key: "dew",
+        label_key: "options.nebbiaDew",
+        hint_key: None,
+        min: 0.0,
+        max: 1.5,
+        step: 0.05,
+        default: 1.0,
+    },
+    Item::Slider {
+        key: "dewSize",
+        label_key: "options.nebbiaDewSize",
+        hint_key: None,
+        min: 0.5,
+        max: 2.0,
+        step: 0.05,
+        default: 1.0,
+    },
+    Item::Slider {
+        key: "dewGlint",
+        label_key: "options.nebbiaDewGlint",
+        hint_key: None,
+        min: 0.0,
+        max: 2.0,
+        step: 0.05,
+        default: 1.0,
+    },
+    Item::Slider {
+        key: "snow",
+        label_key: "options.nebbiaSnow",
+        hint_key: None,
+        min: 0.0,
+        max: 3.0,
+        step: 0.05,
+        default: 1.0,
+    },
+    Item::Slider {
+        key: "snowSize",
+        label_key: "options.nebbiaSnowSize",
+        hint_key: None,
+        min: 0.5,
+        max: 2.0,
+        step: 0.05,
+        default: 1.0,
+    },
+    Item::Slider {
+        key: "snowMelt",
+        label_key: "options.nebbiaSnowMelt",
+        hint_key: None,
+        min: 0.25,
+        max: 3.0,
+        step: 0.05,
+        default: 1.0,
+    },
+];
 
 const WRITING: &[Item] = &[
     Item::Slider {
@@ -152,36 +302,15 @@ const WINDOW: &[Item] = &[
         step: 0.01,
         default: 0.8,
     },
-    Item::Slider {
-        key: "rainHit",
-        label_key: "options.nebbiaRainHit",
-        hint_key: None,
-        min: 0.0,
-        max: 3.0,
-        step: 0.05,
-        default: 1.0,
-    },
-    Item::Slider {
-        key: "rainBig",
-        label_key: "options.nebbiaRainBig",
-        hint_key: None,
-        min: 0.0,
-        max: 2.0,
-        step: 0.05,
-        default: 1.0,
-    },
-    Item::Slider {
-        key: "resolution",
-        label_key: "options.nebbiaResolution",
-        hint_key: None,
-        min: 0.5,
-        max: 2.0,
-        step: 0.25,
-        default: 1.0,
-    },
 ];
 
 const GROUPS: &[Group] = &[
+    Group {
+        id: "vis-nebbia-scenery",
+        title_key: "options.nebbiaScenery",
+        foot_key: Some("options.nebbiaSceneryHint"),
+        items: SCENERY,
+    },
     Group { id: "vis-nebbia-writing", title_key: "options.nebbiaWriting", foot_key: None, items: WRITING },
     Group {
         id: "vis-nebbia-appear",
@@ -202,17 +331,141 @@ const GROUPS: &[Group] = &[
         items: LAYOUTS,
     },
     Group { id: "vis-nebbia-window", title_key: "options.nebbiaWindow", foot_key: None, items: WINDOW },
+    Group { id: "vis-nebbia-glass", title_key: "options.nebbiaGlass", foot_key: None, items: GLASS },
 ];
 
 pub fn manifest() -> Manifest {
+    const MULTIPLIER: NumberFormat = NumberFormat::Times { base: 0.0 };
+    const PERCENT: NumberFormat = NumberFormat::Percent { scale: 100.0, signed: false };
     let mut manifest = Manifest::plain("nebbia_tuning", &[], GROUPS);
     manifest.reset_key = Some("notifications.nebbiaReset");
+    manifest.allow_empty = &["scenery"];
+    manifest.number_formats = &[
+        ("strokeWidth", PERCENT),
+        ("writeSpeed", MULTIPLIER),
+        ("jitter", MULTIPLIER),
+        ("warp", MULTIPLIER),
+        ("doodle", PERCENT),
+        ("mist", PERCENT),
+        ("hold", NumberFormat::Seconds),
+        ("refog", NumberFormat::Seconds),
+        ("busSpeed", MULTIPLIER),
+        ("neon", MULTIPLIER),
+        ("bump", MULTIPLIER),
+        ("spot", MULTIPLIER),
+        ("spotX", PERCENT),
+        ("rainHit", MULTIPLIER),
+        ("rainBig", MULTIPLIER),
+        ("resolution", MULTIPLIER),
+        ("jellySize", MULTIPLIER),
+        ("bubbles", PERCENT),
+        ("dew", MULTIPLIER),
+        ("dewSize", MULTIPLIER),
+        ("dewGlint", MULTIPLIER),
+        ("snow", MULTIPLIER),
+        ("snowSize", MULTIPLIER),
+        ("snowMelt", MULTIPLIER),
+    ];
+    manifest.disabled_when = Some(disabled);
+    manifest.choice_defaults = &[("behind", "night", "glass", "rain"), ("behind", "aquarium", "glass", "dew")];
+    manifest.choice_labels = &[
+        ("options.nebbiaSceneryHint", "behind", "aquarium", "options.nebbiaAquaSceneryHint"),
+        ("options.nebbiaScenery_spot", "behind", "aquarium", "options.nebbiaAquaScenery_spot"),
+        ("options.nebbiaScenery_buildings", "behind", "aquarium", "options.nebbiaAquaScenery_buildings"),
+        ("options.nebbiaScenery_lights", "behind", "aquarium", "options.nebbiaAquaScenery_lights"),
+        ("options.nebbiaScenery_cars", "behind", "aquarium", "options.nebbiaAquaScenery_cars"),
+        ("options.nebbiaScenery_road", "behind", "aquarium", "options.nebbiaAquaScenery_road"),
+        ("options.nebbiaRain", "behind", "aquarium", "options.nebbiaAquaRain"),
+        ("options.nebbiaRainHint", "behind", "aquarium", "options.nebbiaAquaRainHint"),
+        ("options.nebbiaRain_slant", "behind", "aquarium", "options.nebbiaAquaRain_slant"),
+        ("options.nebbiaRain_straight", "behind", "aquarium", "options.nebbiaAquaRain_straight"),
+        ("options.nebbiaRain_off", "behind", "aquarium", "options.nebbiaAquaRain_off"),
+    ];
+    manifest.hidden_choices = &[
+        ("rainHit", "glass", "snow"),
+        ("rainBig", "glass", "snow"),
+        ("dew", "glass", "snow"),
+        ("dewSize", "glass", "snow"),
+        ("dewGlint", "glass", "snow"),
+        ("snow", "glass", "rain"),
+        ("snowSize", "glass", "rain"),
+        ("snowMelt", "glass", "rain"),
+        ("snow", "glass", "dew"),
+        ("snowSize", "glass", "dew"),
+        ("snowMelt", "glass", "dew"),
+        ("jellies", "behind", "night"),
+        ("jellySize", "behind", "night"),
+        ("bubbles", "behind", "night"),
+        ("jellies", "behind", "backdrop"),
+        ("jellySize", "behind", "backdrop"),
+        ("bubbles", "behind", "backdrop"),
+        ("bump", "behind", "aquarium"),
+        ("rainHit", "glass", "dew"),
+        ("rainBig", "glass", "dew"),
+        ("dew", "glass", "rain"),
+        ("dewSize", "glass", "rain"),
+        ("dewGlint", "glass", "rain"),
+    ];
     manifest
+}
+
+fn disabled(item: Item, values: &Values) -> bool {
+    let manifest = manifest();
+    let backdrop = values.choice(manifest, "behind") == "backdrop";
+    match item {
+        Item::Member { key: "scenery", option, .. } => backdrop && option != "spot",
+        Item::Select { key: "rain", .. } => {
+            backdrop
+                || values.choice(manifest, "behind") != "aquarium"
+                    && (values.choice(manifest, "glass") == "snow"
+                        || !values.member(manifest, "scenery", "spot")
+                        || values.number(manifest, "spot") <= 0.0)
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn scenery(values: &Values) -> u32 {
+    let manifest = manifest();
+    let mut rain = match values.choice(manifest, "rain") {
+        "off" => 0,
+        "straight" => 16,
+        _ => 48,
+    };
+    if values.choice(manifest, "glass") == "snow" && values.choice(manifest, "behind") != "aquarium" {
+        rain = 0;
+    }
+    ["buildings", "lights", "cars", "road"]
+        .into_iter()
+        .enumerate()
+        .fold(rain, |mask, (bit, part)| mask | if values.member(manifest, "scenery", part) { 1 << bit } else { 0 })
 }
 
 /// Early saves used a single `appearMode` / `fadeMode` string. Both become the list the panel stores now.
 pub fn normalize(table: Option<&toml::map::Map<String, toml::Value>>, values: &mut Values) {
     let Some(table) = table else { return };
+    if !table.contains_key("render") {
+        let resolution = table
+            .get("resolution")
+            .and_then(|value| match value {
+                toml::Value::Float(value) => Some(*value as f32),
+                toml::Value::Integer(value) => Some(*value as f32),
+                toml::Value::String(value) => value.parse::<f32>().ok(),
+                _ => None,
+            })
+            .filter(|value| value.is_finite())
+            .unwrap_or(1.0)
+            .clamp(0.5, 2.0);
+        if resolution != 1.0 {
+            let scale = folia_core::LYRIC_RENDER_SCALES
+                .into_iter()
+                .reduce(|best, next| if (next - resolution).abs() <= (best - resolution).abs() { next } else { best });
+            values.set_render_override(folia_core::LyricRenderOverride { scale, ..Default::default() });
+        }
+    }
+    if table.get("glass").is_none() && values.choice(manifest(), "behind") == "aquarium" {
+        values.set_choice(manifest(), "glass", "dew");
+    }
     if table.get("appear").is_none() {
         let legacy = match table.get("appearMode").and_then(toml::Value::as_str) {
             Some("write") => &["write"][..],

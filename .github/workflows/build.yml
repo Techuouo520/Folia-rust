@@ -44,6 +44,12 @@ jobs:
           key: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked -p folia-app --target ${{ matrix.target }}
+      - name: Set up packaging Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Prepare runtime assets
+        run: python .github/fetch_runtime.py --target ${{ matrix.target }} --output target/runtime-assets --cache-dir target/runtime-downloads
       - name: Package
         id: package
         shell: bash
@@ -52,9 +58,11 @@ jobs:
           version="${{ inputs.tag }}"; version="${version:-${GITHUB_SHA::7}}"; stage="folia-${version}-${{ matrix.name }}"
           mkdir -p "$stage"
           if [ "${{ runner.os }}" = "Windows" ]; then cp "target/${{ matrix.target }}/release/folia.exe" "$stage/"; else cp "target/${{ matrix.target }}/release/folia" "$stage/"; fi
-          # Everything else is compiled into the binary; only the Arphic-licensed stroke data stays a separate file.
-          mkdir -p "$stage/assets/nebbia" && cp assets/nebbia/nebbia-strokes.bin.gz assets/nebbia/NOTICE.txt assets/nebbia/COPYING.txt assets/nebbia/ARPHICPL.TXT "$stage/assets/nebbia/" && cp LICENSE README.md "$stage/"
+          # Preserve separate resource licenses and the verified analysis and acoustic runtime files.
+          mkdir -p "$stage/assets/nebbia" && cp assets/nebbia/nebbia-strokes.bin.gz assets/nebbia/NOTICE.txt assets/nebbia/COPYING.txt assets/nebbia/ARPHICPL.TXT assets/nebbia/nebbiaRaindrop.LICENSE.txt "$stage/assets/nebbia/" && cp LICENSE README.md "$stage/"
           mkdir -p "$stage/assets/paper-shaders" && cp assets/paper-shaders/LICENSE assets/paper-shaders/NOTICE "$stage/assets/paper-shaders/"
+          mkdir -p "$stage/assets/cinema" "$stage/assets/preview" && cp assets/cinema/NOTICE assets/cinema/THREE-LICENSE.txt "$stage/assets/cinema/" && cp assets/preview/NOTICE.txt "$stage/assets/preview/"
+          cp -R target/runtime-assets/models target/runtime-assets/acoustics target/runtime-assets/analysis "$stage/assets/"
           if [ "${{ runner.os }}" = "Windows" ]; then 7z a -tzip "$stage.zip" "$stage" > /dev/null; echo "file=$stage.zip" >> "$GITHUB_OUTPUT"; else tar -czf "$stage.tar.gz" "$stage"; echo "file=$stage.tar.gz" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/upload-artifact@v4
         with:

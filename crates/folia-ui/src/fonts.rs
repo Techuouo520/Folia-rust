@@ -77,6 +77,7 @@ pub fn typography(appearance: &folia_store::AppearanceSettings) -> folia_visuali
         family: Some(lyric.family),
         weight: appearance.lyrics_font.weight.map(weight),
         subtitle: Some(subtitle),
+        subtitle_weight: settings.weight.map(weight),
         subtitle_scale: appearance.subtitle.font_scale,
         subtitle_mode: appearance.subtitle.content_mode,
         hide_subtitle: appearance.subtitle.hide_translation,

@@ -1,0 +1,4 @@
+Preview covers copied unchanged from Folia v0.7.29, commit 8006b40f6.
+Source paths: assets/placeholder_cover.jpg and assets/placeholder_cover-2.jpg.
+Upstream project: https://github.com/chthollyphile/folia-major
+Distributed with the upstream AGPL-3.0-only project. See the repository LICENSE.

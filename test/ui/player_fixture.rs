@@ -23,6 +23,10 @@ pub(super) fn init(path: &std::path::Path) -> Init {
     Init {
         store: folia_store::Store::at(path.join("config")),
         general: Default::default(),
+        graphics: Default::default(),
+        scene: Default::default(),
+        system_reduced_motion: false,
+        analysis_models: path.join("models"),
         appearance: folia_store::AppearanceSettings { theme: folia_store::ThemeMode::Light, ..Default::default() },
         theme: Default::default(),
         audio: Default::default(),

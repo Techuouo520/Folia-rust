@@ -14,6 +14,10 @@ use iced::advanced::graphics::text::cosmic_text::{
 };
 use iced::advanced::graphics::text::{font_system, to_attributes};
 
+#[path = "glyph_blur.rs"]
+mod gaussian;
+pub use gaussian::BlurStats;
+
 const SHADER: &str = include_str!("../shaders/glyph.wgsl");
 const INSTANCE_BYTES: usize = 80;
 /// The atlas starts at 2048 × 1024 and doubles its height, then its width, up to 4096 × 4096.
@@ -90,6 +94,8 @@ pub enum Mark {
     /// A glyph at `size` logical pixels, rasterized at no more than `max_scale` physical pixels per logical pixel.
     /// `outline` is the stroke width as a fraction of `size` for hollow glyphs; `0` fills.
     Glyph { glyph: ShapedGlyph, size: f32, outline: f32, max_scale: f32 },
+    /// Gaussian sigma is in the same local logical coordinates as `size` and `Sprite::pen`.
+    BlurredGlyph { glyph: ShapedGlyph, size: f32, outline: f32, max_scale: f32, sigma: f32 },
     /// Image `n` given to `Glyphs::new`, covering the unit square centered on `pen`; `axes` give it its size.
     Image(u16),
 }
@@ -197,7 +203,11 @@ impl Atlas {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind = bind(device, &shared.layout, &shared.uniform, &view, &shared.sampler);
+        let array = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let bind = bind(device, &shared.layout, &shared.uniform, &view, &array, &shared.sampler);
         Self { texture, bind, size, rows: Vec::new(), bottom: 0, slots: HashMap::new() }
     }
 
@@ -379,7 +389,7 @@ impl Atlas {
         let slot = self.slots.get(&key).copied().filter(|slot| slot.width > 0);
         let Some(slot) = slot else { return [0.0; 20] };
         let rect = match (key, sprite.mark) {
-            (Key::Glyph { quarter_px, .. }, Mark::Glyph { size, .. }) => {
+            (Key::Glyph { quarter_px, .. }, Mark::Glyph { size, .. } | Mark::BlurredGlyph { size, .. }) => {
                 let per_px = size / (quarter_px as f32 * 0.25);
                 [
                     sprite.pen[0] + (slot.left - GUTTER as i32) as f32 * per_px,
@@ -446,6 +456,8 @@ pub struct Glyphs {
     frame: u64,
     count: u32,
     interface: bool,
+    blur_pipeline: Option<gaussian::Pipelines>,
+    blur: Option<gaussian::Cache>,
 }
 
 impl std::fmt::Debug for Glyphs {
@@ -496,12 +508,49 @@ impl Glyphs {
             frame: 0,
             count: 0,
             interface: false,
+            blur_pipeline: None,
+            blur: None,
         }
     }
 
     /// Calibrates grid-fitted interface glyphs against Chromium's grayscale raster.
     pub fn interface(device: &wgpu::Device, format: wgpu::TextureFormat, capacity: usize) -> Self {
         Self { interface: true, ..Self::new(device, format, capacity, Vec::new()) }
+    }
+
+    /// Compiles Gaussian passes during an owner's background initialization.
+    pub fn warm_blur(&mut self, device: &wgpu::Device) {
+        self.blur_pipeline.get_or_insert_with(|| gaussian::Pipelines::new(device));
+    }
+
+    /// Grows the instance buffers while retaining the pipelines and cached coverage.
+    pub fn reserve(&mut self, device: &wgpu::Device, sprites: usize) {
+        if sprites <= self.capacity {
+            return;
+        }
+        let maximum = (device.limits().max_buffer_size / INSTANCE_BYTES as u64) as usize;
+        let capacity = sprites.checked_next_power_of_two().unwrap_or(sprites).min(maximum);
+        if capacity <= self.capacity {
+            return;
+        }
+        if sprites > maximum {
+            tracing::warn!(sprites, maximum, "glyph instance capacity exceeds the graphics limit");
+        }
+        self.instances = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("folia-glyphs-instances"),
+            size: (capacity * INSTANCE_BYTES) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.staging.reserve((capacity * INSTANCE_BYTES).saturating_sub(self.staging.len()));
+        self.capacity = capacity;
+        if let Some(blur) = &mut self.blur {
+            blur.reserve(device, capacity);
+        }
+    }
+
+    pub fn blur_stats(&self) -> BlurStats {
+        self.blur.as_ref().map_or_else(BlurStats::default, gaussian::Cache::stats)
     }
 
     /// Rasterizes glyphs the atlas lacks and uploads one instance per sprite, so sprite `i` is instance `i`.
@@ -520,6 +569,9 @@ impl Glyphs {
             self.count = 0;
             self.peak.live_marks = 0;
             self.peak.live_texels = 0;
+            if let Some(blur) = &mut self.blur {
+                blur.idle();
+            }
             return;
         }
         let largest = LARGEST_SIDE.min(device.limits().max_texture_dimension_2d);
@@ -549,9 +601,24 @@ impl Glyphs {
             uniform[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
         }
         queue.write_buffer(&shared.uniform, 0, &uniform);
+        let has_blur = sprites.iter().any(|sprite| gaussian::requested(sprite, scale).is_some());
+        if has_blur || self.blur.is_some() {
+            let pipelines = self.blur_pipeline.get_or_insert_with(|| gaussian::Pipelines::new(device));
+            let blur =
+                self.blur.get_or_insert_with(|| gaussian::Cache::new(device, atlas, shared, pipelines, self.capacity));
+            blur.prepare(
+                gaussian::Context { device, queue, atlas, shared, pipelines, frame: self.frame },
+                sprites,
+                scale,
+            );
+        }
         self.staging.clear();
         for sprite in sprites {
-            for value in atlas.instance(sprite, scale) {
+            let mut instance = atlas.instance(sprite, scale);
+            if let Some(blur) = &self.blur {
+                blur.instance(sprite, scale, atlas, &mut instance);
+            }
+            for value in instance {
                 self.staging.extend_from_slice(&value.to_le_bytes());
             }
         }
@@ -589,7 +656,7 @@ impl Glyphs {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &atlas.bind, &[]);
+        pass.set_bind_group(0, self.blur.as_ref().map_or(&atlas.bind, |blur| &blur.bind), &[]);
         pass.set_vertex_buffer(0, self.instances.slice(..));
         pass.draw(0..6, range);
     }
@@ -597,6 +664,7 @@ impl Glyphs {
     /// Drops the atlas texture; the next `prepare` starts a new one.
     pub fn release(&mut self) {
         self.atlas = None;
+        self.blur = None;
         self.count = 0;
         self.peak.size = [0, 0];
         self.peak.marks = 0;
@@ -607,7 +675,8 @@ impl Glyphs {
 
 fn key_of(sprite: &Sprite, scale: f32) -> Key {
     match sprite.mark {
-        Mark::Glyph { glyph, size, outline, max_scale } => Key::Glyph {
+        Mark::Glyph { glyph, size, outline, max_scale }
+        | Mark::BlurredGlyph { glyph, size, outline, max_scale, .. } => Key::Glyph {
             font: glyph.font,
             id: glyph.id,
             weight: glyph.weight,
@@ -814,6 +883,16 @@ fn bind_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -823,6 +902,7 @@ fn bind(
     layout: &wgpu::BindGroupLayout,
     uniform: &wgpu::Buffer,
     view: &wgpu::TextureView,
+    blurred: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -832,6 +912,7 @@ fn bind(
             wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(blurred) },
         ],
     })
 }

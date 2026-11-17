@@ -1,0 +1,48 @@
+{
+  "width": 960,
+  "height": 600,
+  "dpr": 1.25,
+  "time": 6,
+  "seat": {
+    "kind": "viewpoint",
+    "id": "R10-13",
+    "ear": [
+      -0.28,
+      3.39,
+      14.74920727372685
+    ],
+    "eye": [
+      -0.28,
+      3.39,
+      14.74920727372685
+    ],
+    "lookAt": [
+      0,
+      4.685,
+      0
+    ],
+    "row": "10",
+    "number": 13,
+    "occupied": false,
+    "preferred": true
+  },
+  "renderer": "ANGLE (Intel, Intel(R) Arc(TM) A580 Graphics (0x000056A2) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "source_commit": "8006b40f6e7b26198ac964e9e1255c3ca23bd935",
+  "source_rgb": [
+    [
+      180,
+      35,
+      70
+    ],
+    [
+      40,
+      150,
+      195
+    ],
+    [
+      235,
+      190,
+      90
+    ]
+  ]
+}

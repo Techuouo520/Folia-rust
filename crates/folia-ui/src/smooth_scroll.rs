@@ -111,6 +111,10 @@ impl Scroll {
         self.tween = None;
     }
 
+    pub fn finish(&mut self) {
+        self.jump(self.goal());
+    }
+
     /// Advances the tween to `now`; `Some` when the visible offset moved and the scrollable must follow.
     pub fn frame(&mut self, now: Instant) -> Option<f32> {
         let tween = self.tween?;
@@ -146,7 +150,7 @@ impl Scroll {
 
     fn start(&mut self, goal: f32, ms: f64, ease: Ease, now: Instant) {
         let from = self.tween.map_or(self.offset, |tween| tween.value(now));
-        let mut tween = self.tween.unwrap_or(Tween::new(from, ms, ease, now));
+        let mut tween = self.tween.unwrap_or(Tween::new(from, ms, ease, now).independent());
         tween.set_with(goal, ms, ease, now);
         self.tween = Some(tween);
     }

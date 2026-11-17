@@ -212,7 +212,7 @@ impl<Message> shader::Program<Message> for Layer<'_, Message> {
             state.last_ms.set(0.0);
             0.0
         } else {
-            state.advance(self.ground.paused, clock::wall_ms())
+            state.advance(self.ground.paused || self.ground.static_mode, clock::wall_ms())
         };
         let (width, height) = (bounds.width.max(1.0), bounds.height.max(1.0));
         Pass {

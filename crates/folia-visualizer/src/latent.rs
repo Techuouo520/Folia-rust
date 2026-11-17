@@ -318,7 +318,12 @@ impl<Message> shader::Program<Message> for Layer<'_, Message> {
     fn draw(&self, state: &Motion, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
         let now = clock::wall_ms();
         let still = self.ground.latent.dynamic_only && !self.ground.player;
-        let driven = state.drive(&self.ground.latent, self.ground.audio, self.ground.paused, now, still);
+        let driven = if self.ground.static_mode {
+            state.last_ms.set(now);
+            Driven { power: 0.0, bass: 0.0, mid: 0.0, ..state.snapshot() }
+        } else {
+            state.drive(&self.ground.latent, self.ground.audio, self.ground.paused, now, still)
+        };
         let colors = resolve_colors(self.ground.theme, self.ground.cover, self.ground.latent.colors);
         let show_mesh = if self.ground.latent.layers == LayerMode::Dither { 0.0 } else { 1.0 };
         let show_dither = if self.ground.latent.layers == LayerMode::Mesh { 0.0 } else { 1.0 };

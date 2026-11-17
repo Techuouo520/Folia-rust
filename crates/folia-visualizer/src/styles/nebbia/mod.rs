@@ -1,14 +1,19 @@
 // Nebbia (雾笺): a rainy night street behind glass, lyrics wiped into the fog.
 // Small rain follows the vocal band. Drum hits are not analysed, so the bus keeps its idle sway.
 
+mod aquarium;
+mod beats;
 mod cache;
+mod condensation;
 mod drops;
 mod gpu;
 mod ink;
 mod layout;
 mod palette;
+mod particles;
 mod place;
 mod scene;
+mod snow;
 mod strokes;
 mod tuning;
 
@@ -60,7 +65,7 @@ pub use ink::glyphs_settled;
 pub use strokes::{StrokesError, load_file};
 pub use tuning::manifest;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
@@ -74,11 +79,20 @@ use crate::{Scene, color};
 /// The street and fog for one frame. The writing is the wiped mask, not a second copy of the letters.
 pub struct View<'a, Message> {
     scene: Scene<'a>,
+    capture: bool,
     _message: PhantomData<Message>,
 }
 
 pub fn view<'a, Message>(scene: Scene<'a>) -> View<'a, Message> {
-    View { scene, _message: PhantomData }
+    let capture = scene.publishes_blur();
+    View { scene, capture, _message: PhantomData }
+}
+
+impl<Message> View<'_, Message> {
+    pub fn capture_blur(mut self, capture: bool) -> Self {
+        self.capture = capture;
+        self
+    }
 }
 
 impl<Message> shader::Program<Message> for View<'_, Message> {
@@ -100,9 +114,13 @@ impl<Message> shader::Program<Message> for View<'_, Message> {
     fn draw(&self, state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
         let energy = state.energy.step(self.scene.audio.vocal);
         let frame = {
+            let mut voice = state.voice.borrow_mut();
+            let mut motion = state.motion.borrow_mut();
             let mut paint = state.pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             gpu::frame_in(
                 gpu::FrameIn {
+                    render_scale: self.scene.render_quality.normalized().scale,
+                    static_mode: self.scene.static_mode,
                     lyrics: self.scene.lyrics,
                     time: self.scene.time,
                     size: bounds.size(),
@@ -110,7 +128,13 @@ impl<Message> shader::Program<Message> for View<'_, Message> {
                     font_scale: self.scene.font_scale,
                     tuning: &self.scene.tuning,
                     energy,
-                    publish_blur: !self.scene.preview,
+                    elapsed: state.elapsed(self.scene.paused || self.scene.static_mode),
+                    publish_blur: self.capture,
+                    see_through: !self.scene.backdrop && !self.scene.preview,
+                    daylight: self.scene.daylight,
+                    smart: self.scene.smart_beat,
+                    voice: &mut voice,
+                    motion: &mut motion,
                 },
                 &mut paint,
             )
@@ -123,8 +147,23 @@ impl<Message> shader::Program<Message> for View<'_, Message> {
 #[derive(Default)]
 pub struct ViewState {
     energy: RainEnergy,
+    voice: RefCell<beats::VocalRain>,
+    motion: RefCell<beats::Motion>,
     owner: Arc<std::sync::atomic::AtomicBool>,
     pool: Arc<Mutex<place::Paint>>,
+    last_environment_wall: Cell<Option<std::time::Instant>>,
+}
+
+impl ViewState {
+    fn elapsed(&self, paused: bool) -> f32 {
+        let now = std::time::Instant::now();
+        let previous = self.last_environment_wall.replace(Some(now));
+        if paused {
+            0.0
+        } else {
+            previous.map_or(0.1, |last| now.saturating_duration_since(last).as_secs_f32().min(0.1))
+        }
+    }
 }
 
 /// Shelf thumbnails have no street shader, so they draw the letters. The playing view leaves this clear.
@@ -159,7 +198,14 @@ pub fn normalize(table: Option<&toml::map::Map<String, toml::Value>>, values: &m
     tuning::normalize(table, values);
 }
 
+pub fn analysis_sources(values: &Values) -> folia_core::AnalysisSources {
+    let aquarium = values.choice(manifest(), "behind") == "aquarium";
+    let glass = values.choice(manifest(), "glass");
+    folia_core::AnalysisSources { beats: aquarium, stems: !aquarium || glass.is_empty() || glass == "rain" }
+}
+
 /// mulberry32, the original `createVisualizerRng`.
+#[derive(Clone, Copy)]
 struct Rng(u32);
 
 impl Rng {

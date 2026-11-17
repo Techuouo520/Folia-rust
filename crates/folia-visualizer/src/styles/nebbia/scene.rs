@@ -94,6 +94,7 @@ pub struct Line {
     pub done: f64,
 }
 
+#[derive(Clone)]
 pub struct Hit {
     pub t: f64,
     pub x: f32,
@@ -535,32 +536,37 @@ impl Wipe {
 /// without a vocal track). Sizes are for 1x; `rainBig` scales them when drawn.
 fn big_hits(song: &Song, lines: &[Line], width: f32, height: f32) -> Vec<Hit> {
     let mut rnd = Rng(song.seed.wrapping_mul(0x9e37_79b9) ^ 911);
-    let k = width.min(height) / 720.0;
     let mut out = Vec::new();
     for laid in song.chars.iter().filter(|laid| laid.lead) {
         if rnd.unit() >= 0.6 {
             continue;
         }
-        let rect = lines[laid.line].rect;
-        let (mut x, mut y) = (0.0, 0.0);
-        for _ in 0..8 {
-            x = width * (0.03 + 0.94 * rnd.unit());
-            y = height * (0.03 + 0.94 * rnd.unit());
-            if x < rect.x0 - 20.0 || x > rect.x1 + 20.0 || y < rect.y0 - 20.0 || y > rect.y1 + 20.0 {
-                break;
-            }
-        }
-        let r = (7.0 + rnd.unit() * 6.0) * k;
-        let count = 4 + (rnd.unit() * 5.0) as usize;
-        let sat = (0..count)
-            .map(|_| {
-                let a = rnd.unit() * std::f32::consts::TAU;
-                let d = r * (1.5 + rnd.unit() * 1.4);
-                [a.cos() * d, a.sin() * d * 0.85 + r * 0.2, (1.0 + rnd.unit() * 1.6) * k]
-            })
-            .collect();
-        out.push(Hit { t: laid.t, x, y, r, sat, seed: rnd.unit() * 100.0 });
+        out.push(rain_hit(laid.t, Some(lines[laid.line].rect), [width, height], &mut rnd));
     }
     out.sort_by(|a, b| a.t.total_cmp(&b.t));
     out
+}
+
+pub(super) fn rain_hit(time: f64, rect: Option<Rect>, size: [f32; 2], random: &mut Rng) -> Hit {
+    let [width, height] = size;
+    let k = width.min(height) / 720.0;
+    let (mut x, mut y) = (0.0, 0.0);
+    for _ in 0..8 {
+        x = width * (0.03 + 0.94 * random.unit());
+        y = height * (0.03 + 0.94 * random.unit());
+        if rect.is_none_or(|rect| x < rect.x0 - 20.0 || x > rect.x1 + 20.0 || y < rect.y0 - 20.0 || y > rect.y1 + 20.0)
+        {
+            break;
+        }
+    }
+    let r = (7.0 + random.unit() * 6.0) * k;
+    let count = 4 + (random.unit() * 5.0) as usize;
+    let sat = (0..count)
+        .map(|_| {
+            let angle = random.unit() * std::f32::consts::TAU;
+            let distance = r * (1.5 + random.unit() * 1.4);
+            [angle.cos() * distance, angle.sin() * distance * 0.85 + r * 0.2, (1.0 + random.unit() * 1.6) * k]
+        })
+        .collect();
+    Hit { t: time, x, y, r, sat, seed: random.unit() * 100.0 }
 }

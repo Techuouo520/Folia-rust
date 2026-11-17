@@ -186,10 +186,13 @@ impl Pickers {
         self.enter[row as usize].restart(0.0, now);
     }
 
-    pub fn animating(&self, now: Instant) -> bool {
+    pub fn controls_animating(&self, now: Instant) -> bool {
         let tweens = self.enter.iter().chain(&self.chevron).chain(std::iter::once(&self.pop));
-        let live_picture = self.open == Some(Row::Style) && self.hovered.is_some_and(|index| index < RANDOM);
-        tweens.into_iter().any(|tween| tween.running(now)) || live_picture
+        tweens.into_iter().any(|tween| tween.running(now))
+    }
+
+    pub fn visualizing(&self) -> bool {
+        self.open == Some(Row::Style) && self.hovered.is_some_and(|index| index < RANDOM)
     }
 
     /// `‹ glyph caption/mode⌄ aside ›`, the trigger opening this row's picker.
@@ -366,6 +369,9 @@ impl Pickers {
                     folia_visualizer::POSTER_TIME
                 };
                 let scene = Scene {
+                    smart_beat: Default::default(),
+                    paused: false,
+                    daylight: false,
                     style: *style,
                     lyrics: &self.preview,
                     time,
@@ -379,6 +385,8 @@ impl Pickers {
                     artist: self.preview.artist.clone().unwrap_or_default(),
                     album: String::new(),
                     portrait: None,
+                    render_quality: folia_core::LyricRenderQuality::default(),
+                    static_mode: false,
                     typography: folia_visualizer::Typography::default(),
                     preview: true,
                     audio: look.audio,

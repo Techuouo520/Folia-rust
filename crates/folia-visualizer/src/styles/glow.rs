@@ -19,6 +19,29 @@ pub struct WordConfig {
     pub margin_right: f64,
 }
 
+/// Maximum half-width and half-height across the active pose and eight passed-turn intervals.
+pub fn word_reach(width: f64, font_size: f64, config: &WordConfig) -> [f64; 2] {
+    let bounds = |scale: f64, degrees: f64| {
+        let angle = degrees.to_radians();
+        let (sin, cos) = (angle.sin().abs(), angle.cos().abs());
+        [scale * (width * cos + font_size * sin) / 2.0, scale * (font_size * cos + width * sin) / 2.0]
+    };
+    let mut reach = bounds(config.scale * 1.4, config.rotate);
+    for step in 0..=8 {
+        let passed = bounds(config.scale, config.rotate + config.passed_rotate * f64::from(step) / 8.0);
+        reach[0] = reach[0].max(passed[0]);
+        reach[1] = reach[1].max(passed[1]);
+    }
+    reach
+}
+
+/// The gap between two layout boxes that keeps their scaled and turned word drawings apart.
+pub fn word_pair_gap(widths: [f64; 2], configs: [&WordConfig; 2], font_size: f64) -> f64 {
+    let first = word_reach(widths[0], font_size, configs[0]);
+    let second = word_reach(widths[1], font_size, configs[1]);
+    first[0] - widths[0] / 2.0 + second[0] - widths[1] / 2.0 + configs[0].x - configs[1].x
+}
+
 /// A word's animated state at one instant.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pose {

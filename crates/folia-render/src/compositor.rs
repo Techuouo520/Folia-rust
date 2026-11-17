@@ -19,6 +19,7 @@ pub(crate) struct Compositor {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
+    _quality_device: std::sync::Arc<crate::quality::DeviceRegistration>,
     engine: iced_wgpu::Engine,
     settings: iced_wgpu::Settings,
     format: wgpu::TextureFormat,
@@ -59,9 +60,11 @@ impl Compositor {
         .find(|mode| capabilities.alpha_modes.contains(mode))
         .unwrap_or(wgpu::CompositeAlphaMode::Auto);
         tracing::info!(adapter = ?adapter.get_info(), ?format, ?alpha, "window composition selected");
+        crate::backend::adapter_ready(adapter.get_info().name);
         let (device, queue) = request_device(&adapter).await?;
+        let quality_device = crate::quality::register_device(&adapter, &device, shell.clone());
         let engine = iced_wgpu::Engine::new(&adapter, device.clone(), queue, format, settings.antialiasing, shell);
-        Ok(Self { instance, adapter, device, engine, settings, format, alpha })
+        Ok(Self { instance, adapter, device, _quality_device: quality_device, engine, settings, format, alpha })
     }
 
     pub(crate) fn create_renderer(&self) -> iced_wgpu::Renderer {

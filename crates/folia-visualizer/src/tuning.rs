@@ -27,6 +27,15 @@ pub struct PictureChoice {
     pub picture: fn(&mut Frame, Rectangle, &Theme),
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum NumberFormat {
+    Times { base: f32 },
+    Percent { scale: f32, signed: bool },
+    Pixels { decimals: usize, signed: bool },
+    Degrees,
+    Seconds,
+}
+
 /// One row. Keys are the original tuning's field names and never change.
 #[derive(Clone, Copy, Debug)]
 pub enum Item {
@@ -73,6 +82,12 @@ pub enum Item {
         label_key: &'static str,
         path_key: Option<&'static str>,
     },
+    Text {
+        key: &'static str,
+        label_key: &'static str,
+        placeholder_key: &'static str,
+        max_length: usize,
+    },
 }
 
 impl Item {
@@ -83,6 +98,7 @@ impl Item {
             | Item::Member { key, .. }
             | Item::Select { key, .. }
             | Item::Picture { key, .. }
+            | Item::Text { key, .. }
             | Item::Button { key, .. } => key,
         }
     }
@@ -110,6 +126,17 @@ pub struct Manifest {
     pub hidden_when: &'static [(&'static str, &'static str)],
     /// Hide `item` while the gate flag is off.
     pub hidden_unless: &'static [(&'static str, &'static str)],
+    pub hidden_choices: &'static [(&'static str, &'static str, &'static str)],
+    /// Three-way visibility choices paired with their older on/off fields.
+    pub visibility_switches: &'static [(&'static str, &'static str)],
+    pub labels_when: &'static [(&'static str, &'static str, &'static str)],
+    /// Lists whose last selected member may be switched off.
+    pub allow_empty: &'static [&'static str],
+    pub choice_defaults: &'static [(&'static str, &'static str, &'static str, &'static str)],
+    pub choice_labels: &'static [(&'static str, &'static str, &'static str, &'static str)],
+    pub disabled_when: Option<fn(Item, &Values) -> bool>,
+    pub indented: &'static [&'static str],
+    pub number_formats: &'static [(&'static str, NumberFormat)],
     /// Stored and read, never drawn. Monet's portrait offset is set by dragging.
     pub concealed: &'static [&'static str],
     /// Free strings kept in the table beside the rows, such as an uploaded path.
@@ -131,6 +158,15 @@ impl Manifest {
             locked: &[],
             hidden_when: &[],
             hidden_unless: &[],
+            hidden_choices: &[],
+            visibility_switches: &[],
+            labels_when: &[],
+            allow_empty: &[],
+            choice_defaults: &[],
+            choice_labels: &[],
+            disabled_when: None,
+            indented: &[],
+            number_formats: &[],
             concealed: &[],
             paths: &[],
             reset_key: None,
@@ -141,6 +177,33 @@ impl Manifest {
         self.locked.contains(&key)
     }
 
+    pub fn label<'a>(self, values: &Values, key: &'a str) -> &'a str {
+        self.choice_labels
+            .iter()
+            .find_map(|(label, field, choice, replacement)| {
+                (*label == key && values.choice(self, field) == *choice).then_some(*replacement)
+            })
+            .unwrap_or(key)
+    }
+
+    pub fn editable(self, values: &Values, key: &str, member: Option<&str>) -> bool {
+        let item = self.items().find(|item| {
+            item.key() == key
+                && member.is_none_or(|member| matches!(item, Item::Member { option, .. } if *option == member))
+        });
+        let Some(item) = item else { return false };
+        if self.locked(key) || self.disabled_when.is_some_and(|disabled| disabled(item, values)) {
+            return false;
+        }
+        if let Item::Member { option, .. } = item
+            && !self.allow_empty.contains(&key)
+            && values.member(self, key, option)
+        {
+            return self.items().filter(|item| matches!(item, Item::Member { key: other, option, .. } if *other == key && values.member(self, key, option))).count() > 1;
+        }
+        true
+    }
+
     pub fn hidden(self, values: &Values, key: &str) -> bool {
         self.concealed.contains(&key)
             || self
@@ -148,6 +211,7 @@ impl Manifest {
                 .iter()
                 .any(|(item, gate)| *item == key && (values.flag(self, gate) || values.choice(self, gate) == "true"))
             || self.hidden_unless.iter().any(|(item, gate)| *item == key && !values.flag(self, gate))
+            || self.hidden_choices.iter().any(|(item, gate, value)| *item == key && values.choice(self, gate) == *value)
     }
 }
 
@@ -167,6 +231,7 @@ impl Manifest {
 /// The saved numbers, switches, choices and lists of one style. Missing keys read as the manifest default.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Values {
+    render: folia_core::LyricRenderOverride,
     numbers: BTreeMap<String, f32>,
     flags: BTreeMap<String, bool>,
     choices: BTreeMap<String, String>,
@@ -175,6 +240,21 @@ pub struct Values {
 }
 
 impl Values {
+    pub fn render_override(&self) -> folia_core::LyricRenderOverride {
+        self.render
+    }
+
+    pub fn set_render_override(&mut self, value: folia_core::LyricRenderOverride) {
+        self.render = folia_core::LyricRenderOverride {
+            scale: value.scale.filter(|scale| folia_core::LYRIC_RENDER_SCALES.contains(scale)),
+            antialias: value.antialias.filter(|mode| *mode != folia_core::LyricAntialias::Auto),
+        };
+    }
+
+    pub fn render_quality(&self, global: folia_core::LyricRenderQuality) -> folia_core::LyricRenderQuality {
+        self.render.resolve(global)
+    }
+
     pub fn number(&self, manifest: Manifest, key: &str) -> f32 {
         let Some((min, max, default)) = manifest.slider(key) else {
             return 0.0;
@@ -228,6 +308,12 @@ impl Values {
     pub fn set_flag(&mut self, manifest: Manifest, key: &str, value: bool) {
         if manifest.items().any(|item| matches!(item, Item::Switch { key: item_key, .. } if item_key == key)) {
             self.flags.insert(key.to_owned(), value);
+            if let Some((choice, _)) = manifest.visibility_switches.iter().find(|(_, flag)| *flag == key) {
+                let current = self.choice(manifest, choice);
+                if !value || current == "hidden" {
+                    self.choices.insert((*choice).to_owned(), if value { "auto" } else { "hidden" }.to_owned());
+                }
+            }
         }
     }
 
@@ -243,7 +329,36 @@ impl Values {
         });
         if known {
             self.choices.insert(key.to_owned(), value.to_owned());
+            for (field, choice, target, default) in manifest.choice_defaults {
+                if *field == key && *choice == value {
+                    self.choices.insert((*target).to_owned(), (*default).to_owned());
+                }
+            }
+            if let Some((_, flag)) = manifest.visibility_switches.iter().find(|(choice, _)| *choice == key) {
+                self.flags.insert((*flag).to_owned(), value != "hidden");
+            }
         }
+    }
+
+    pub fn text(&self, key: &str) -> &str {
+        self.choices.get(key).map_or("", String::as_str)
+    }
+
+    pub fn set_text(&mut self, manifest: Manifest, key: &str, value: &str) {
+        let limit = manifest.items().find_map(|item| match item {
+            Item::Text { key: item_key, max_length, .. } if item_key == key => Some(max_length),
+            _ => None,
+        });
+        let Some(limit) = limit else { return };
+        let mut units = 0;
+        let value = value
+            .chars()
+            .take_while(|character| {
+                units += character.len_utf16();
+                units <= limit
+            })
+            .collect();
+        self.choices.insert(key.to_owned(), value);
     }
 
     /// Turns one list entry on or off. The last entry of that list stays on, and then this returns false.
@@ -268,7 +383,10 @@ impl Values {
                     .map(|s| (*s).to_owned())
                     .collect();
             }
-        } else if list.len() <= 1 && list.first().is_some_and(|entry| entry == option) {
+        } else if !manifest.allow_empty.contains(&key)
+            && list.len() <= 1
+            && list.first().is_some_and(|entry| entry == option)
+        {
             return false;
         } else {
             list.retain(|entry| entry != option);
@@ -288,7 +406,7 @@ impl Values {
             .collect();
         let list: Vec<String> =
             allowed.iter().filter(|option| options.contains(*option)).map(|option| (*option).to_owned()).collect();
-        if list.is_empty() {
+        if list.is_empty() && !manifest.allow_empty.contains(&key) {
             return false;
         }
         self.lists.insert(key.to_owned(), list);
@@ -314,6 +432,7 @@ impl Values {
     }
 
     pub fn reset(&mut self, manifest: Manifest) {
+        self.render = folia_core::LyricRenderOverride::default();
         for item in manifest.items() {
             match item {
                 Item::Slider { key, .. } => {
@@ -322,7 +441,7 @@ impl Values {
                 Item::Switch { key, .. } => {
                     self.flags.remove(key);
                 }
-                Item::Select { key, .. } => {
+                Item::Select { key, .. } | Item::Text { key, .. } => {
                     self.choices.remove(key);
                 }
                 Item::Picture { key, .. } => {
@@ -342,6 +461,10 @@ impl Values {
     /// Stable mix of the saved fields, so a picture cache can tell two tunings apart.
     pub fn fingerprint(&self) -> u64 {
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        if self.render != folia_core::LyricRenderOverride::default() {
+            hash ^= u64::from(self.render.scale.unwrap_or_default().to_bits());
+            hash = hash.wrapping_mul(0x100000001b3) ^ self.render.antialias.map_or(0, |mode| mode as u64 + 1);
+        }
         let mix = |hash: u64, text: &str| {
             text.bytes().fold(hash, |hash, byte| hash.wrapping_mul(0x100000001b3).wrapping_add(u64::from(byte)))
         };
@@ -373,6 +496,15 @@ impl Values {
             return Self::default();
         };
         let mut values = Self::default();
+        if let Some(render) = table.get("render").and_then(toml::Value::as_table) {
+            let scale = render.get("scale").and_then(number_of);
+            let antialias = match render.get("antialias").and_then(toml::Value::as_str) {
+                Some("on") => Some(folia_core::LyricAntialias::On),
+                Some("off") => Some(folia_core::LyricAntialias::Off),
+                _ => None,
+            };
+            values.set_render_override(folia_core::LyricRenderOverride { scale, antialias });
+        }
         for item in manifest.items() {
             match item {
                 Item::Slider { key, min, max, .. } => {
@@ -409,6 +541,11 @@ impl Values {
                         values.choices.insert(key.to_owned(), text);
                     }
                 }
+                Item::Text { key, .. } => {
+                    if let Some(text) = table.get(key).and_then(toml::Value::as_str) {
+                        values.set_text(manifest, key, text);
+                    }
+                }
                 Item::Button { .. } => {}
                 Item::Member { key, .. } => {
                     if values.lists.contains_key(key) {
@@ -427,7 +564,7 @@ impl Values {
                             .filter(|option| entries.iter().any(|entry| entry.as_str() == Some(option)))
                             .map(|option| (*option).to_owned())
                             .collect::<Vec<_>>();
-                        if !list.is_empty() {
+                        if !list.is_empty() || manifest.allow_empty.contains(&key) {
                             values.lists.insert(key.to_owned(), list);
                         }
                     }
@@ -441,12 +578,28 @@ impl Values {
                 values.paths.insert((*key).to_owned(), text.clone());
             }
         }
+        for (choice, flag) in manifest.visibility_switches {
+            let hidden = table.get(*flag).and_then(toml::Value::as_bool) == Some(false);
+            let value = if hidden { "hidden" } else { values.choice(manifest, choice) }.to_owned();
+            values.set_choice(manifest, choice, &value);
+        }
         values
     }
 
     /// The whole tuning, with defaults filled in, under the original field names.
     pub fn to_table(&self, manifest: Manifest) -> toml::map::Map<String, toml::Value> {
         let mut table = toml::map::Map::new();
+        if self.render != folia_core::LyricRenderOverride::default() {
+            let mut render = toml::map::Map::new();
+            if let Some(scale) = self.render.scale {
+                render.insert("scale".into(), toml::Value::Float(f64::from(scale)));
+            }
+            if let Some(antialias) = self.render.antialias {
+                let value = if antialias == folia_core::LyricAntialias::On { "on" } else { "off" };
+                render.insert("antialias".into(), toml::Value::String(value.into()));
+            }
+            table.insert("render".into(), toml::Value::Table(render));
+        }
         let mut lists: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         for item in manifest.items() {
             match item {
@@ -470,8 +623,14 @@ impl Values {
                 Item::Picture { key, .. } => {
                     table.insert(key.to_owned(), toml::Value::String(self.choice(manifest, key).to_owned()));
                 }
+                Item::Text { key, .. } => {
+                    table.insert(key.to_owned(), toml::Value::String(self.text(key).to_owned()));
+                }
                 Item::Button { .. } => {}
                 Item::Member { key, option, .. } => {
+                    if manifest.allow_empty.contains(&key) {
+                        lists.entry(key).or_default();
+                    }
                     if self.member(manifest, key, option) {
                         lists.entry(key).or_default().push(option.to_owned());
                     }

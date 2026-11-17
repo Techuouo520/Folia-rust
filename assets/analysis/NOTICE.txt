@@ -1,0 +1,9 @@
+Microsoft DirectX Shader Compiler 1.9.2609
+Copyright (c) Microsoft Corporation and the LLVM contributors.
+
+The pinned release's docs/ReleaseNotes.md assigns LICENSE-LLVM.txt to dxcompiler.dll.
+The compiler includes its validator since version 1.8.2505.
+Windows packages include the unmodified architecture-specific dxcompiler.dll.
+The archive and extracted library checksums are recorded in manifest.toml.
+
+https://github.com/microsoft/DirectXShaderCompiler/blob/v1.9.2609/docs/ReleaseNotes.md

@@ -182,3 +182,25 @@ fn shuffle_keeps_the_playing_song_and_repeats_with_the_same_seed() {
     single.replace(vec![7], 0);
     assert!(!single.shuffle(9));
 }
+
+#[test]
+fn lyric_quality_preserves_density_and_resolves_partial_overrides() {
+    use folia_core::{LyricAntialias, LyricRenderOverride, LyricRenderQuality};
+    assert_eq!(toml::from_str::<LyricRenderQuality>("").unwrap(), LyricRenderQuality::default());
+    for (base, scale, expected) in
+        [(1.0, 0.5, 0.5), (2.0, 0.75, 1.5), (2.0, 1.0, 2.0), (2.0, 1.5, 3.0), (2.0, 2.0, 3.0), (4.0, 2.0, 4.0)]
+    {
+        assert_eq!(LyricRenderQuality { scale, ..Default::default() }.pixel_ratio(base), expected);
+    }
+    let global = LyricRenderQuality { scale: 0.75, antialias: LyricAntialias::On };
+    assert_eq!(LyricRenderOverride::default().resolve(global), global);
+    assert_eq!(LyricRenderOverride { scale: None, antialias: Some(LyricAntialias::Auto) }.resolve(global), global);
+    assert_eq!(
+        LyricRenderOverride { scale: Some(2.0), antialias: None }.resolve(global),
+        LyricRenderQuality { scale: 2.0, ..global }
+    );
+    assert_eq!(
+        LyricRenderOverride { scale: Some(f32::NAN), antialias: Some(LyricAntialias::Off) }.resolve(global),
+        LyricRenderQuality { antialias: LyricAntialias::Off, ..global }
+    );
+}

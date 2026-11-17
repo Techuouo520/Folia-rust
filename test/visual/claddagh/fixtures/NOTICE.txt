@@ -1,0 +1,8 @@
+Claddagh visual references rendered from Folia v0.7.29 / 8006b40f6.
+Source component: src/components/visualizer/claddagh/CladdaghRingLine.tsx.
+Upstream: https://github.com/chthollyphile/folia-major, AGPL-3.0-only.
+Chrome headless 157.0.8103.50, React 19.3.0, pretext 0.0.9.
+Viewport 1200x800 at device scale 1, Arial 72px/700 and translation 36px/600.
+One line, 0.7-3.6 seconds, evenly timed characters, silent audio, default ring tuning.
+Main text is "Weave a lasting memory" and translation is "A quiet light stays with us".
+White background, primary #1c1917, accent #ea580c, secondary #44403c.

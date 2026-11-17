@@ -34,6 +34,12 @@ const ITEMS: &[Item] = &[
         step: 0.05,
         default: 0.7,
     },
+    Item::Switch {
+        key: "avoidOverlap",
+        label_key: "options.avoidOverlap",
+        hint_key: Some("options.avoidOverlapHint"),
+        default: false,
+    },
 ];
 
 const GROUPS: &[Group] =
@@ -41,7 +47,7 @@ const GROUPS: &[Group] =
 
 pub fn manifest() -> Manifest {
     let mut manifest = Manifest::plain("classic_tuning", &[], GROUPS);
-    manifest.hidden_when = &[("wordSpacing", "useLegacyLayout")];
+    manifest.hidden_when = &[("wordSpacing", "useLegacyLayout"), ("avoidOverlap", "useLegacyLayout")];
     manifest.reset_key = Some("notifications.classicReset");
     manifest
 }

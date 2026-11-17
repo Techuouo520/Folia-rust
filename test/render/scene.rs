@@ -67,6 +67,9 @@ fn lyrics() -> Lyrics {
 
 fn scene<'a>(lyrics: &'a Lyrics, theme: &'a Theme, style: Style) -> Scene<'a> {
     Scene {
+        smart_beat: Default::default(),
+        paused: false,
+        daylight: false,
         style,
         lyrics,
         time: 3.0,
@@ -80,6 +83,8 @@ fn scene<'a>(lyrics: &'a Lyrics, theme: &'a Theme, style: Style) -> Scene<'a> {
         artist: "Test".into(),
         album: String::new(),
         portrait: None,
+        render_quality: folia_core::LyricRenderQuality::default(),
+        static_mode: false,
         typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &AudioFrame::SILENT,
@@ -226,7 +231,7 @@ impl Picture {
     }
 
     fn frame(&mut self, element: Element<'_, Msg>, cache: Cache) -> Cache {
-        let submitted = folia_render::gpu_builds().1;
+        let mut submitted = folia_render::gpu_builds().1;
         let mut ui =
             UserInterface::build(element, Size::new(self.logical.0, self.logical.1), cache, &mut self.renderer);
         ui.draw(
@@ -236,8 +241,9 @@ impl Picture {
             mouse::Cursor::Unavailable,
         );
         self.renderer.present(Some(Color::BLACK), self.format, &self.view, &self.viewport);
-        if folia_render::gpu_builds().1 != submitted {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while folia_render::gpu_builds().1 != submitted {
+            submitted = folia_render::gpu_builds().1;
             while folia_render::gpu_builds().0 > 0 {
                 assert!(std::time::Instant::now() < deadline, "GPU initialization timed out");
                 std::thread::sleep(std::time::Duration::from_millis(1));
@@ -430,6 +436,7 @@ fn glass_contrast(shot: &GlassShot) -> f32 {
 
 fn published_ground<'a>(theme: &'a Theme, cover: &'a [folia_core::Rgb], player: bool) -> folia_visualizer::Ground<'a> {
     folia_visualizer::Ground {
+        static_mode: false,
         mode: folia_visualizer::Background::Latent,
         seed: "geometry",
         time: 0.0,
@@ -441,6 +448,7 @@ fn published_ground<'a>(theme: &'a Theme, cover: &'a [folia_core::Rgb], player: 
         paused: false,
         player,
         cover,
+        cover_overlay: None,
         latent: folia_visualizer::LatentTuning::DEFAULT,
         daylight: false,
         sora: folia_visualizer::SoraTuning::DEFAULT,
@@ -573,6 +581,7 @@ fn latent_duo<'a>(lyrics: &'a Lyrics, theme: &'a Theme, preview: bool) -> Elemen
 
 fn latent_preview<'a>(theme: &'a Theme) -> Element<'a, Msg> {
     folia_visualizer::background_view(folia_visualizer::Ground {
+        static_mode: false,
         mode: folia_visualizer::Background::Latent,
         seed: "preview",
         time: 0.0,
@@ -584,6 +593,7 @@ fn latent_preview<'a>(theme: &'a Theme) -> Element<'a, Msg> {
         paused: false,
         player: false,
         cover: &[],
+        cover_overlay: None,
         latent: folia_visualizer::LatentTuning::DEFAULT,
         daylight: false,
         sora: folia_visualizer::SoraTuning::DEFAULT,
@@ -685,6 +695,7 @@ fn lumiere_stack<'a>(lyrics: &'a Lyrics, theme: &'a Theme, background: bool, pre
         return stack![lyric, glass()].into();
     }
     let ground = folia_visualizer::Ground {
+        static_mode: false,
         mode: folia_visualizer::Background::Latent,
         seed: "geometry",
         time: 0.0,
@@ -696,6 +707,7 @@ fn lumiere_stack<'a>(lyrics: &'a Lyrics, theme: &'a Theme, background: bool, pre
         paused: false,
         player: !preview,
         cover: &[],
+        cover_overlay: None,
         latent: folia_visualizer::LatentTuning::DEFAULT,
         daylight: false,
         sora: folia_visualizer::SoraTuning::DEFAULT,
@@ -790,6 +802,7 @@ fn sora_stack<'a>(
     let mut lyrics_scene = scene(lyrics, theme, Style::Classic);
     lyrics_scene.backdrop = false;
     let ground = folia_visualizer::Ground {
+        static_mode: false,
         mode: folia_visualizer::Background::Sora,
         seed: "geometry",
         time: 0.0,
@@ -801,6 +814,7 @@ fn sora_stack<'a>(
         paused,
         player: true,
         cover: &[],
+        cover_overlay: None,
         latent: folia_visualizer::LatentTuning::DEFAULT,
         daylight,
         sora: folia_visualizer::SoraTuning { blank },
@@ -946,7 +960,87 @@ fn claddagh_rotated_axis_stays_a_thin_line() {
     }
     let changed = shots[0].chunks_exact(4).zip(shots[1].chunks_exact(4)).filter(|(a, b)| a != b).count();
     assert!((300..3000).contains(&changed), "rotated 300x4 axis covers {changed} pixels");
+    let (slots, bytes) = folia_visualizer::styles::claddagh::gpu_stats();
+    assert_eq!(slots, 1);
+    assert!(bytes >= 6 * 1024 * 1024, "Gaussian textures were not allocated");
+    let cache = picture.frame(iced::widget::space().into(), cache);
+    drop(cache);
+    drop(picture);
+    assert_eq!(folia_visualizer::styles::claddagh::gpu_stats(), (0, 0));
     folia_render::release_backdrop();
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn claddagh_gpu_glow_matches_original() {
+    let _guard = guarded();
+    folia_ui::install_fonts();
+    let text = "Weave a lasting memory";
+    let words = text
+        .chars()
+        .enumerate()
+        .map(|(index, ch)| Word {
+            text: ch.to_string(),
+            start: 0.7 + 2.9 * index as f64 / 22.0,
+            end: 0.7 + 2.9 * (index + 1) as f64 / 22.0,
+        })
+        .collect();
+    let lyrics = Lyrics {
+        lines: vec![Line {
+            text: text.into(),
+            words,
+            start: 0.7,
+            end: 3.6,
+            translation: Some("A quiet light stays with us".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let theme = Theme { background: folia_core::Rgb::hex(0xffffff), ..Theme::DAYLIGHT };
+    let font = Font { family: iced::font::Family::Name("Arial"), ..Font::DEFAULT };
+    let mut picture = Picture::with_size(1200, 800);
+    let mut cache = Cache::default();
+    for time in [1.2, 2.2, 3.2] {
+        let mut scene = scene(&lyrics, &theme, Style::Claddagh);
+        scene.time = time;
+        scene.preview = true;
+        scene.typography =
+            folia_visualizer::Typography { family: Some(font.family), subtitle: Some(font), ..Default::default() };
+        scene.tuning.set_flag(Style::Claddagh.manifest(), "showAxisLine", false);
+        scene.tuning.set_flag(Style::Claddagh.manifest(), "showTranslation", true);
+        for _ in 0..3 {
+            cache = picture.frame(lyric_view::<Msg>(scene.clone()), cache);
+        }
+        let pixels = picture.screenshot();
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../visual/claddagh/fixtures/original-{time}.png"));
+        let reference = image::open(file).unwrap().to_rgba8().into_raw();
+        let error = reference
+            .chunks_exact(4)
+            .zip(pixels.chunks_exact(4))
+            .flat_map(|(a, b)| (0..3).map(move |i| f64::from(a[i].abs_diff(b[i]))))
+            .sum::<f64>()
+            / (1200.0 * 800.0 * 3.0);
+        assert!(error < 1.2, "Claddagh {time}s mean error {error}/255");
+        let darkness = |pixel: &[u8]| 255.0 - (f64::from(pixel[0]) + f64::from(pixel[1]) + f64::from(pixel[2])) / 3.0;
+        let ink = reference.chunks_exact(4).map(|pixel| darkness(pixel) > 60.0).collect::<Vec<_>>();
+        let (mut expected_glow, mut actual_glow) = (0.0, 0.0);
+        for (index, pixel) in reference.chunks_exact(4).enumerate() {
+            let weight = darkness(pixel);
+            if !(2.0..35.0).contains(&weight) {
+                continue;
+            }
+            let (x, y) = (index % 1200, index / 1200);
+            let nearby = (y.saturating_sub(4)..=(y + 4).min(799))
+                .any(|row| (x.saturating_sub(4)..=(x + 4).min(1199)).any(|column| ink[row * 1200 + column]));
+            if !nearby {
+                expected_glow += weight;
+                actual_glow += darkness(&pixels[index * 4..index * 4 + 4]);
+            }
+        }
+        let ratio = actual_glow / expected_glow;
+        assert!((0.8..1.2).contains(&ratio), "Claddagh {time}s glow energy ratio {ratio}");
+    }
 }
 
 #[test]
@@ -956,9 +1050,7 @@ fn screen_pixels_match_the_plain_canvas() {
     folia_ui::install_fonts();
     let lyrics = lyrics();
     let theme = Theme::MIDNIGHT;
-    for style in
-        [Style::Classic, Style::Partita, Style::Still, Style::Tilt, Style::Claddagh, Style::Cadenza, Style::Monet]
-    {
+    for style in [Style::Classic, Style::Partita, Style::Still, Style::Tilt, Style::Cadenza, Style::Monet] {
         folia_render::release_backdrop();
         let mut picture = Picture::new();
         let mut cache = Cache::default();
@@ -1031,7 +1123,7 @@ fn two_shader_scenes_in_one_frame_keep_their_own_pixels() {
     }
     let midnight = Theme::MIDNIGHT;
     let day = Theme::DAYLIGHT;
-    for style in [Style::Nebbia, Style::Lumiere] {
+    for style in [Style::Nebbia, Style::Lumiere, Style::Claddagh] {
         folia_render::release_backdrop();
         let own_night = solo(&lyrics, &midnight, style, 6.0, 640, 360);
         let own_day_same = solo(&lyrics, &day, style, 15.0, 640, 360);
@@ -1124,6 +1216,386 @@ fn region(pixels: &[u8], width: u32, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> 
 fn diff_count(left: &[u8], right: &[u8]) -> usize {
     let count = left.len().min(right.len()) / 4;
     left.chunks_exact(4).zip(right.chunks_exact(4)).take(count).filter(|(a, b)| a != b).count()
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn lyric_quality_changes_native_targets_and_antialiasing() {
+    use folia_core::{LyricAntialias, LyricRenderQuality};
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let (adapter, device, _) = test_device();
+    let _registration = folia_render::quality::register_device(adapter, device, iced_wgpu::graphics::Shell::headless());
+    let lyrics = lyrics();
+    let theme = Theme::MIDNIGHT;
+    for style in Style::ALL {
+        folia_render::release_backdrop();
+        let mut picture = Picture::with_size(480, 320);
+        let mut cache = Cache::default();
+        let mut images = Vec::new();
+        for (scale, antialias) in [
+            (1.0, LyricAntialias::Auto),
+            (0.5, LyricAntialias::Auto),
+            (0.75, LyricAntialias::Auto),
+            (1.5, LyricAntialias::Auto),
+            (2.0, LyricAntialias::Auto),
+            (1.0, LyricAntialias::Off),
+            (1.0, LyricAntialias::On),
+        ] {
+            let quality = LyricRenderQuality { scale, antialias };
+            for _ in 0..4 {
+                let scene = Scene { render_quality: quality, ..styled(&lyrics, &theme, style, 3.0, true) };
+                cache = picture.frame(lyric_view::<Msg>(scene), cache);
+            }
+            let targets = folia_render::quality::target_sizes();
+            if quality == LyricRenderQuality::default() {
+                assert!(targets.is_empty(), "{style:?} default allocated quality targets: {targets:?}");
+            } else {
+                assert_eq!(targets, [[(480.0 * scale) as u32, (320.0 * scale) as u32]], "{style:?}");
+            }
+            let shot = picture.screenshot();
+            assert!(
+                range(&shot, 480, 0, 320) > 1.0,
+                "{style:?} {quality:?} empty picture; slots {:?}; jobs {:?}",
+                slots(style),
+                folia_render::gpu_builds()
+            );
+            images.push(shot);
+        }
+        assert!(diff_count(&images[0], &images[1]) > 0, "{style:?} ignored low resolution");
+        assert!(diff_count(&images[0], &images[4]) > 0, "{style:?} ignored supersampling");
+        assert!(diff_count(&images[5], &images[6]) > 0, "{style:?} ignored antialiasing");
+        drop(cache);
+        drop(picture);
+        assert!(folia_render::quality::target_sizes().is_empty(), "{style:?} retained its quality target");
+    }
+    let mut picture = Picture::at_scale(240, 160, 2.0);
+    let quality = LyricRenderQuality { scale: 2.0, ..Default::default() };
+    let element = lyric_view::<Msg>(Scene { render_quality: quality, ..scene(&lyrics, &theme, Style::Classic) });
+    let cache = picture.frame(element, Cache::default());
+    assert_eq!(folia_render::quality::target_sizes(), [[720, 480]], "high-DPI supersampling cap");
+    drop(cache);
+    drop(picture);
+    assert!(folia_render::quality::target_sizes().is_empty());
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn workbench_and_theme_park_preview_resolve_global_and_style_quality() {
+    let _guard = guarded();
+    let (adapter, device, _) = test_device();
+    let _registration = folia_render::quality::register_device(adapter, device, iced_wgpu::graphics::Shell::headless());
+    folia_ui::install_fonts();
+    let i18n = folia_i18n::I18n::new(folia_core::Language::ZhCn).unwrap();
+    let theme = Theme::DAYLIGHT;
+    let appearance = folia_store::AppearanceSettings::default();
+    let graphics = folia_store::GraphicsSettings {
+        static_mode: true,
+        lyric_render_quality: folia_core::LyricRenderQuality { scale: 2.0, antialias: folia_core::LyricAntialias::Off },
+        ..Default::default()
+    };
+    let mut bench = folia_ui::Workbench::open();
+    let mut park = folia_ui::theme_park::ThemePark::open(None, None, true, true, None, String::new());
+    for editor in [false, true] {
+        let mut picture = Picture::with_size(1200, 800);
+        let mut cache = Cache::default();
+        let mut sizes = Vec::new();
+        for scale in [None, Some(0.5), None] {
+            let preview = if editor { &mut park.preview } else { &mut bench };
+            preview.update(
+                folia_ui::WorkbenchMessage::RenderScale(scale),
+                Style::Classic.manifest(),
+                &appearance,
+                folia_visualizer::LatentTuning::DEFAULT,
+            );
+            let look = folia_ui::WorkbenchLook {
+                portrait: None,
+                smart_beat: Default::default(),
+                i18n: &i18n,
+                theme: &theme,
+                daylight: true,
+                window: Size::new(1200.0, 800.0),
+                style: Style::Classic,
+                font_scale: 1.0,
+                live: None,
+                audio: &AudioFrame::SILENT,
+                appearance: &appearance,
+                graphics: &graphics,
+                fonts: &[],
+                dpi: 1.0,
+                cover: &[],
+                latent: folia_visualizer::LatentTuning::DEFAULT,
+                sora: folia_visualizer::SoraTuning::DEFAULT,
+                monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+                nomand: folia_visualizer::nomand::Tuning::default(),
+                picture: None,
+                has_background_upload: false,
+            };
+            let root = if editor { park.view(look, &theme, true) } else { bench.view(look) };
+            cache = picture.frame(root.map(|_| Msg::Monet), cache);
+            let targets = folia_render::quality::target_sizes();
+            assert_eq!(targets.len(), 1, "preview targets for editor={editor}: {targets:?}");
+            sizes.push(targets[0]);
+        }
+        assert_eq!(sizes[0], sizes[2]);
+        for axis in 0..2 {
+            assert!(
+                (sizes[0][axis] as i32 - 4 * sizes[1][axis] as i32).abs() <= 2,
+                "global and override target sizes {sizes:?}"
+            );
+        }
+        let cache = picture.frame(iced::widget::space().into(), cache);
+        drop(cache);
+        drop(picture);
+        assert!(folia_render::quality::target_sizes().is_empty());
+    }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn lyric_quality_keeps_independent_viewports() {
+    use folia_core::{LyricAntialias, LyricRenderQuality};
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let (adapter, device, _) = test_device();
+    let _registration = folia_render::quality::register_device(adapter, device, iced_wgpu::graphics::Shell::headless());
+    let lyrics = lyrics();
+    let theme = Theme::MIDNIGHT;
+    let qualities = [
+        LyricRenderQuality { scale: 0.5, antialias: LyricAntialias::Auto },
+        LyricRenderQuality { scale: 2.0, antialias: LyricAntialias::On },
+    ];
+    for style in [Style::Classic, Style::Nebbia, Style::Lumiere, Style::Claddagh] {
+        let make_scene =
+            |index| Scene { render_quality: qualities[index], ..styled(&lyrics, &theme, style, 3.0, true) };
+        let mut own = Vec::new();
+        for index in 0..2 {
+            let mut picture = Picture::with_size(320, 240);
+            let mut cache = Cache::default();
+            for _ in 0..8 {
+                cache = picture.frame(lyric_view::<Msg>(make_scene(index)), cache);
+            }
+            own.push(picture.screenshot());
+        }
+        let mut picture = Picture::with_size(640, 240);
+        let mut cache = Cache::default();
+        for _ in 0..8 {
+            let left = container(lyric_view::<Msg>(make_scene(0))).width(320.0).height(240.0);
+            let right = container(lyric_view::<Msg>(make_scene(1))).width(320.0).height(240.0);
+            cache = picture.frame(row![left, right].into(), cache);
+        }
+        let shot = picture.screenshot();
+        for (index, expected) in own.iter().enumerate() {
+            assert_eq!(
+                diff_count(expected, &region(&shot, 640, index as u32 * 320, 0, 320, 240)),
+                0,
+                "{style:?} view {index}"
+            );
+        }
+        let mut targets = folia_render::quality::target_sizes();
+        targets.sort();
+        assert_eq!(targets, [[160, 120], [640, 480]]);
+        drop(cache);
+        drop(picture);
+        assert!(folia_render::quality::target_sizes().is_empty());
+    }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn lyric_quality_resize_updates_the_glass_source() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let (adapter, device, _) = test_device();
+    let _registration = folia_render::quality::register_device(adapter, device, iced_wgpu::graphics::Shell::headless());
+    let lyrics = lyrics();
+    let night = Theme::MIDNIGHT;
+    let day = Theme::DAYLIGHT;
+    let steps = [(&night, 0.5), (&day, 2.0)];
+    let sample = |resize, background| {
+        folia_render::release_backdrop();
+        let mut picture = Picture::with_size(480, 320);
+        let mut cache = Cache::default();
+        let steps = if resize { &steps[..] } else { &steps[1..] };
+        for (theme, scale) in steps {
+            for _ in 0..4 {
+                let scene = Scene {
+                    render_quality: folia_core::LyricRenderQuality { scale: *scale, ..Default::default() },
+                    ..scene(&lyrics, theme, Style::Classic)
+                };
+                let content = if background {
+                    let background = folia_visualizer::background_view(published_ground(&night, &[], true));
+                    stack![background, lyric_view::<Msg>(scene), glass()].into()
+                } else {
+                    stack![lyric_view::<Msg>(scene), glass()].into()
+                };
+                cache = picture.frame(content, cache);
+            }
+        }
+        folia_render::read_picture(&picture.device, &picture.queue).expect("quality glass source").rgba
+    };
+    for background in [true, false] {
+        let resized = sample(true, background);
+        let fresh = sample(false, background);
+        assert_eq!(
+            diff_count(&resized, &fresh),
+            0,
+            "resized lyric layer retained the previous texture binding; background={background}"
+        );
+    }
+    folia_render::release_backdrop();
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn cinema_projects_all_styles_with_independent_quality_and_releases_targets() {
+    use folia_core::{CinemaOptions, LyricAntialias, LyricRenderOverride, LyricRenderQuality};
+    use folia_visualizer::cinema;
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let (adapter, device, _) = test_device();
+    let _registration = folia_render::quality::register_device(adapter, device, iced_wgpu::graphics::Shell::headless());
+    let lyrics = lyrics();
+    let theme = Theme::MIDNIGHT;
+    let options = CinemaOptions::default();
+    let global = LyricRenderQuality { scale: 2.0, antialias: LyricAntialias::Auto };
+    let mut picture = Picture::with_size(480, 320);
+    let mut cache = Cache::default();
+    let mut pictures = Vec::new();
+    for style in Style::ALL {
+        for override_scale in [None, Some(0.75)] {
+            let mut scene = scene(&lyrics, &theme, style);
+            scene.tuning.set_render_override(LyricRenderOverride { scale: override_scale, antialias: None });
+            scene.render_quality = scene.tuning.render_quality(global);
+            let config = cinema::Config {
+                generation: 0,
+                options: &options,
+                render_quality: scene.render_quality,
+                theme: &theme,
+                audio: &AudioFrame::SILENT,
+                song_id: None,
+                cover: None,
+                cover_pending: false,
+                paused: false,
+                static_mode: false,
+                reduced_motion: false,
+                active: true,
+                queue_ended: false,
+                publish_blur: true,
+            };
+            for _ in 0..4 {
+                let surface = folia_visualizer::lyric_surface::<Msg>(scene.clone());
+                let projected = cinema::view(surface, config, |failure| panic!("{:?}", failure.error));
+                cache = picture.frame(stack![projected, glass()].into(), cache);
+            }
+            let scale = override_scale.unwrap_or(2.0);
+            let source_height = 480.0 / cinema::SCREEN_ASPECT;
+            assert_eq!(
+                folia_render::quality::target_sizes(),
+                [[(480.0 * scale).round() as u32, (source_height * scale).round() as u32]],
+                "{style:?} projected lyrics density"
+            );
+            assert_eq!(cinema::target_sizes(device), [[600, 400]], "{style:?} hall density");
+            pictures.push(picture.screenshot());
+        }
+    }
+    assert!(pictures.windows(2).all(|pair| diff_count(&pair[0], &pair[1]) > 0));
+    let cover = iced::widget::image::Handle::from_rgba(
+        8,
+        8,
+        (0u8..64).flat_map(|index| [index * 3, 120, 255 - index * 3, 255]).collect::<Vec<_>>(),
+    );
+    for mode in folia_visualizer::Background::ALL {
+        let ground = || folia_visualizer::Ground {
+            mode,
+            publish: false,
+            picture: Some(&cover),
+            ..published_ground(&theme, &[], true)
+        };
+        let scene = Scene { backdrop: false, render_quality: global, ..scene(&lyrics, &theme, Style::Still) };
+        let config = cinema::Config {
+            generation: 0,
+            options: &options,
+            render_quality: global,
+            theme: &theme,
+            audio: &AudioFrame::SILENT,
+            song_id: None,
+            cover: None,
+            cover_pending: false,
+            paused: false,
+            static_mode: false,
+            reduced_motion: false,
+            active: true,
+            queue_ended: false,
+            publish_blur: true,
+        };
+        for _ in 0..4 {
+            let source = stack![
+                folia_visualizer::background_view(ground()),
+                folia_visualizer::lyric_surface::<Msg>(scene.clone())
+            ]
+            .into();
+            let projected = cinema::view(source, config, |failure| panic!("{:?}", failure.error));
+            cache = picture.frame(stack![projected, glass()].into(), cache);
+        }
+        assert_eq!(folia_render::quality::target_sizes(), [[960, 519]], "{mode:?} projection density");
+        assert!(range(&picture.screenshot(), 480, 0, 320) > 10.0, "{mode:?} empty projection");
+    }
+    for _ in 0..3 {
+        cache = picture.frame(lyric_view::<Msg>(scene(&lyrics, &theme, Style::Classic)), cache);
+    }
+    assert!(cinema::target_sizes(device).is_empty());
+    assert!(folia_render::quality::target_sizes().is_empty());
+    assert!(!folia_render::foreground_held());
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn foreground_bindings_follow_their_source_while_other_publishers_live() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let (adapter, device, _) = test_device();
+    let _registration = folia_render::quality::register_device(adapter, device, iced_wgpu::graphics::Shell::headless());
+    let lyrics = lyrics();
+    let theme = Theme::MIDNIGHT;
+    let other = folia_render::PublisherGuard::register();
+    other.report(true);
+    for style in [Style::Classic, Style::Lumiere] {
+        let mut picture = Picture::with_size(480, 320);
+        let mut cache = Cache::default();
+        let scene = Scene {
+            render_quality: folia_core::LyricRenderQuality {
+                scale: if style == Style::Classic { 2.0 } else { 1.0 },
+                ..Default::default()
+            },
+            ..scene(&lyrics, &theme, style)
+        };
+        for _ in 0..4 {
+            cache = picture.frame(
+                stack![
+                    folia_visualizer::background_view(published_ground(&theme, &[], true)),
+                    lyric_view::<Msg>(scene.clone()),
+                    glass(),
+                ]
+                .into(),
+                cache,
+            );
+        }
+        assert!(folia_render::foreground_held(), "{style:?} did not exercise the source binding");
+        let unrelated = folia_render::PublisherGuard::register();
+        unrelated.report(true);
+        drop(unrelated);
+        assert!(folia_render::foreground_held(), "unrelated publisher cleared a live {style:?} source");
+        for _ in 0..3 {
+            cache = picture.frame(
+                stack![folia_visualizer::background_view(published_ground(&theme, &[], true)), glass(),].into(),
+                cache,
+            );
+        }
+        assert!(!folia_render::foreground_held(), "{style:?} left its large texture bound after destruction");
+        assert!(folia_render::quality::target_sizes().is_empty());
+    }
 }
 
 struct PinnedClock;
@@ -1356,7 +1828,7 @@ fn preview_does_not_replace_the_playing_blur_source() {
     }
     let midnight = Theme::MIDNIGHT;
     let day = Theme::DAYLIGHT;
-    for style in [Style::Nebbia, Style::Lumiere] {
+    for style in [Style::Nebbia, Style::Lumiere, Style::Claddagh] {
         let play = blur_source(
             640,
             360,
@@ -1397,6 +1869,7 @@ fn tuned_ground(latent: folia_visualizer::LatentTuning, player: bool) -> Element
     let theme = Box::leak(Box::new(theme));
     let audio = Box::leak(Box::new(audio));
     folia_visualizer::background_view(folia_visualizer::Ground {
+        static_mode: false,
         mode: folia_visualizer::Background::Latent,
         seed: "geometry",
         time: 0.0,
@@ -1408,6 +1881,7 @@ fn tuned_ground(latent: folia_visualizer::LatentTuning, player: bool) -> Element
         paused: false,
         player,
         cover: &[],
+        cover_overlay: None,
         latent,
         daylight: false,
         sora: folia_visualizer::SoraTuning::DEFAULT,
@@ -1424,6 +1898,7 @@ fn background_ground(mode: folia_visualizer::Background, shapes: bool, vignette:
     let theme = Box::leak(Box::new(theme));
     let audio = Box::leak(Box::new(audio));
     folia_visualizer::background_view(folia_visualizer::Ground {
+        static_mode: false,
         mode,
         seed: "geometry",
         time: 0.0,
@@ -1435,6 +1910,7 @@ fn background_ground(mode: folia_visualizer::Background, shapes: bool, vignette:
         paused: false,
         player: true,
         cover: &[],
+        cover_overlay: None,
         latent: folia_visualizer::LatentTuning::DEFAULT,
         daylight: false,
         sora: folia_visualizer::SoraTuning::DEFAULT,
@@ -1442,6 +1918,69 @@ fn background_ground(mode: folia_visualizer::Background, shapes: bool, vignette:
         picture: None,
         nomand: folia_visualizer::nomand::Tuning::default(),
     })
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn common_cover_overlay_changes_the_screen_and_glass_together() {
+    folia_ui::install_fonts();
+    let image = iced::widget::image::Handle::from_rgba(2, 2, [230, 70, 20, 255].repeat(4));
+    let theme = Theme::DAYLIGHT;
+    let lyrics = Lyrics::default();
+    let render = |opacity| {
+        folia_render::release_backdrop();
+        let mut picture = Picture::with_size(640, 360);
+        let mut cache = Cache::default();
+        for _ in 0..3 {
+            let ground = folia_visualizer::Ground {
+                static_mode: false,
+                mode: folia_visualizer::Background::Common,
+                seed: "common-cover",
+                time: 0.0,
+                theme: &theme,
+                audio: &AudioFrame::SILENT,
+                shapes: false,
+                vignette: false,
+                publish: true,
+                paused: true,
+                player: true,
+                cover: &[],
+                cover_overlay: Some(opacity),
+                latent: folia_visualizer::LatentTuning::DEFAULT,
+                daylight: true,
+                sora: folia_visualizer::SoraTuning::DEFAULT,
+                monet: folia_visualizer::monet_background::Tuning::DEFAULT,
+                nomand: folia_visualizer::nomand::Tuning::default(),
+                picture: Some(&image),
+            };
+            let mut lyric = scene(&lyrics, &theme, Style::Classic);
+            lyric.backdrop = false;
+            cache = picture
+                .frame(stack![folia_visualizer::background_view(ground), lyric_view(lyric), glass()].into(), cache);
+        }
+        let under = folia_render::read_picture(&picture.device, &picture.queue).unwrap();
+        (picture.screenshot(), under.rgba)
+    };
+    let (cover, cover_glass) = render(0.0);
+    let (theme_only, theme_glass) = render(1.0);
+    assert!(
+        cover.chunks_exact(4).zip(theme_only.chunks_exact(4)).filter(|(left, right)| left != right).count() > 100_000
+    );
+    assert!(
+        cover_glass.chunks_exact(4).zip(theme_glass.chunks_exact(4)).filter(|(left, right)| left != right).count()
+            > 1000
+    );
+}
+
+#[test]
+fn common_cover_processing_keeps_extreme_sources_bounded() {
+    for (width, height) in [(1, 1920), (1920, 1), (640, 640)] {
+        let source = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 255, 255, 255]));
+        let image = folia_visualizer::common_cover_image(&source, &Theme::DAYLIGHT, Size::new(1200.0, 800.0));
+        let iced::widget::image::Handle::Rgba { width, height, pixels, .. } = image else { panic!("expected pixels") };
+        assert_eq!((width, height), (320, 213));
+        assert!(pixels.chunks_exact(4).all(|pixel| pixel == [255, 255, 255, 255]));
+    }
 }
 
 #[test]
@@ -1608,6 +2147,43 @@ fn geometric_switches_change_the_picture() {
 }
 
 #[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn static_backgrounds_stop_motion_without_changing_settings() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    let theme = Theme::MIDNIGHT;
+    let pixels = (0..256).flat_map(|index| [index as u8, (255 - index) as u8, 120, 255]).collect::<Vec<_>>();
+    let image = iced::widget::image::Handle::from_rgba(16, 16, pixels);
+    for mode in [
+        folia_visualizer::Background::Common,
+        folia_visualizer::Background::Latent,
+        folia_visualizer::Background::Sora,
+        folia_visualizer::Background::Monet,
+    ] {
+        PinnedClock::at(0);
+        let ground = || {
+            let mut ground = published_ground(&theme, &[], true);
+            ground.mode = mode;
+            ground.static_mode = true;
+            ground.vignette = true;
+            ground.publish = false;
+            ground.picture = Some(&image);
+            folia_visualizer::background_view(ground)
+        };
+        let mut picture = Picture::with_size(320, 180);
+        let cache = picture.frame(ground(), Cache::default());
+        let first = picture.screenshot();
+        PinnedClock::at(1_250);
+        let _ = picture.frame(ground(), cache);
+        assert_eq!(diff_count(&first, &picture.screenshot()), 0, "static background {mode:?} moved");
+        if mode == folia_visualizer::Background::Common {
+            let _ = picture.frame(common_ground(false, false), Cache::default());
+            assert_eq!(diff_count(&first, &picture.screenshot()), 0, "static common kept geometry or vignette");
+        }
+    }
+}
+
+#[test]
 fn latent_shader_budget_matches_the_paper_cap() {
     let (ratio, width, height) = folia_visualizer::shader_budget(200.0, 120.0, 1.0);
     assert!((ratio - 1.0).abs() < 1.0e-3);
@@ -1723,6 +2299,7 @@ fn lumiere_dark_field_reaches_glass() {
         for step in 0..3 {
             PinnedClock::at(step);
             let ground = folia_visualizer::Ground {
+                static_mode: false,
                 mode: folia_visualizer::Background::Latent,
                 seed: "dark-field",
                 time: 0.0,
@@ -1734,6 +2311,7 @@ fn lumiere_dark_field_reaches_glass() {
                 paused: true,
                 player: true,
                 cover: &[],
+                cover_overlay: None,
                 latent: folia_visualizer::LatentTuning::DEFAULT,
                 daylight: false,
                 sora: folia_visualizer::SoraTuning::DEFAULT,
@@ -1849,6 +2427,7 @@ fn monet_poster_and_controls_reach_the_playing_glass() {
         for step in 0..3 {
             PinnedClock::at(step);
             let ground = folia_visualizer::Ground {
+                static_mode: false,
                 mode: folia_visualizer::Background::Monet,
                 seed: "monet",
                 time: 0.0,
@@ -1860,6 +2439,7 @@ fn monet_poster_and_controls_reach_the_playing_glass() {
                 paused: true,
                 player: true,
                 cover: &[],
+                cover_overlay: None,
                 latent: folia_visualizer::LatentTuning::DEFAULT,
                 sora: folia_visualizer::SoraTuning::DEFAULT,
                 daylight: true,
@@ -1896,6 +2476,7 @@ fn nomand_effects_match_the_original_paper_shaders() {
         let mut tuning = folia_visualizer::nomand::Tuning::default();
         tuning.effect = effect;
         let ground = folia_visualizer::Ground {
+            static_mode: false,
             mode: folia_visualizer::Background::Nomand,
             seed: "reference",
             time: 0.0,
@@ -1907,6 +2488,7 @@ fn nomand_effects_match_the_original_paper_shaders() {
             paused: true,
             player: true,
             cover: &[],
+            cover_overlay: None,
             latent: folia_visualizer::LatentTuning::DEFAULT,
             sora: folia_visualizer::SoraTuning::DEFAULT,
             daylight: true,
@@ -1986,6 +2568,49 @@ fn lyric_fonts_invalidate_layout_and_change_each_text_style() {
         let delta = diff_count(&before, &picture.screenshot());
         eprintln!("{style:?} changed-font pixels {delta}");
         assert!(delta > 100, "{style:?} ignored the font setting or kept its old layout");
+    }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn overlap_settings_relayout_words_and_reset_the_picture() {
+    let _guard = guarded();
+    let _clock = PinnedClock::pin();
+    folia_ui::install_fonts();
+    let text = "Several bright words grow and turn beside their neighbours";
+    let lyrics = Lyrics {
+        lines: vec![Line {
+            text: text.into(),
+            start: 1.0,
+            end: 10.0,
+            words: text.split_whitespace().map(|text| Word { text: text.into(), start: 1.0, end: 10.0 }).collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let theme = Theme { intensity: folia_core::AnimationIntensity::Chaotic, ..Theme::MIDNIGHT };
+    for style in [Style::Classic, Style::Partita] {
+        let mut picture = Picture::with_size(800, 500);
+        let mut cache = Cache::default();
+        let mut sample = scene(&lyrics, &theme, style);
+        sample.backdrop = false;
+        sample.font_scale = 1.5;
+        cache = picture.frame(lyric_view::<Msg>(sample.clone()), cache);
+        let original = picture.screenshot();
+        sample.tuning.set_flag(style.manifest(), "avoidOverlap", true);
+        cache = picture.frame(lyric_view::<Msg>(sample.clone()), cache);
+        assert!(diff_count(&original, &picture.screenshot()) > 1000, "{style:?} kept the old word layout");
+        sample.tuning.set_flag(style.manifest(), "avoidOverlap", false);
+        cache = picture.frame(lyric_view::<Msg>(sample.clone()), cache);
+        assert_eq!(original, picture.screenshot(), "{style:?} did not reset its layout");
+        if style == Style::Classic {
+            sample.tuning.set_choice(style.manifest(), "useLegacyLayout", "true");
+            cache = picture.frame(lyric_view::<Msg>(sample.clone()), cache);
+            let legacy = picture.screenshot();
+            sample.tuning.set_flag(style.manifest(), "avoidOverlap", true);
+            picture.frame(lyric_view::<Msg>(sample), cache);
+            assert_eq!(legacy, picture.screenshot(), "legacy Classic consumed the hidden setting");
+        }
     }
 }
 

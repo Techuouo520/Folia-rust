@@ -1,11 +1,13 @@
 [classic]
 storage classic_tuning
 hiddenWhen wordSpacing useLegacyLayout
+hiddenWhen avoidOverlap useLegacyLayout
 reset notifications.classicReset
 switch enableWordRotation true
 select useLegacyLayout false false,true
 slider breathingFloatMultiplier 0 2 0.05 1
 slider wordSpacing 0 2 0.05 0.7
+switch avoidOverlap false
 
 [partita]
 storage partita_tuning
@@ -14,6 +16,7 @@ switch showGuideLines true
 switch useSemanticLayout true
 slider staggerMin 0 180 5 20
 slider staggerMax 0 180 5 100
+switch avoidOverlap false
 
 [still]
 storage still_tuning
@@ -27,12 +30,19 @@ slider tiltStyleProbability 0 1 0.05 0.35
 
 [claddagh]
 storage claddagh_tuning
+hiddenUnless translationScale showTranslation
+hiddenUnless translationLetterSpacingOffset showTranslation
 reset notifications.claddaghReset
 slider focusScaleRatio 0 1.5 0.05 0.65
 slider radiusScale 0.5 1.5 0.05 1
+slider positionX -40 40 1 0
+slider positionY -40 40 1 0
 slider ellipseTiltDeg 0 60 1 45
 switch showAxisLine true
 slider letterSpacingOffset -5 20 0.5 0
+switch showTranslation false
+slider translationScale 0.5 2 0.05 1
+slider translationLetterSpacingOffset -5 20 0.5 0
 
 [cadenza]
 storage cadenza_tuning
@@ -42,6 +52,16 @@ reset notifications.cadenzaReset
 [nebbia]
 storage nebbia_tuning
 reset notifications.nebbiaReset
+select behind night night,aquarium,backdrop
+slider jellies 0 24 1 16
+slider jellySize 0.5 1.8 0.05 1
+slider bubbles 0 1 0.05 0.6
+member scenery spot true
+member scenery buildings true
+member scenery lights true
+member scenery cars true
+member scenery road true
+select rain slant slant,straight,off
 slider strokeWidth 0.04 0.16 0.005 0.09
 slider writeSpeed 0.4 2.5 0.05 1
 slider jitter 0 1.5 0.05 0.6
@@ -70,9 +90,15 @@ slider neon 0 2 0.05 1
 slider bump 0 2.5 0.05 1
 slider spot 0 2 0.05 0.5
 slider spotX 0 1 0.01 0.8
+select glass rain rain,dew,snow
 slider rainHit 0 3 0.05 1
 slider rainBig 0 2 0.05 1
-slider resolution 0.5 2 0.25 1
+slider dew 0 1.5 0.05 1
+slider dewSize 0.5 2 0.05 1
+slider dewGlint 0 2 0.05 1
+slider snow 0 3 0.05 1
+slider snowSize 0.5 2 0.05 1
+slider snowMelt 0.25 3 0.05 1
 
 [lumiere]
 storage lumiere_tuning
@@ -106,15 +132,19 @@ storage monet_tuning
 hiddenUnless audioStyle showAudioVisualization
 reset notifications.monetReset
 path portraitPath
-concealed portraitOffsetX
+concealed portraitOffsetX showDescription showPortraitDragHanger
 slider fontScale 0.7 1.5 0.05 1.2
+switch mirrorLayout false
 switch keywordColoringEnabled true
 switch showDescription true
-select portraitSource cover cover,custom
+select descriptionVisibility auto auto,always,hidden
+text customDescription 120
+select portraitSource cover cover,custom,none
 button uploadPortrait
 button clearPortrait
 picture portraitStyle square rectangular,square
 switch showPortraitDragHanger true
+select portraitHangerVisibility auto auto,always,hidden
 slider portraitOffsetX -150 0 1 0
 switch showAudioVisualization true
 picture audioStyle bar bar,line

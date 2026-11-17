@@ -10,6 +10,7 @@ struct Key {
     source: usize,
     colors: [folia_core::Rgb; 3],
     tuning: Tuning,
+    common: Option<iced::Size>,
     raw: bool,
 }
 
@@ -39,6 +40,7 @@ impl Poster {
         theme: &Theme,
         mut tuning: Tuning,
         raw: bool,
+        common: Option<iced::Size>,
     ) -> Option<Job> {
         // Layout and drift happen on the GPU and do not invalidate the processed bitmap.
         tuning.half = false;
@@ -51,9 +53,16 @@ impl Poster {
         }
         let key = source.map(|source| Key {
             source: Arc::as_ptr(source) as usize,
-            colors: if raw { [folia_core::Rgb::hex(0); 3] } else { [theme.background, theme.primary, theme.accent] },
+            colors: if raw {
+                [folia_core::Rgb::hex(0); 3]
+            } else if common.is_some() {
+                [theme.background, theme.primary, theme.secondary]
+            } else {
+                [theme.background, theme.primary, theme.accent]
+            },
             tuning,
             raw,
+            common,
         });
         if key != self.desired {
             self.desired = key;
@@ -65,7 +74,7 @@ impl Poster {
         }
         let source = source?.clone();
         self.running = true;
-        Some(Job { generation: self.generation, source, theme: theme.clone(), tuning, raw })
+        Some(Job { generation: self.generation, source, theme: theme.clone(), tuning, raw, common })
     }
 
     pub fn finish(&mut self, generation: u64, image: Option<Handle>) {
@@ -82,6 +91,7 @@ pub struct Job {
     theme: Theme,
     tuning: Tuning,
     raw: bool,
+    common: Option<iced::Size>,
 }
 
 struct SharedPixels(Arc<image::RgbaImage>);
@@ -94,7 +104,9 @@ impl AsRef<[u8]> for SharedPixels {
 
 impl Job {
     pub fn paint(self) -> Handle {
-        if self.raw {
+        if let Some(size) = self.common {
+            folia_visualizer::common_cover_image(&self.source, &self.theme, size)
+        } else if self.raw {
             Handle::from_rgba(
                 self.source.width(),
                 self.source.height(),

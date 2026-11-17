@@ -1,6 +1,6 @@
 ﻿[workspace]
 resolver = "3"
-members = ["core", "store", "i18n", "lyrics", "library", "player", "visualizer", "omni", "ui", "render", "visual/lumiere", "visual/monet", "bench/player"]
+members = ["core", "store", "i18n", "lyrics", "library", "player", "visualizer", "omni", "ui", "render", "analysis", "ai", "acoustics", "visual/lumiere", "visual/monet", "bench/player"]
 
 [workspace.package]
 edition = "2024"
@@ -10,6 +10,8 @@ publish = false
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 folia-core = { path = "../crates/folia-core" }
+folia-ai = { path = "../crates/folia-ai" }
+folia-acoustics = { path = "../crates/folia-acoustics" }
 folia-store = { path = "../crates/folia-store" }
 folia-i18n = { path = "../crates/folia-i18n" }
 folia-lyrics = { path = "../crates/folia-lyrics" }
@@ -19,6 +21,7 @@ folia-visualizer = { path = "../crates/folia-visualizer" }
 folia-omni = { path = "../crates/folia-omni" }
 folia-ui = { path = "../crates/folia-ui" }
 folia-render = { path = "../crates/folia-render" }
+folia-analysis = { path = "../crates/folia-analysis" }
 bytemuck = { version = "1.25.2", features = ["derive"] }
 iced = { version = "0.14.0", default-features = false, features = ["advanced", "canvas", "crisp", "image-without-codecs", "linux-theme-detection", "svg", "thread-pool", "tokio", "wayland", "web-colors", "wgpu", "x11"] }
 iced_wgpu = "=0.14.0"

@@ -816,12 +816,15 @@ impl HomeChrome {
     }
 
     fn presence_running(&self, now: Instant) -> bool {
-        (self.presence_from - self.presence_goal).abs() > 0.001
+        !crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion)
+            && (self.presence_from - self.presence_goal).abs() > 0.001
             && now.saturating_duration_since(self.presence_at).as_secs_f64() * 1000.0 < PRESENCE_MS
     }
 
     fn busy(&self, from: f32, goal: f32, at: Instant, now: Instant, ms: f64) -> bool {
-        (from - goal).abs() > 0.001 && now.saturating_duration_since(at).as_secs_f64() * 1000.0 < ms
+        !crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion)
+            && (from - goal).abs() > 0.001
+            && now.saturating_duration_since(at).as_secs_f64() * 1000.0 < ms
     }
 }
 
@@ -1007,6 +1010,9 @@ fn tr<'a>(host: &Host<'a>, key: &'static str) -> &'a str {
 }
 
 fn mix(from: f32, goal: f32, at: Instant, now: Instant, ms: f64, ease: Ease) -> f32 {
+    if crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion) {
+        return goal;
+    }
     let t = (now.saturating_duration_since(at).as_secs_f64() * 1000.0 / ms).clamp(0.0, 1.0);
     from + (goal - from) * ease.at(t) as f32
 }

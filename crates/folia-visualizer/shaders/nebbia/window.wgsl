@@ -27,6 +27,17 @@ struct Uniforms {
     lc: vec4<f32>,
     lobes: array<vec4<f32>, 8>,
     lobe_sd: array<vec4<f32>, 4>,
+    environment: vec4<f32>,
+    water: vec4<f32>,
+    mist_tint: vec4<f32>,
+    jelly: array<vec4<f32>, 24>,
+    jelly_c: array<vec4<f32>, 24>,
+    bursts: array<vec4<f32>, 12>,
+    sway: vec4<f32>,
+    aqua: vec4<f32>,
+    aqua_motion: vec4<f32>,
+    snow: vec4<f32>,
+    motion: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -49,6 +60,7 @@ struct Fill { geo: vec4<f32>, params: vec4<f32>, }
 @group(0) @binding(14) var fog_glow: texture_2d<f32>;
 @group(0) @binding(15) var noise_tex: texture_2d<f32>;
 @group(0) @binding(16) var<uniform> fill: Fill;
+@group(0) @binding(17) var fog_sharp: texture_2d<f32>;
 
 const HZ: f32 = 0.6;
 const ROAD: f32 = 0.7;
@@ -282,23 +294,29 @@ fn buildings_over(col: vec3<f32>, q: vec2<f32>, b: f32, t: f32) -> vec3<f32> {
     return (col * (1.0 - far.a) + far.rgb) * (1.0 - near.a) + near.rgb;
 }
 
+fn scenery_on(bit: u32) -> bool { return (u32(u.environment.z) & bit) != 0u; }
+
 fn scene(q: vec2<f32>, b: f32) -> vec3<f32> {
+    if u.environment.x > 0.5 { return aquarium_scene(q, b); }
     let t = u.time * u.bus;
     var col = mix(u.sky0.xyz, u.sky1.xyz, smoothstep(0.0, HZ, q.y));
     col = col + mix(u.la.xyz, SODIUM, 0.4) * 0.14 * exp(-abs(q.y - HZ + 0.12) * 6.0);
-    col = buildings_over(col, q, b, t);
-    col = col + (neon(q, b, t) + u.la.xyz * 0.12 * exp(-abs(q.y - HZ + 0.1) * 5.0)) * u.neon;
-    col = col + lamps(q, b, t);
+    if scenery_on(1u) { col = buildings_over(col, q, b, t); }
+    if scenery_on(2u) {
+        col = col + (neon(q, b, t) + u.la.xyz * 0.12 * exp(-abs(q.y - HZ + 0.1) * 5.0)) * u.neon;
+        col = col + lamps(q, b, t);
+    }
     let aa = max(b, 0.0015);
-    let road = smoothstep(ROAD - aa, ROAD + aa, q.y);
+    let road = select(0.0, smoothstep(ROAD - aa, ROAD + aa, q.y), scenery_on(8u));
     col = mix(col, u.sky0.xyz * 0.5, road * 0.85);
-    if road > 0.0 {
+    if road > 0.0 && scenery_on(2u) {
         let qr = vec2<f32>(q.x, ROAD - (q.y - ROAD) * 0.55);
         col = col + lamps(qr, b + 0.012, t) * road * 0.35;
         let qn = vec2<f32>(q.x, HZ - (q.y - ROAD) * 0.22);
         col = col + neon(qn, b + 0.008, t) * road * 0.45 * u.neon;
     }
     for (var lane: i32 = 0; lane < 2; lane = lane + 1) {
+        if !scenery_on(4u) { break; }
         let sp = select(0.55, -1.1, lane == 1);
         let ly = select(0.76, 0.83, lane == 1);
         let ww = 0.9;
@@ -322,7 +340,7 @@ fn scene(q: vec2<f32>, b: f32) -> vec3<f32> {
             }
         }
     }
-    let wind = max(WIND * u.bus, 0.001);
+    let wind = select(0.0, max(WIND * u.bus, 0.001), scenery_on(32u));
     let rd = normalize(vec2<f32>(-wind, 1.0));
     let r = vec2<f32>(dot(q, rd), dot(q, vec2<f32>(-rd.y, rd.x)));
     let col_id = floor(r.y / 0.007);
@@ -331,7 +349,8 @@ fn scene(q: vec2<f32>, b: f32) -> vec3<f32> {
     let line = smoothstep(0.0012 + b, 0.0, abs(fract(r.y / 0.007) - 0.5) * 0.007) * smoothstep(0.0, 0.1, seg) * smoothstep(0.3, 0.1, seg);
     // The rain shows only where the spotlights light it.
     let beam = spot_beam(q, b);
-    col = col + u.la.xyz * beam + mix(u.la.xyz, vec3<f32>(1.0, 1.0, 1.0), 0.5) * line * beam * 1.6 * step(0.3, hr) * (1.0 - clamp(b * 40.0, 0.0, 1.0));
+    col = col + u.la.xyz * beam;
+    if scenery_on(16u) { col = col + mix(u.la.xyz, vec3<f32>(1.0, 1.0, 1.0), 0.5) * line * beam * 1.6 * step(0.3, hr) * (1.0 - clamp(b * 40.0, 0.0, 1.0)); }
     return col;
 }
 
@@ -344,14 +363,9 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
 fn scene_q(input_uv: vec2<f32>) -> vec2<f32> {
     let aspect = u.resolution.x / max(u.resolution.y, 1.0);
     // `sky0.w` is the bump slider. Without drum analysis the bus uses this idle sway, scaled by it.
-    let sway = sin(u.time * 1.7) * 0.008 * u.sky0.w;
-    var uv = input_uv;
-    let res = u.sky1.w;
-    if res < 0.99 || res > 1.01 {
-        let cells = max(u.resolution * max(res, 0.5), vec2<f32>(1.0, 1.0));
-        uv = (floor(input_uv * cells) + vec2<f32>(0.5, 0.5)) / cells;
-    }
-    return vec2<f32>(uv.x * aspect, uv.y + sway);
+    let sway = select(sin(u.time * 1.7) * 0.008 * u.sky0.w, 0.0, u.motion.z > 0.5);
+    let uv = input_uv;
+    return vec2<f32>((uv.x - u.motion.x) * aspect, uv.y + sway - u.motion.y);
 }
 
 @fragment
@@ -381,14 +395,20 @@ fn fs_fog_glow(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_fog_sharp(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(scene(scene_q(in.uv), 0.006), 1.0);
+}
+
+@fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let aspect = u.resolution.x / max(u.resolution.y, 1.0);
     let q = scene_q(in.uv);
     // Noise runs in canvas pixels as the original; breath lobes are placed in CSS pixels.
-    let px = in.uv * u.resolution * u.scale;
-    let css = in.uv * u.resolution;
-    let m = textureSample(mask_tex, samp, in.uv).r;
-    let nz = textureSample(noise_tex, samp, in.uv).rgb;
+    let glass_uv = in.uv - u.motion.xy * 0.35;
+    let px = glass_uv * u.resolution * u.scale;
+    let css = glass_uv * u.resolution;
+    let m = textureSample(mask_tex, samp, glass_uv).r;
+    let nz = textureSample(noise_tex, samp, glass_uv).rgb;
     let fine = nz.r;
     let blotch = nz.g;
     let th = 0.3 + (fine - 0.5) * 0.22 * 0.6 + (blotch - 0.5) * 0.12;
@@ -412,37 +432,64 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let blur = textureSample(fog_blur, samp, in.uv).rgb;
     let glow = textureSample(fog_glow, samp, in.uv).rgb;
     var fog = blur * max(0.08, 1.0 - 0.45 * dens - 0.25 * breath) + glow * 0.9 * dens + haze * (0.2 * dens + 0.25 * breath);
-    fog = fog + vec3<f32>(hash(px) - 0.5) * 0.025;
+    let see_through = u.environment.w > 0.5;
+    var alpha = 1.0;
+    if see_through {
+        alpha = clamp((0.62 * dens + 0.3 * breath) * mix(1.3, 1.0, dot(u.mist_tint.rgb, vec3<f32>(0.333))), 0.0, 0.92);
+        fog = u.mist_tint.rgb * alpha;
+    }
+    fog = fog + vec3<f32>(hash(px) - 0.5) * 0.025 * alpha;
     let sd = q - u.spot_tgt;
     fog = fog + u.la.xyz * u.spot_i * exp(-dot(sd, sd) / (u.spot_r * u.spot_r * 2.2)) * (0.18 + 0.4 * dens);
     fog = fog + vec3<f32>(smoothstep(0.78, 0.98, nz.b) * 0.05 * dens);
     // Drops at wipe edges and raindrops clear a ring of fog; drops condensed on the fog sit only on the fog.
-    let rd = textureSample(drop_tex, samp, in.uv);
-    let fd = textureSample(field_tex, samp, in.uv) * (1.0 - clear);
+    let rd = textureSample(drop_tex, samp, glass_uv);
+    let fd = textureSample(field_tex, samp, glass_uv) * (1.0 - clear);
     clear = max(clear, smoothstep(0.93, 1.0, rd.a));
     var col = fog;
     if clear > 0.001 {
-        let wiped = scene(q, 0.0012) * 1.05 + haze * 0.02 * dens;
+        var wiped = haze * 0.02 * dens;
+        if !see_through { wiped += scene(q, 0.0012) * 1.05; }
         let rim = clear * (1.0 - clear) * 4.0;
         col = mix(fog, wiped, clear) + vec3<f32>(rim, rim, rim) * haze * 0.16 * dens;
+        if see_through { alpha = mix(alpha, 0.02 * dens, clear) + rim * 0.16 * dens; }
     }
     let comp = vec4<f32>(rd.rgb + fd.rgb - 2.0 * rd.rgb * fd.rgb, max(rd.a, fd.a));
     let dmask = smoothstep(0.96, 0.99, comp.a);
     if dmask > 0.001 {
         let nn = comp.rg - vec2<f32>(0.5, 0.5);
-        let ruv = in.uv + vec2<f32>(-nn.x, nn.y) * (comp.b * 0.6 + 0.4);
-        var lens = scene(vec2<f32>(ruv.x * aspect, ruv.y), 0.006);
+        let ruv = in.uv - u.motion.xy + vec2<f32>(-nn.x, nn.y) * (comp.b * 0.6 + 0.4);
+        var lens: vec3<f32>;
+        if !see_through && u.environment.y == 1.0 && fd.a > rd.a {
+            lens = textureSampleLevel(fog_sharp, samp, ruv + u.motion.xy, 0.0).rgb;
+        } else {
+            lens = scene(vec2<f32>(ruv.x * aspect, ruv.y), 0.006);
+        }
         let normal = normalize(vec3<f32>(nn * 2.0, 1.0));
         let light_dir = normalize(vec3<f32>(-1.0, 1.0, 2.0));
         let lambert = clamp(dot(light_dir, normal), 0.0, 1.0);
         let spec = pow(max(dot(normal, normalize(light_dir + vec3<f32>(0.0, 0.0, 1.0))), 0.0), 48.0);
         lens = lens + vec3<f32>(lambert - 0.8, lambert - 0.8, lambert - 0.8) * vec3<f32>(0.3, 0.3, 0.32) + vec3<f32>(spec, spec, spec) * vec3<f32>(0.3, 0.3, 0.33);
-        lens = max(lens, fog * 0.55) + haze * 0.08 * dens;
+        if see_through {
+            let dark = 1.0 - dot(u.mist_tint.rgb, vec3<f32>(0.333));
+            let rim_alpha = (1.0 - smoothstep(0.975, 0.995, comp.a)) * 0.21;
+            alpha = mix(alpha, mix(1.0, 0.47 + rim_alpha, dark), dmask);
+            lens = max(lens, vec3<f32>(0.0)) * mix(1.0, 0.47, dark);
+        } else {
+            lens = max(lens, fog * 0.55) + haze * 0.08 * dens;
+            if u.environment.y == 1.0 && fd.a >= rd.a {
+                lens = max(lens * 1.15, fog * (1.0 + 0.051 * u.water.z)) + vec3<f32>((spec * 0.544 + lambert * 0.068) * dens * u.water.z);
+            }
+        }
         col = mix(col, lens, dmask);
+    }
+    if u.environment.x > 0.5 && !see_through {
+        let peak = max(col.r, max(col.g, col.b));
+        if peak > 0.75 { col *= (0.75 + 0.25 * (1.0 - exp((0.75 - peak) / 0.25))) / peak; }
     }
     col = clamp(col, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
     if u.encode > 0.5 {
-        col = to_linear(col);
+        col = to_linear(col / max(alpha, 0.00001)) * alpha;
     }
-    return vec4<f32>(col, 1.0);
+    return vec4<f32>(col, alpha);
 }

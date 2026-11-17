@@ -10,6 +10,57 @@ use folia_visualizer::styles::nebbia::{Pass, Renderer, frame};
 pub static GPU: Mutex<()> = Mutex::new(());
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+#[test]
+#[cfg(feature = "stress")]
+#[ignore = "release prepare latency audit"]
+fn long_time_simulation_prepare_latency() {
+    if with_strokes_in_child("nebbia_gpu::long_time_simulation_prepare_latency") {
+        return;
+    }
+    let _guard = GPU.lock().unwrap();
+    let size = [1200, 800];
+    let lyrics = super::nebbia_song();
+    let mut gpu = Offscreen::new(size);
+    for glass in ["snow", "dew"] {
+        let mut tuning = Values::default();
+        let manifest = folia_visualizer::Style::Nebbia.manifest();
+        tuning.set_choice(manifest, "glass", glass);
+        let make = |time, values: &Values, dimensions: [u32; 2]| {
+            frame(
+                &lyrics,
+                time,
+                iced::Size::new(dimensions[0] as f32, dimensions[1] as f32),
+                &Theme::MIDNIGHT,
+                1.0,
+                values,
+                0.9,
+            )
+        };
+        for time in [60.0, 180.0, 600.0] {
+            gpu.draw(&make(0.0, &tuning, size));
+            gpu.draw(&make(time, &tuning, size));
+            println!("NEBBIA_PREPARE glass={glass} action=enter time={time} ms={:.3}", gpu.prepare_ms);
+        }
+        gpu.advance_environment(&make(600.0, &tuning, size), 1800);
+        for value in [0.95, 1.0, 1.05, 1.1, 1.15] {
+            tuning.set_number(manifest, if glass == "snow" { "snow" } else { "dew" }, value);
+            gpu.draw(&make(600.0, &tuning, size));
+            println!("NEBBIA_PREPARE glass={glass} action=drag value={value} time=600 ms={:.3}", gpu.prepare_ms);
+        }
+        gpu.draw(&make(600.0, &tuning, [1180, 780]));
+        println!("NEBBIA_PREPARE glass={glass} action=resize time=600 ms={:.3}", gpu.prepare_ms);
+        gpu.draw(&make(180.0, &tuning, [1180, 780]));
+        println!("NEBBIA_PREPARE glass={glass} action=seek time=180 ms={:.3}", gpu.prepare_ms);
+        gpu.advance_environment(&make(600.0, &tuning, [1180, 780]), 600);
+        let mut resume = make(600.0, &tuning, [1180, 780]);
+        for label in ["pause", "resume", "pause"] {
+            resume.elapsed = if label == "resume" { 1.0 / 60.0 } else { 0.0 };
+            gpu.draw(&resume);
+            println!("NEBBIA_PREPARE glass={glass} action={label} time=600 ms={:.3}", gpu.prepare_ms);
+        }
+    }
+}
+
 pub(super) struct Offscreen {
     instance: wgpu::Instance,
     device: wgpu::Device,
@@ -25,6 +76,23 @@ pub(super) struct Offscreen {
 }
 
 impl Offscreen {
+    fn advance_environment(&mut self, pass: &Pass, frames: usize) {
+        let mut pass = pass.clone();
+        pass.elapsed = 1.0 / 60.0;
+        for index in 0..frames {
+            self.renderer.prepare(
+                &self.device,
+                &self.queue,
+                &pass,
+                [0.0, 0.0, self.size[0] as f32, self.size[1] as f32],
+                1.0,
+            );
+            if index.is_multiple_of(60) {
+                self.queue.submit([]);
+                self.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            }
+        }
+    }
     pub(super) fn new(size: [u32; 2]) -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::from_env_or_default());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
@@ -168,6 +236,132 @@ fn sample(size: [u32; 2], time: f64, bus: f32, theme: &Theme) -> Pass {
 }
 
 #[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn scenery_and_aquarium_controls_change_real_pixels() {
+    let _guard = GPU.lock().unwrap();
+    let size = [960, 600];
+    let mut gpu = Offscreen::new(size);
+    let manifest = folia_visualizer::Style::Nebbia.manifest();
+    let mut values = Values::default();
+    values.set_choice(manifest, "behind", "aquarium");
+    let mut capture = |values: &Values, time| {
+        gpu.renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
+        let pass = frame(
+            &Lyrics::default(),
+            time,
+            iced::Size::new(size[0] as f32, size[1] as f32),
+            &Theme::MIDNIGHT,
+            1.0,
+            values,
+            0.0,
+        );
+        gpu.advance_environment(&pass, 600);
+        for _ in 0..3 {
+            gpu.draw(&pass);
+        }
+        gpu.pixels()
+    };
+    let base = capture(&values, 12.0);
+    for (key, number) in
+        [("jellies", 0.0), ("jellySize", 1.8), ("bubbles", 0.0), ("dew", 0.0), ("dewSize", 2.0), ("dewGlint", 0.0)]
+    {
+        let mut changed = values.clone();
+        changed.set_number(manifest, key, number);
+        let pixels = capture(&changed, 12.0);
+        let changed = base.chunks_exact(4).zip(pixels.chunks_exact(4)).filter(|(left, right)| left != right).count();
+        assert!(changed > 40, "{key} changed only {changed} pixels");
+    }
+    let mut blank = values.clone();
+    assert!(blank.set_members(manifest, "scenery", &[]));
+    assert!(
+        Values::from_table(manifest, Some(&blank.to_table(manifest))).to_table(manifest)["scenery"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_ne!(capture(&blank, 12.0), base);
+    let mut snowy = Values::default();
+    snowy.set_choice(manifest, "glass", "snow");
+    let snow = capture(&snowy, 12.0);
+    for (key, value) in [("snow", 0.2), ("snowSize", 1.8), ("snowMelt", 3.0)] {
+        let mut changed = snowy.clone();
+        changed.set_number(manifest, key, value);
+        assert_ne!(capture(&changed, 12.0), snow, "{key} left the snow unchanged");
+    }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn environment_simulations_keep_local_time_across_seeks_and_pause() {
+    let _guard = GPU.lock().unwrap();
+    let size = [960, 600];
+    let manifest = folia_visualizer::Style::Nebbia.manifest();
+    let mut gpu = Offscreen::new(size);
+    for glass in ["snow", "dew"] {
+        let mut values = Values::default();
+        values.set_choice(manifest, "glass", glass);
+        let make = |time, dimensions: [u32; 2], tuning: &Values| {
+            frame(
+                &Lyrics::default(),
+                time,
+                iced::Size::new(dimensions[0] as f32, dimensions[1] as f32),
+                &Theme::MIDNIGHT,
+                1.0,
+                tuning,
+                0.0,
+            )
+        };
+        let pass = make(12.0, size, &values);
+        gpu.renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
+        for _ in 0..6 {
+            gpu.draw(&pass);
+        }
+        gpu.advance_environment(&pass, 900);
+        for _ in 0..6 {
+            gpu.draw(&pass);
+        }
+        let grown = gpu.pixels();
+        gpu.draw(&make(600.0, size, &values));
+        gpu.draw(&make(1.0, size, &values));
+        for _ in 0..6 {
+            gpu.draw(&pass);
+        }
+        assert!(gpu.pixels() == grown, "{glass} seek changed the local simulation");
+        let mut changed = values.clone();
+        changed.set_number(manifest, if glass == "snow" { "snowMelt" } else { "dewSize" }, 1.5);
+        gpu.draw(&make(12.0, size, &changed));
+        gpu.draw(&pass);
+        let pixels = gpu.pixels();
+        let difference =
+            pixels.iter().zip(&grown).map(|(a, b)| f64::from(a.abs_diff(*b))).sum::<f64>() / pixels.len() as f64;
+        assert!(difference < 0.05, "{glass} paused tuning reset the simulation, mean={difference}");
+        gpu.advance_environment(&pass, 120);
+        gpu.draw(&pass);
+        assert!(gpu.pixels() != grown, "{glass} did not resume");
+        gpu.renderer = Renderer::new(&gpu.device, &gpu.queue, FORMAT);
+        for _ in 0..6 {
+            gpu.draw(&pass);
+        }
+        assert!(gpu.pixels() != grown, "{glass} reopen retained destroyed state");
+        gpu.advance_environment(&pass, 900);
+        for _ in 0..6 {
+            gpu.draw(&pass);
+        }
+        assert!(gpu.pixels() == grown, "{glass} initial state and dt sequence differ");
+        let resized = make(12.0, [800, 450], &values);
+        for _ in 0..6 {
+            gpu.draw(&resized);
+        }
+        let pixels = gpu.pixels();
+        gpu.draw(&make(600.0, [800, 450], &values));
+        for _ in 0..6 {
+            gpu.draw(&resized);
+        }
+        assert!(gpu.pixels() == pixels, "{glass} resize followed by seek changed state");
+    }
+}
+
+#[test]
 #[cfg(all(feature = "stress", not(feature = "ci")))]
 #[ignore = "explicit release GPU stress check"]
 fn nebbia_gpu_300_frames() {
@@ -288,7 +482,7 @@ pub fn with_strokes_in_child(test: &str) -> bool {
         return false;
     }
     let result = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test, "--nocapture"])
+        .args(["--exact", test, "--nocapture", "--include-ignored"])
         .env("FOLIA_NEBBIA_STROKES", path)
         .status()
         .unwrap();
@@ -393,6 +587,9 @@ fn nebbia_widget_releases_gpu_resources() {
     let lyrics = Lyrics::default();
     let theme = Theme::MIDNIGHT;
     let view = folia_visualizer::styles::nebbia::view::<()>(folia_visualizer::Scene {
+        smart_beat: Default::default(),
+        paused: false,
+        daylight: false,
         style: folia_visualizer::Style::Nebbia,
         lyrics: &lyrics,
         time: 6.0,
@@ -406,6 +603,8 @@ fn nebbia_widget_releases_gpu_resources() {
         artist: String::new(),
         album: String::new(),
         portrait: None,
+        render_quality: folia_core::LyricRenderQuality::default(),
+        static_mode: false,
         typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &folia_core::AudioFrame::SILENT,

@@ -35,6 +35,31 @@ pub struct Word {
     pub end: f64,
 }
 
+/// An independently timed TTML background voice carried by its main line.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BackgroundVocal {
+    pub words: Vec<Word>,
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+    pub translation: Option<String>,
+    pub romanization: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+}
+
+impl BackgroundVocal {
+    pub fn alternate(&self, mode: SubtitleContentMode) -> Option<&str> {
+        match mode {
+            SubtitleContentMode::Translation | SubtitleContentMode::Both => self.translation.as_deref(),
+            SubtitleContentMode::Romanization => self.romanization.as_deref(),
+            SubtitleContentMode::None => None,
+        }
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Line {
     pub words: Vec<Word>,
@@ -52,6 +77,10 @@ pub struct Line {
     /// The song part is `chorus`.
     #[serde(default)]
     pub is_chorus: bool,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub background_vocals: Vec<BackgroundVocal>,
 }
 
 impl Line {

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use folia_core::{Line, Lyrics, Word};
+use folia_core::{BackgroundVocal, Line, Lyrics, Word};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
@@ -27,6 +27,8 @@ struct DraftLine {
     romanization: String,
     song_part: Option<String>,
     block_index: Option<u32>,
+    agent_id: Option<String>,
+    background: Vec<DraftLine>,
 }
 
 /// Where text inside the document currently goes.
@@ -38,6 +40,7 @@ enum Target {
     Translation,
     Romanization,
     HeadText(HeadKind, String),
+    Background(usize, Box<Target>),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -167,30 +170,52 @@ fn open(
                 end: attr("end").and_then(|t| time(&t)),
                 song_part: document.part.clone().filter(|part| !part.is_empty()),
                 block_index: document.body_depth.map(|_| document.block),
+                agent_id: attr("agent"),
                 ..DraftLine::default()
             });
             Target::Line
         }
-        "span" => match (attr("role").as_deref(), parent) {
-            (Some("x-translation"), _) => Target::Translation,
-            (Some("x-roman"), _) => Target::Romanization,
-            (Some(_), _) => Target::Ignore,
-            (None, Some(Target::HeadText(kind, key))) => Target::HeadText(*kind, key.clone()),
-            (None, Some(Target::Line)) => {
-                let (Some(start), Some(end)) =
-                    (attr("begin").and_then(|t| time(&t)), attr("end").and_then(|t| time(&t)))
-                else {
-                    return Target::Line;
-                };
-                if let Some(line) = line {
-                    line.syllables.push(Syllable { start, end, ..Syllable::default() });
-                }
-                Target::Syllable
-            }
-            (None, Some(other)) => other.clone(),
-            (None, None) => Target::Ignore,
+        "span" => match parent {
+            Some(Target::HeadText(kind, key)) => Target::HeadText(*kind, key.clone()),
+            _ => line.as_mut().map_or(Target::Ignore, |line| span(element, line, parent)),
         },
         _ => Target::Ignore,
+    }
+}
+
+fn span(element: &BytesStart<'_>, line: &mut DraftLine, parent: Option<&Target>) -> Target {
+    if let Some(Target::Background(index, parent)) = parent {
+        return line
+            .background
+            .get_mut(*index)
+            .map_or(Target::Ignore, |vocal| Target::Background(*index, Box::new(span(element, vocal, Some(parent)))));
+    }
+    let attr = |name: &str| attribute(element, name);
+    match (attr("role").as_deref(), parent) {
+        (Some("x-bg"), _) => {
+            let index = line.background.len();
+            line.background.push(DraftLine {
+                start: attr("begin").and_then(|t| time(&t)),
+                end: attr("end").and_then(|t| time(&t)),
+                agent_id: attr("agent"),
+                ..DraftLine::default()
+            });
+            Target::Background(index, Box::new(Target::Line))
+        }
+        (Some("x-translation"), _) => Target::Translation,
+        (Some("x-roman"), _) => Target::Romanization,
+        (Some(_), _) => Target::Ignore,
+        (None, Some(Target::HeadText(kind, key))) => Target::HeadText(*kind, key.clone()),
+        (None, Some(Target::Line)) => {
+            let (Some(start), Some(end)) = (attr("begin").and_then(|t| time(&t)), attr("end").and_then(|t| time(&t)))
+            else {
+                return Target::Line;
+            };
+            line.syllables.push(Syllable { start, end, ..Syllable::default() });
+            Target::Syllable
+        }
+        (None, Some(other)) => other.clone(),
+        (None, None) => Target::Ignore,
     }
 }
 
@@ -205,24 +230,33 @@ fn push_text(text: &str, target: Option<&Target>, line: &mut Option<DraftLine>, 
         }
         Some(target) => {
             let Some(line) = line else { return };
-            match target {
-                Target::Syllable => {
-                    if let Some(syllable) = line.syllables.last_mut() {
-                        syllable.text.push_str(text);
-                    }
-                }
-                Target::Line if text.trim().is_empty() => {
-                    if let Some(syllable) = line.syllables.last_mut() {
-                        syllable.space_after = true;
-                    }
-                }
-                Target::Line => line.plain.push_str(text),
-                Target::Translation => line.translation.push_str(text),
-                Target::Romanization => line.romanization.push_str(text),
-                _ => {}
-            }
+            push_line_text(text, target, line);
         }
         None => {}
+    }
+}
+
+fn push_line_text(text: &str, target: &Target, line: &mut DraftLine) {
+    match target {
+        Target::Background(index, target) => {
+            if let Some(vocal) = line.background.get_mut(*index) {
+                push_line_text(text, target, vocal);
+            }
+        }
+        Target::Syllable => {
+            if let Some(syllable) = line.syllables.last_mut() {
+                syllable.text.push_str(text);
+            }
+        }
+        Target::Line if text.trim().is_empty() => {
+            if let Some(syllable) = line.syllables.last_mut() {
+                syllable.space_after = true;
+            }
+        }
+        Target::Line => line.plain.push_str(text),
+        Target::Translation => line.translation.push_str(text),
+        Target::Romanization => line.romanization.push_str(text),
+        _ => {}
     }
 }
 
@@ -247,6 +281,8 @@ fn build(document: Document) -> Lyrics {
             let from_head = |map: &HashMap<String, String>| draft.key.as_ref().and_then(|key| map.get(key)).cloned();
             let non_empty = |text: String| Some(text.trim().to_owned()).filter(|text| !text.is_empty());
             let is_chorus = draft.song_part.as_ref().is_some_and(|part| part.trim().eq_ignore_ascii_case("chorus"));
+            let background_vocals =
+                draft.background.into_iter().filter_map(|vocal| background(vocal, start, end)).collect();
             Some(Line {
                 words,
                 start,
@@ -257,10 +293,63 @@ fn build(document: Document) -> Lyrics {
                 song_part: draft.song_part,
                 block_index: draft.block_index,
                 is_chorus,
+                agent_id: draft.agent_id,
+                background_vocals,
             })
         })
         .collect();
-    Lyrics { lines: align::finish(lines, &[], &[]), word_timed, ..Lyrics::default() }
+    Lyrics { lines: align::finish(fold_agents(lines), &[], &[]), word_timed, ..Lyrics::default() }
+}
+
+fn background(draft: DraftLine, fallback_start: f64, fallback_end: f64) -> Option<BackgroundVocal> {
+    let start = draft.start.or_else(|| draft.syllables.first().map(|word| word.start)).unwrap_or(fallback_start);
+    let end = draft.end.or_else(|| draft.syllables.last().map(|word| word.end)).unwrap_or(fallback_end).max(start);
+    let text = if draft.syllables.is_empty() { draft.plain.trim().to_owned() } else { syllable_text(&draft.syllables) };
+    if text.is_empty() {
+        return None;
+    }
+    let words = if draft.syllables.is_empty() { words::spread(&text, start, end) } else { group(&draft.syllables) };
+    let non_empty = |text: String| Some(text.trim().to_owned()).filter(|text| !text.is_empty());
+    Some(BackgroundVocal {
+        words,
+        start,
+        end,
+        text,
+        translation: non_empty(draft.translation),
+        romanization: non_empty(draft.romanization),
+        agent_id: draft.agent_id,
+    })
+}
+
+fn fold_agents(lines: Vec<Line>) -> Vec<Line> {
+    let mut main: Vec<Line> = Vec::new();
+    for line in lines {
+        let owner = main.iter_mut().rev().find(|candidate| {
+            candidate.agent_id.is_some()
+                && line.agent_id.is_some()
+                && candidate.agent_id != line.agent_id
+                && line.start < candidate.end
+                && line.end > candidate.start
+                && (line.block_index.is_none()
+                    || candidate.block_index.is_none()
+                    || line.block_index == candidate.block_index)
+        });
+        if let Some(owner) = owner {
+            owner.background_vocals.push(BackgroundVocal {
+                words: line.words,
+                start: line.start,
+                end: line.end,
+                text: line.text,
+                translation: line.translation,
+                romanization: line.romanization,
+                agent_id: line.agent_id,
+            });
+            owner.background_vocals.extend(line.background_vocals);
+        } else {
+            main.push(line);
+        }
+    }
+    main
 }
 
 fn syllable_text(syllables: &[Syllable]) -> String {

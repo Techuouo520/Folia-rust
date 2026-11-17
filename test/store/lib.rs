@@ -23,6 +23,44 @@ fn missing_file_gives_defaults() {
 }
 
 #[test]
+fn graphics_preferences_round_trip_and_system_motion_is_opt_in() {
+    use folia_store::{GpuPreference, GraphicsSettings, MotionSurface};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path());
+    let defaults = store.load::<GraphicsSettings>().unwrap();
+    assert_eq!(defaults.gpu_preference, GpuPreference::HighPerformance);
+    assert_eq!(defaults.lyric_render_quality, folia_core::LyricRenderQuality::default());
+    for surface in MotionSurface::ALL {
+        assert!(!defaults.motion.reduced(surface, true));
+    }
+    let mut settings = GraphicsSettings {
+        static_mode: true,
+        background_throttling: true,
+        gpu_preference: GpuPreference::LowPower,
+        ..defaults.clone()
+    };
+    settings.motion.set(MotionSurface::SettingsScroll, true);
+    settings.lyric_render_quality =
+        folia_core::LyricRenderQuality { scale: 0.75, antialias: folia_core::LyricAntialias::Off };
+    store.save(&settings).unwrap();
+    assert_eq!(store.load::<GraphicsSettings>().unwrap(), settings);
+    assert!(settings.motion.reduced(MotionSurface::SettingsScroll, false));
+    assert!(!settings.motion.reduced(MotionSurface::UiMicroMotion, true));
+    settings.motion.follow_system = true;
+    for surface in MotionSurface::ALL {
+        assert!(settings.motion.reduced(surface, true));
+    }
+    assert!(!settings.motion.reduced(MotionSurface::UiMicroMotion, false));
+    store.save(&defaults).unwrap();
+    assert_eq!(store.load::<GraphicsSettings>().unwrap(), defaults);
+    fs::write(dir.path().join("graphics.toml"), "schema_version = 1\nstatic_mode = true\n").unwrap();
+    let older = store.load::<GraphicsSettings>().unwrap();
+    assert!(older.static_mode);
+    assert_eq!(older.motion, defaults.motion);
+    assert_eq!(older.lyric_render_quality, defaults.lyric_render_quality);
+}
+
+#[test]
 fn save_then_load() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::at(dir.path().join("nested"));
@@ -122,7 +160,11 @@ fn an_older_appearance_file_reads_with_the_new_defaults() {
         "schema_version = 1\ntheme = \"light\"\nframe_rate = \"45\"\nlyrics_font_scale = 1.1\nvisualizer = \"monet\"\n",
     )
     .unwrap();
-    let appearance: AppearanceSettings = Store::at(dir.path()).load().unwrap();
+    let appearance = AppearanceSettings::load(&Store::at(dir.path())).unwrap();
+    assert!(!appearance.follow_system_theme);
+    assert!(!appearance.use_cover_color_bg);
+    assert_eq!(appearance.cover_background_opacity, 0.75);
+    assert!(fs::read_to_string(dir.path().join("appearance.toml")).unwrap().starts_with("schema_version = 2\n"));
     assert_eq!(appearance.lyrics_font_scale, 1.1);
     assert_eq!(appearance.visualizer, "monet");
     assert_eq!(appearance.stored_background_mode(), None);

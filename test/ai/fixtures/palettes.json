@@ -1,0 +1,342 @@
+[
+  {
+    "colors": [],
+    "seed": 0,
+    "theme": {
+      "light": {
+        "name": "蔷薇晨光 Built-in",
+        "description": "黄昏把云染成淡紫，我站在原地看了很久。",
+        "backgroundColor": "#f4f2f4",
+        "primaryColor": "#331a2c",
+        "accentColor": "#a1509e",
+        "secondaryColor": "#746b72",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "蔷薇星屑 Built-in",
+        "description": "我在深夜反复播放这首歌，像反复回到了过去。",
+        "backgroundColor": "#181216",
+        "primaryColor": "#f5f1f4",
+        "accentColor": "#e49ddf",
+        "secondaryColor": "#b8b2b7",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [],
+    "seed": 7,
+    "theme": {
+      "light": {
+        "name": "薄荷微光 Built-in",
+        "description": "阳光落在叶脉上，我数着它们发呆了一下午。",
+        "backgroundColor": "#f5f6f5",
+        "primaryColor": "#1e412a",
+        "accentColor": "#b25832",
+        "secondaryColor": "#4c7a37",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "薄荷子夜 Built-in",
+        "description": "深林的夜没有星星，只有风穿过树梢的声音。",
+        "backgroundColor": "#0d110e",
+        "primaryColor": "#e9efeb",
+        "accentColor": "#ffa987",
+        "secondaryColor": "#92cf8a",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [
+      "#ffffff"
+    ],
+    "seed": 0,
+    "theme": {
+      "light": {
+        "name": "灰烬破晓 Built-in",
+        "description": "灰白的天空下，我把耳机音量调到了最大。",
+        "backgroundColor": "#f6f5f5",
+        "primaryColor": "#382222",
+        "accentColor": "#9e635a",
+        "secondaryColor": "#824646",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "灰烬深潭 Built-in",
+        "description": "深夜的房间没有颜色，只有旋律在轻轻发亮。",
+        "backgroundColor": "#110e0e",
+        "primaryColor": "#f6efef",
+        "accentColor": "#e7aaa1",
+        "secondaryColor": "#a29a9a",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [
+      "#ffffff"
+    ],
+    "seed": 7,
+    "theme": {
+      "light": {
+        "name": "银灰初雪 Built-in",
+        "description": "灰白的天空下，我把耳机音量调到了最大。",
+        "backgroundColor": "#f3f1f1",
+        "primaryColor": "#421e1e",
+        "accentColor": "#4f8c6e",
+        "secondaryColor": "#5a763b",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "银灰深潭 Built-in",
+        "description": "我关掉了所有的灯，只留这首歌陪着我。",
+        "backgroundColor": "#1e1515",
+        "primaryColor": "#ede8e8",
+        "accentColor": "#8cc4a7",
+        "secondaryColor": "#a0a59d",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [
+      "#02030a"
+    ],
+    "seed": 0,
+    "theme": {
+      "light": {
+        "name": "深蓝微光 Built-in",
+        "description": "清晨的水汽还没散，整座城市都是浅蓝色的。",
+        "backgroundColor": "#e3e4ef",
+        "primaryColor": "#1a1d34",
+        "accentColor": "#548354",
+        "secondaryColor": "#306a6d",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "深蓝夜色 Built-in",
+        "description": "我在蓝色的黑暗里漂着，谁也找不到我。",
+        "backgroundColor": "#16192e",
+        "primaryColor": "#ebecf4",
+        "accentColor": "#a8cfa3",
+        "secondaryColor": "#b0b6b4",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [
+      "#02030a"
+    ],
+    "seed": 7,
+    "theme": {
+      "light": {
+        "name": "靛青初雪 Built-in",
+        "description": "海风吹过晾晒的白衬衫，那年夏天还没有结束。",
+        "backgroundColor": "#f1f1f3",
+        "primaryColor": "#1e2242",
+        "accentColor": "#a37046",
+        "secondaryColor": "#7d3e67",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "靛青深潭 Built-in",
+        "description": "窗外下着雨，我把整个夜晚都听成了潮声。",
+        "backgroundColor": "#111321",
+        "primaryColor": "#e8e9ed",
+        "accentColor": "#dcaa82",
+        "secondaryColor": "#ba87a4",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [
+      "#ffff00",
+      "#e14a85"
+    ],
+    "seed": 0,
+    "theme": {
+      "light": {
+        "name": "鎏金浮云 Built-in",
+        "description": "骑车经过那条巷子时，风里全是稻草的味道。",
+        "backgroundColor": "#f1f1ec",
+        "primaryColor": "#38381f",
+        "accentColor": "#1a78c6",
+        "secondaryColor": "#327641",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "鎏金夜色 Built-in",
+        "description": "夜里的灯火像散落的碎金，我数着它们入睡。",
+        "backgroundColor": "#212111",
+        "primaryColor": "#f0f0e5",
+        "accentColor": "#8ec6ff",
+        "secondaryColor": "#90c589",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [
+      "#ffff00",
+      "#e14a85"
+    ],
+    "seed": 7,
+    "theme": {
+      "light": {
+        "name": "芒草晨光 Built-in",
+        "description": "午后的光把一切都镀成蜜色，时间慢得像糖。",
+        "backgroundColor": "#eeeee9",
+        "primaryColor": "#3d3d1b",
+        "accentColor": "#c24e7b",
+        "secondaryColor": "#876451",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "芒草暗涌 Built-in",
+        "description": "路灯把影子拉得很长，我一个人慢慢走回去。",
+        "backgroundColor": "#222212",
+        "primaryColor": "#edede2",
+        "accentColor": "#f490b1",
+        "secondaryColor": "#cbb9b6",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [
+      "#046bea",
+      "#9832a8"
+    ],
+    "seed": 0,
+    "theme": {
+      "light": {
+        "name": "深蓝浮云 Built-in",
+        "description": "我沿着河堤走了很久，风一直安静地陪着我。",
+        "backgroundColor": "#eceef1",
+        "primaryColor": "#1f2a38",
+        "accentColor": "#bb4c41",
+        "secondaryColor": "#6d357d",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "深蓝夜色 Built-in",
+        "description": "我在蓝色的黑暗里漂着，谁也找不到我。",
+        "backgroundColor": "#111821",
+        "primaryColor": "#e5eaf0",
+        "accentColor": "#ffa699",
+        "secondaryColor": "#a389c5",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  },
+  {
+    "colors": [
+      "#046bea",
+      "#9832a8"
+    ],
+    "seed": 7,
+    "theme": {
+      "light": {
+        "name": "群青晨光 Built-in",
+        "description": "推开窗是一整片蓝，我忽然不想去任何地方了。",
+        "backgroundColor": "#e9ebee",
+        "primaryColor": "#1e2f44",
+        "accentColor": "#9d5dbd",
+        "secondaryColor": "#58558d",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      },
+      "dark": {
+        "name": "群青暗涌 Built-in",
+        "description": "深夜的海把所有声音都吞掉了，只剩下呼吸。",
+        "backgroundColor": "#121922",
+        "primaryColor": "#e2e7ed",
+        "accentColor": "#cf9bec",
+        "secondaryColor": "#bab6cb",
+        "fontStyle": "sans",
+        "animationIntensity": "normal",
+        "wordColors": [],
+        "lyricsIcons": [],
+        "provider": "Built-in"
+      }
+    }
+  }
+]

@@ -309,6 +309,13 @@ pub(crate) fn group_with_rows<'a, M: 'a>(
 }
 
 fn row_view<'a, M: 'a>(tokens: Tokens, entry: Row<'a, M>) -> Element<'a, M> {
+    if entry.label.is_empty() && entry.hint.is_none() {
+        let controls = column![entry.control].extend(entry.below);
+        return container(row![space().height(36), controls].align_y(Alignment::Center))
+            .padding([10, 16])
+            .width(Length::Fill)
+            .into();
+    }
     let mut label = column![crate::typeface::LABEL.text(entry.label).color(tokens.t1)];
     if let Some(hint) = entry.hint {
         label = label.push(space().height(2)).push(crate::typeface::HINT.text(hint).color(tokens.t2));
@@ -395,7 +402,17 @@ pub fn segmented<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     mark: Option<f32>,
     on_change: impl Fn(T) -> M,
 ) -> Element<'a, M> {
-    segmented_choices(tokens, options, value, mark, true, on_change)
+    segmented_choices(tokens, options, value, mark, true, &[], on_change)
+}
+
+pub fn segmented_available<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
+    tokens: Tokens,
+    options: Vec<(T, String)>,
+    value: T,
+    unavailable: &[T],
+    on_change: impl Fn(T) -> M,
+) -> Element<'a, M> {
+    segmented_choices(tokens, options, value, None, true, unavailable, on_change)
 }
 
 /// The same strip, dimmed and not clickable when `enabled` is false (a mode with its file switched off).
@@ -407,7 +424,7 @@ pub fn segmented_enabled<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     enabled: bool,
     on_change: impl Fn(T) -> M,
 ) -> Element<'a, M> {
-    segmented_choices(tokens, options, value, mark, enabled, on_change)
+    segmented_choices(tokens, options, value, mark, enabled, &[], on_change)
 }
 
 fn segmented_choices<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
@@ -416,10 +433,12 @@ fn segmented_choices<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     value: T,
     mark: Option<f32>,
     enabled: bool,
+    unavailable: &[T],
     on_change: impl Fn(T) -> M,
 ) -> Element<'a, M> {
     let widths: Vec<f32> = options.iter().map(|(_, label)| label_width(label, 13.0) + 24.0).collect();
     let total: f32 = widths.iter().sum();
+    let mark = mark.or_else(|| options.iter().position(|(option, _)| *option == value).map(|index| index as f32));
     let ground = fill_box(tokens.fill).width(total + 4.0).height(32).style(move |_| rounded(tokens.fill, 8.0));
     let mut layers = stack![ground];
     if let Some(mark) = mark {
@@ -438,6 +457,7 @@ fn segmented_choices<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     }
     let mut choices = row![].padding(2);
     for ((option, label), width) in options.into_iter().zip(widths) {
+        let enabled = enabled && !unavailable.contains(&option);
         let selected = option == value;
         let ink = if selected { tokens.t1 } else { tokens.t2 };
         let ink = if enabled { ink } else { Color { a: ink.a * 0.4, ..ink } };
@@ -592,6 +612,28 @@ pub fn rounded_button(color: Color, radius: f32) -> button::Style {
         background: Some(Background::Color(color)),
         border: Border { radius: radius.into(), ..Border::default() },
         ..button::Style::default()
+    }
+}
+
+pub fn input_style(tokens: Tokens) -> iced::widget::text_input::Style {
+    iced::widget::text_input::Style {
+        background: tokens.fill.into(),
+        border: Border { color: tokens.line2, width: 1.0, radius: 8.0.into() },
+        icon: tokens.t3,
+        placeholder: tokens.t3,
+        value: tokens.t1,
+        selection: tokens.fill2,
+    }
+}
+
+pub fn editor_style(tokens: Tokens) -> iced::widget::text_editor::Style {
+    let input = input_style(tokens);
+    iced::widget::text_editor::Style {
+        background: input.background,
+        border: input.border,
+        placeholder: input.placeholder,
+        value: input.value,
+        selection: input.selection,
     }
 }
 

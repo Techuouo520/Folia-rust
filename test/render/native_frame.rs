@@ -1,4 +1,5 @@
 // Exercises both non-client size messages on a real hidden window before and after host setup.
+use std::sync::Arc;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{HWND, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -22,7 +23,7 @@ const STATE_SYSTEM_INVISIBLE: u32 = 0x8000;
 
 #[derive(Default)]
 struct Fixture {
-    window: Option<Window>,
+    window: Option<Arc<Window>>,
 }
 
 impl ApplicationHandler for Fixture {
@@ -32,7 +33,7 @@ impl ApplicationHandler for Fixture {
         }
         let settings =
             folia_render::backend::window_settings(iced::Size::new(600.0, 400.0), iced::Size::new(350.0, 100.0));
-        self.window = Some(
+        self.window = Some(Arc::new(
             events
                 .create_window(
                     Window::default_attributes()
@@ -43,7 +44,7 @@ impl ApplicationHandler for Fixture {
                         .with_inner_size(winit::dpi::LogicalSize::new(600.0, 400.0)),
                 )
                 .unwrap(),
-        );
+        ));
     }
     fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
 }
@@ -105,8 +106,51 @@ fn frameless_client_rect_survives_native_theme_and_style_changes() {
     }
     folia_render::backend::configure_native_frame(window, false).unwrap();
     assert_eq!(backing_alpha(handle.hwnd.get() as HWND), 0xa5, "other presentation backends retain their pixels");
+    #[cfg(not(feature = "ci"))]
+    native_blur_roundtrip(window.clone());
     fixture.window.take();
     events.pump_app_events(Some(Duration::ZERO), &mut fixture);
+}
+
+#[cfg(not(feature = "ci"))]
+fn native_blur_roundtrip(window: Arc<Window>) {
+    use iced_wgpu::graphics::Compositor as _;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DwmGetWindowAttribute,
+    };
+    type HostCompositor = <folia_render::HostRenderer as iced_wgpu::graphics::compositor::Default>::Compositor;
+    let mut compositor = pollster::block_on(HostCompositor::with_backend(
+        iced_wgpu::graphics::Settings::default(),
+        window.clone(),
+        window.clone(),
+        iced_wgpu::graphics::Shell::headless(),
+        Some("wgpu"),
+    ))
+    .unwrap();
+    let _surface = compositor.create_surface(window.clone(), 600, 400).unwrap();
+    if !folia_render::backend::native_blur_supported() {
+        eprintln!("native backdrop attributes are unavailable on this Windows version");
+        return;
+    }
+    let RawWindowHandle::Win32(handle) = window.window_handle().unwrap().as_raw() else { panic!("expected Win32") };
+    for enabled in [true, false, true, false] {
+        folia_render::backend::set_native_blur(enabled).unwrap();
+        let mut kind = 0i32;
+        // SAFETY: DWM writes one i32 attribute for this owned hidden window.
+        let result = unsafe {
+            DwmGetWindowAttribute(
+                handle.hwnd.get() as HWND,
+                DWMWA_SYSTEMBACKDROP_TYPE as u32,
+                (&mut kind as *mut i32).cast(),
+                size_of::<i32>() as u32,
+            )
+        };
+        assert!(result >= 0);
+        assert_eq!(kind, if enabled { DWMSBT_TRANSIENTWINDOW } else { DWMSBT_NONE });
+        assert_native_frame_hidden(handle.hwnd.get() as HWND, true);
+        assert_eq!(client_rect(&window, false), [100, 100, 700, 500]);
+    }
+    assert!(!window.is_visible().unwrap());
 }
 
 fn assert_native_frame_hidden(hwnd: HWND, resizable: bool) {

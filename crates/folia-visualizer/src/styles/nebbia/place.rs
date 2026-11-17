@@ -18,28 +18,36 @@ const BUCKET: f64 = 0.02;
 pub type Segment = [f32; 6];
 /// One drop sprite: centre x, y, width, height (CSS pixels), refraction size, alpha.
 pub type Drop = [f32; 6];
+pub(super) type WetSegment = [f32; 5];
 
 #[derive(Debug, Default)]
 pub struct Paint {
     pub segments: Vec<Segment>,
     pub drops: Vec<Drop>,
+    pub sweeps: Vec<WetSegment>,
+    pub wet: Vec<WetSegment>,
+    pub ice: Vec<[f32; 6]>,
     path: Vec<(f32, f32)>,
 }
 
 impl Paint {
     /// Hands the frame's sprites to the pass and keeps `path` for the next frame.
-    pub fn take_sprites(&mut self) -> (Vec<Segment>, Vec<Drop>) {
-        (std::mem::take(&mut self.segments), std::mem::take(&mut self.drops))
+    pub fn take_sprites(&mut self) -> (Vec<Segment>, Vec<Drop>, Vec<[f32; 6]>) {
+        (std::mem::take(&mut self.segments), std::mem::take(&mut self.drops), std::mem::take(&mut self.ice))
     }
 }
 
 /// The frame's tuning, read once.
+#[derive(Clone, Copy, Debug)]
 pub struct Knobs {
     pub stroke_width: f32,
     pub write_speed: f32,
     pub refog: f64,
     pub rain_hit: f32,
     pub rain_big: f32,
+    pub ice: bool,
+    pub ice_scale: f32,
+    pub water: bool,
 }
 
 /// What the window shader needs besides the textures.
@@ -51,27 +59,31 @@ pub struct Drive {
 }
 
 /// Collects this frame's segments and drops into `paint` and returns the rest.
-pub fn paint(
+pub(super) fn paint_with_voice(
     scene: &Scene,
     time: f64,
-    width: f32,
-    height: f32,
+    size: [f32; 2],
     knobs: &Knobs,
-    energy: f32,
+    rain: (f32, Option<&super::beats::VocalRain>),
     paint: &mut Paint,
 ) -> Drive {
-    let Paint { segments, drops, path } = paint;
+    let [width, height] = size;
+    let (energy, voice) = rain;
+    let Paint { segments, drops, sweeps, wet, ice, path } = paint;
     segments.clear();
     drops.clear();
+    sweeps.clear();
+    wet.clear();
+    ice.clear();
     path.clear();
-    let mut pen = Pen { out: segments, path, m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], k: 1.0 };
-    let mut glass = Glass { pen: &mut pen, drops, knobs };
+    let mut pen = Pen { out: segments, sweeps, wet, path, m: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], k: 1.0 };
+    let mut glass = Glass { pen: &mut pen, drops, ice, knobs };
     for line in &scene.lines {
         if time >= line.t - 0.5 {
             glass.line(line, time);
         }
     }
-    glass.hits(scene, time, width, height, energy);
+    glass.hits(scene, time, width, height, energy, voice);
     let mut drive = Drive { lobes: [[0.0; 4]; 8], lobe_sd: [[0.0; 4]; 4], spot: spot(scene, time) };
     let mut n = 0;
     for (index, line) in scene.lines.iter().enumerate() {
@@ -84,12 +96,24 @@ pub fn paint(
 /// The original `NebbiaSegments`: canvas-style paths turned into segments in mask pixels.
 struct Pen<'a> {
     out: &'a mut Vec<Segment>,
+    sweeps: &'a mut Vec<WetSegment>,
+    wet: &'a mut Vec<WetSegment>,
     path: &'a mut Vec<(f32, f32)>,
     m: [f32; 6],
     k: f32,
 }
 
 impl Pen<'_> {
+    fn wet_stroke(&mut self, width: f32) {
+        for points in self.path.windows(2) {
+            let [(x0, y0), (x1, y1)] = [points[0], points[1]];
+            if x0.is_finite() && x1.is_finite() {
+                self.wet.push([x0, y0, x1, y1, width * self.k]);
+            }
+        }
+        self.path.clear();
+    }
+
     fn transform(&mut self, m: [f32; 6]) {
         self.m = m;
         self.k = m[0].hypot(m[1]);
@@ -131,12 +155,36 @@ struct Wet {
 struct Glass<'a, 'p> {
     pen: &'a mut Pen<'p>,
     drops: &'a mut Vec<Drop>,
+    ice: &'a mut Vec<[f32; 6]>,
     knobs: &'a Knobs,
 }
 
 const SCREEN: [f32; 6] = [MASK_SCALE, 0.0, 0.0, MASK_SCALE, 0.0, 0.0];
 
 impl Glass<'_, '_> {
+    fn put_iced(&mut self, at: [f32; 2], radius: f32, alpha: f32, age: f64, seed: f32, stretch: [f32; 2]) {
+        let [x, y] = at;
+        let [sx, sy] = stretch;
+        let k = self.knobs.ice_scale;
+        if !self.knobs.ice || age < 0.0 || radius < 2.5 * k {
+            self.put(x, y, radius, alpha, sx, sy);
+            return;
+        }
+        let hash = (f64::from(seed) * 12.9898 + 78.233).sin() * 43758.5453;
+        let hash = (hash - hash.floor()) as f32;
+        let scale = 1.0 + (radius / (2.5 * k)).max(1.0).ln();
+        let elapsed = age as f32 - 1.5 * scale * (0.7 + 0.6 * hash);
+        if elapsed <= 0.0 {
+            self.put(x, y, radius, alpha, sx, sy);
+            return;
+        }
+        let frozen = (elapsed / (3.0 * scale).max(1.0)).min(1.0);
+        let radius = radius * 0.75_f32.powf(frozen);
+        let sag = (0.5 * k * (radius / (2.5 * k) - 1.0).max(0.0)).min(2.0 * k) * frozen * frozen * (3.0 - 2.0 * frozen);
+        self.put(x, y + sag, radius, alpha, sx, sy);
+        self.ice.push([x, y + sag + radius * 0.42, radius * 1.05, frozen, hash * std::f32::consts::TAU, alpha]);
+    }
+
     /// A drop of visible radius `r`; the sprite quad is 8r (the original `put` without bumps).
     fn put(&mut self, x: f32, y: f32, r: f32, alpha: f32, sx: f32, sy: f32) {
         if r < 0.5 || alpha <= 0.01 {
@@ -186,6 +234,16 @@ impl Glass<'_, '_> {
                 if lp > 0.0 {
                     partial_streak(self.pen, &st.pts, lp);
                     self.pen.stroke(st.w, vw);
+                    if self.knobs.water && lp < 1.0 {
+                        let index = (lp * st.pts.len().saturating_sub(1) as f32).floor() as usize;
+                        if let Some((a, b)) = st
+                            .pts
+                            .get(index.saturating_sub(1))
+                            .zip(st.pts.get((index + 1).min(st.pts.len().saturating_sub(1))))
+                        {
+                            self.pen.sweeps.push([a.0, a.1, b.0, b.1, st.w]);
+                        }
+                    }
                 }
             }
         }
@@ -244,11 +302,29 @@ impl Glass<'_, '_> {
                 self.pen.stroke(width, clarity);
             }
             if !fade_in {
+                if self.knobs.water && p > 0.0 && p < 1.0 {
+                    let [x1, y1, _, _] = st.point_at(drawn);
+                    let [x0, y0, _, _] = st.point_at((drawn - 24.0 / c.s).max(0.0));
+                    let (x0, y0) = to_screen(c, x0, y0);
+                    let (x1, y1) = to_screen(c, x1, y1);
+                    self.pen.sweeps.push([x0, y0, x1, y1, width * c.s]);
+                }
+                if self.knobs.water && drawn > 0.0 && bead_v > 0.3 {
+                    partial_stroke(self.pen, st, drawn);
+                    self.pen.wet_stroke(width);
+                }
                 for b in c.beads[si].iter().take_while(|b| b.s <= drawn) {
                     let off = width / 2.0 + (b.r * 0.7 + b.j * 1.5) / c.s;
                     let (x, y) = to_screen(c, b.x + b.nx * off, b.y + b.ny * off);
                     let bv = bead_v * alive(x, y);
-                    self.put(x, y, b.r * (0.55 + 0.45 * bv), bv, 1.0 + b.j * 0.25, 1.0 + (1.0 - b.j) * 0.3);
+                    self.put_iced(
+                        [x, y],
+                        b.r * (0.55 + 0.45 * bv),
+                        bv,
+                        if p >= 1.0 { local - dur } else { -1.0 },
+                        b.x * 131.7 + b.y * 71.3 + si as f32,
+                        [1.0 + b.j * 0.25, 1.0 + (1.0 - b.j) * 0.3],
+                    );
                 }
                 if drawn > 0.0 && c.s >= END_BEAD_MIN {
                     let (h, j) = c.ends[si];
@@ -259,7 +335,14 @@ impl Glass<'_, '_> {
                     let r = c.s * (0.031 + 0.018 * h) * (0.5 + 0.5 * smooth(p) as f32);
                     let (x, y) = to_screen(c, ux + dx * r * 0.35 / c.s, uy + (dy * r * 0.35 + r * 0.15) / c.s);
                     let ev = bead_v * alive(x, y);
-                    self.put(x, y, r * (0.6 + 0.4 * ev), ev, 1.0, 1.12 + j * 0.12);
+                    self.put_iced(
+                        [x, y],
+                        r * (0.6 + 0.4 * ev),
+                        ev,
+                        if p >= 1.0 { local - dur } else { -1.0 },
+                        c.x * 3.1 + c.y * 5.7 + si as f32 * 11.0,
+                        [1.0, 1.12 + j * 0.12],
+                    );
                 }
                 if let Some(d) = &c.drips[si]
                     && p >= 1.0
@@ -301,18 +384,38 @@ impl Glass<'_, '_> {
         }
         let speed = 1.0 - (u * tau).cos();
         let stretch = if u < 1.0 { 0.35 * speed } else { 0.0 };
-        self.put(bx + wob(dist), by + dist + r * 0.3, r, bead_v, 1.0, 1.0 + stretch);
+        self.put_iced(
+            [bx + wob(dist), by + dist + r * 0.3],
+            r,
+            bead_v,
+            if u < 1.0 { -1.0 } else { age - d.dur },
+            d.seed + 0.5,
+            [1.0, 1.0 + stretch],
+        );
+        if self.knobs.water && u < 1.0 && dist > 1.0 && bead_v > 0.3 {
+            let from = (dist - r * 3.0).max(0.0);
+            self.pen.sweeps.push([bx + wob(from), by + from, bx + wob(dist), by + dist + r * 0.3, r * 2.4]);
+        }
     }
 
     /// Raindrops on the glass (the original `NebbiaHits.draw`): big ones on word starts, small ones at
     /// `(0.15 + 7 e²) × rainHit` per second, where `e` is the vocal-band energy.
-    fn hits(&mut self, scene: &Scene, time: f64, width: f32, height: f32, energy: f32) {
+    fn hits(
+        &mut self,
+        scene: &Scene,
+        time: f64,
+        width: f32,
+        height: f32,
+        energy: f32,
+        voice: Option<&super::beats::VocalRain>,
+    ) {
         let refog = self.knobs.refog;
         let life = 0.4 + refog * 0.3 + BEAD_HOLD * 0.5 + refog;
         self.pen.transform(SCREEN);
         let size = self.knobs.rain_big;
-        let from = scene.big.partition_point(|hit| hit.t < time - life);
-        for hit in scene.big[from..].iter().take_while(|hit| hit.t <= time) {
+        let large = voice.map_or(scene.big.as_slice(), |voice| voice.large.as_slice());
+        let from = large.partition_point(|hit| hit.t < time - life);
+        for hit in large[from..].iter().take_while(|hit| hit.t <= time) {
             if size > 0.0 && hit.r * size >= 1.0 {
                 self.hit(hit, true, size, time, refog);
             }
@@ -326,6 +429,7 @@ impl Glass<'_, '_> {
         let last = (time / BUCKET).floor() as i64;
         for b in (last - (life / BUCKET).ceil() as i64).max(0)..=last {
             let mut rnd = Rng((scene.seed ^ 0x5ad1).wrapping_add((b as u32).wrapping_mul(0x9e37_79b1)));
+            let rate = voice.map_or(rate, |voice| voice.rate(b, rate, self.knobs.rain_hit));
             if rnd.next() >= rate {
                 continue;
             }

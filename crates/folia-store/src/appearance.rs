@@ -4,7 +4,7 @@
 use folia_core::Theme;
 use serde::{Deserialize, Serialize};
 
-use crate::Domain;
+use crate::{Domain, Store, StoreError};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -233,6 +233,8 @@ pub struct SubtitleSettings {
     pub background: bool,
     pub upcoming_blur: bool,
     pub hide_translation: bool,
+    pub show_harmony: bool,
+    pub harmony_background: bool,
     /// `subtitleFontInheritsLyrics`.
     pub font_inherits_lyrics: bool,
     pub font: FontSettings,
@@ -249,6 +251,8 @@ impl Default for SubtitleSettings {
             background: true,
             upcoming_blur: true,
             hide_translation: false,
+            show_harmony: true,
+            harmony_background: true,
             font_inherits_lyrics: true,
             font: FontSettings::default(),
             font_scale: 1.0,
@@ -260,6 +264,9 @@ impl Default for SubtitleSettings {
 #[serde(default)]
 pub struct AppearanceSettings {
     pub theme: ThemeMode,
+    pub follow_system_theme: bool,
+    pub use_cover_color_bg: bool,
+    pub cover_background_opacity: f32,
     pub frame_rate: FrameRate,
     pub lyrics_font_scale: f32,
     /// Id of the lyric animation style, as the original app names it.
@@ -284,6 +291,9 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: ThemeMode::Dark,
+            follow_system_theme: false,
+            use_cover_color_bg: false,
+            cover_background_opacity: 0.75,
             frame_rate: FrameRate::Fps60,
             lyrics_font_scale: 1.0,
             visualizer: "classic".to_owned(),
@@ -299,6 +309,19 @@ impl Default for AppearanceSettings {
 }
 
 impl AppearanceSettings {
+    /// Preserves version 1 settings while adding native system-theme and common-cover preferences.
+    pub fn load(store: &Store) -> Result<Self, StoreError> {
+        match store.load::<Self>() {
+            Err(StoreError::SchemaVersion { found: 1, .. }) => {
+                let previous: PreviousAppearance = store.load()?;
+                store.save(&previous.settings)?;
+                tracing::info!("appearance settings migrated to schema 2");
+                Ok(previous.settings)
+            }
+            result => result,
+        }
+    }
+
     /// The stored background mode id, when one is saved at all.
     pub fn stored_background_mode(&self) -> Option<&str> {
         self.visualizer_background_mode.as_deref()
@@ -312,5 +335,16 @@ impl AppearanceSettings {
 
 impl Domain for AppearanceSettings {
     const FILE: &'static str = "appearance.toml";
+    const SCHEMA_VERSION: u32 = 2;
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct PreviousAppearance {
+    #[serde(flatten)]
+    settings: AppearanceSettings,
+}
+
+impl Domain for PreviousAppearance {
+    const FILE: &'static str = AppearanceSettings::FILE;
     const SCHEMA_VERSION: u32 = 1;
 }

@@ -5,6 +5,8 @@ mod convert;
 mod decoder;
 mod equalizer;
 mod output;
+mod room;
+mod room_mix;
 mod shared;
 mod source;
 
@@ -12,6 +14,8 @@ pub use analyser::{Analyser, TAP_CAPACITY, push_samples};
 pub use convert::map_channels;
 pub use equalizer::{Biquad, Coefficients, Control, Parameters, Processor};
 pub use folia_core::AudioFrame;
+pub use room::{RoomConvolver, RoomError};
+pub use room_mix::{Control as RoomControl, Mixer as RoomMixer};
 pub use shared::PlayerState;
 /// Packet decoding for playback and offline audio inspection, without opening an output device.
 pub use source::Source as DecodedSource;
@@ -70,6 +74,7 @@ pub struct Player {
     rate: u32,
     analyser: Analyser,
     equalizer: equalizer::Control,
+    room: room_mix::Control,
     input: std::sync::Mutex<InputControl>,
 }
 
@@ -86,7 +91,7 @@ impl Player {
         let shared = Arc::new(Shared::new());
         let (tap, analyser) = Analyser::pair();
         let (equalizer, equalizer_consumer) = equalizer::Control::pair();
-        let (output, producer) = output::open(shared.clone(), tap, equalizer_consumer)?;
+        let (output, producer, room) = output::open(shared.clone(), tap, equalizer_consumer)?;
         let (commands, receiver) = mpsc::channel();
         let decoder = Decoder::new(shared.clone(), producer, output.channels, output.rate, receiver);
         std::thread::Builder::new()
@@ -101,6 +106,7 @@ impl Player {
             rate: output.rate,
             analyser,
             equalizer,
+            room,
             input: Default::default(),
         })
     }
@@ -112,7 +118,43 @@ impl Player {
 
     /// The latest spectrum. `playing` selects analysis; otherwise the frame is the idle breath.
     pub fn audio_frame(&mut self, playing: bool, wall_ms: f64) -> AudioFrame {
+        self.room.collect();
         *self.analyser.frame(playing, wall_ms)
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.rate
+    }
+
+    pub fn set_room(&mut self, convolver: Option<Box<RoomConvolver>>) -> Result<(), RoomError> {
+        if convolver.as_ref().is_some_and(|convolver| convolver.sample_rate() != self.rate) {
+            return Err(RoomError::SampleRate);
+        }
+        let release = self.room.enabled() && convolver.is_none();
+        self.room.set(convolver)?;
+        if release && matches!(self.shared.state(), PlayerState::Idle | PlayerState::Ended | PlayerState::Failed) {
+            self.run_stream(true);
+        }
+        Ok(())
+    }
+
+    pub fn collect_room(&mut self) {
+        self.room.collect();
+    }
+
+    /// Collects a disabled room once its callback has finished fading, returning whether release is complete.
+    pub fn finish_room_change(&mut self) -> bool {
+        self.room.collect();
+        if self.room.enabled() {
+            return true;
+        }
+        if !self.room.released() {
+            return false;
+        }
+        if matches!(self.shared.state(), PlayerState::Idle | PlayerState::Ended | PlayerState::Failed) {
+            self.run_stream(false);
+        }
+        true
     }
 
     /// Starts playing `path` from the beginning.
@@ -166,7 +208,7 @@ impl Player {
         self.cancel_input();
         self.shared.set_state(PlayerState::Idle);
         self.send(Command::Stop);
-        self.run_stream(false);
+        self.run_stream(!self.room.enabled() && !self.room.released());
     }
 
     fn prepare_input(&self, audio: Option<folia_core::AudioInput>, position: f64) -> Option<decoder::Load> {
@@ -213,6 +255,16 @@ impl Player {
             _ => self.shared.position(self.rate).min(if duration > 0.0 { duration } else { f64::MAX }),
         };
         Status { state, position, duration }
+    }
+
+    /// The current track position at the output device, corrected for already queued audio.
+    pub fn heard_position(&self) -> f64 {
+        if self.shared.state() == PlayerState::Idle {
+            return 0.0;
+        }
+        let now = u64::try_from(self.stream.now().as_nanos()).unwrap_or(u64::MAX);
+        let duration = self.shared.duration.load();
+        self.shared.heard_position(now, self.rate).min(if duration > 0.0 { duration } else { f64::MAX })
     }
 
     fn send(&self, command: Command) {

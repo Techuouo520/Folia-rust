@@ -11,6 +11,7 @@ use crate::Domain;
 pub enum ThemeSource {
     #[default]
     Default,
+    Ai,
     Custom,
 }
 

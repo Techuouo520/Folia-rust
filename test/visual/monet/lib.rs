@@ -87,6 +87,9 @@ fn scene_audio<'a>(
     audio: &'a folia_core::AudioFrame,
 ) -> Scene<'a> {
     Scene {
+        smart_beat: Default::default(),
+        paused: false,
+        daylight: false,
         style: Style::Monet,
         lyrics,
         time,
@@ -100,6 +103,8 @@ fn scene_audio<'a>(
         artist: lyrics.artist.clone().unwrap_or_default(),
         album: "初学者".into(),
         portrait,
+        render_quality: folia_core::LyricRenderQuality::default(),
+        static_mode: false,
         typography: folia_visualizer::Typography::default(),
         preview: false,
         audio,
@@ -127,6 +132,55 @@ fn audio_power_changes_the_poster() {
     assert_ne!(quiet_png, loud_png, "power 200 did not change the monet frame");
     let _ = std::fs::remove_file(&quiet_path);
     let _ = std::fs::remove_file(&loud_path);
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU")]
+fn description_hover_and_mirror_change_the_offscreen_poster() {
+    folia_ui::install_fonts();
+    let lyrics = song();
+    let theme = Theme::DAYLIGHT;
+    let mut picture = Picture::with_size(1200, 800);
+    let mut state = SceneState::default();
+    let mut scene = scene(&lyrics, &theme, 6.0, None);
+    let manifest = monet::manifest();
+    scene.tuning.set_text(manifest, "customDescription", "A custom description");
+    let (hidden, _) = picture.render(&scene, &state);
+    let capsule = monet::layout(&scene, Size::new(1200.0, 800.0), 0.0).capsule.unwrap();
+    let at = capsule.center();
+    let stage = folia_visualizer::Stage::new(scene.clone());
+    let bounds = Rectangle::new(iced::Point::ORIGIN, Size::new(1200.0, 800.0));
+    let action = CanvasProgram::<MonetEvent>::update(
+        &stage,
+        &mut state,
+        &iced::widget::canvas::Event::Mouse(mouse::Event::CursorMoved { position: at }),
+        bounds,
+        mouse::Cursor::Available(at),
+    );
+    assert!(action.is_some());
+    let _ = CanvasProgram::<MonetEvent>::update(
+        &stage,
+        &mut state,
+        &iced::widget::canvas::Event::Window(iced::window::Event::RedrawRequested(
+            Instant::now() + std::time::Duration::from_millis(250),
+        )),
+        bounds,
+        mouse::Cursor::Available(at),
+    );
+    let (hovered, _) = picture.render(&scene, &state);
+    assert_ne!(hidden, hovered, "description did not appear on hover");
+    scene.tuning.set_choice(manifest, "descriptionVisibility", "always");
+    let (always, _) = picture.render(&scene, &SceneState::default());
+    assert_eq!(hovered, always, "hover must reach the same opacity as always");
+    scene.tuning.set_flag(manifest, "mirrorLayout", true);
+    let (mirrored, _) = picture.render(&scene, &SceneState::default());
+    assert_ne!(always, mirrored);
+    if let Some(directory) = std::env::var_os("FOLIA_APPEARANCE_CAPTURE") {
+        std::fs::create_dir_all(&directory).unwrap();
+        for (name, bytes) in [("monet-normal.png", always), ("monet-mirrored.png", mirrored)] {
+            std::fs::write(std::path::Path::new(&directory).join(name), bytes).unwrap();
+        }
+    }
 }
 
 struct Css {

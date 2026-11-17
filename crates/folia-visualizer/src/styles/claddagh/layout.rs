@@ -187,6 +187,7 @@ pub fn word_shift(line_index: usize, center: usize, own: f64, active: f64, activ
 }
 
 /// Inputs that are the same for every grapheme of one line.
+#[derive(Clone, Copy)]
 pub struct RingMoment {
     pub line_index: usize,
     pub center: usize,
@@ -201,6 +202,23 @@ pub struct RingMoment {
     pub length_scale: f32,
     pub upcoming: f32,
     pub font_px: f32,
+}
+
+pub(super) fn translation_glyph(item: &Placed, index: usize, moment: &RingMoment, font_px: f32) -> (Glyph, f32) {
+    let mut pose =
+        glyph(item, index, &RingMoment { focus_scale: moment.focus_scale * 0.35, chorus: false, font_px, ..*moment });
+    let curve = moment.line_index as f64 * std::f64::consts::PI + item.nominal - moment.ring - moment.word_offset;
+    let depth = ((curve.cos() + 1.0) * 0.5) as f32;
+    let depth_scale = 0.22 + 0.98 * depth.powf(1.5);
+    let gap = moment.font_px * 0.62 * (1.0 + moment.focus_scale * 0.5) + font_px * 0.8;
+    let tilt = -moment.tilt_deg.to_radians();
+    pose.x -= tilt.sin() * gap * depth_scale;
+    pose.y += tilt.cos() * gap * depth_scale;
+    pose.opacity *= 0.9;
+    let line_diff = (moment.ring - moment.line_index as f64 * std::f64::consts::PI).abs() / std::f64::consts::PI;
+    let focus = (1.0 - line_diff).max(0.0) * (1.0 - (curve.abs() / 0.48).min(1.0)).powf(1.8);
+    let blur = 8.0 * (1.0 - depth) * (1.0 - 0.5 * focus as f32);
+    (pose, blur)
 }
 
 /// One glyph on the ellipse. `power` is the smoothed bass band, 0–1.

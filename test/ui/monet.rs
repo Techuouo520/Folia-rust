@@ -11,6 +11,9 @@ const BOUNDS: Rectangle = Rectangle { x: 0.0, y: 0.0, width: 1920.0, height: 103
 
 fn scene<'a>(lyrics: &'a Lyrics, theme: &'a Theme) -> Scene<'a> {
     Scene {
+        smart_beat: Default::default(),
+        paused: false,
+        daylight: false,
         style: Style::Monet,
         lyrics,
         time: 5.0,
@@ -24,6 +27,9 @@ fn scene<'a>(lyrics: &'a Lyrics, theme: &'a Theme) -> Scene<'a> {
         artist: "folia".into(),
         album: String::new(),
         portrait: None,
+        smart_beat: folia_core::SmartBeat::default(),
+        render_quality: folia_core::LyricRenderQuality::default(),
+        static_mode: false,
         typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &folia_core::AudioFrame::SILENT,
@@ -100,6 +106,18 @@ fn hanger_drag_publishes_once_per_picture() {
     // Past the range the offset stops at -150.
     let mut third = SceneState::default();
     assert_eq!(gesture(&scene, &mut third, -400.0), vec![-150.0]);
+    let mut mirrored = scene.clone();
+    mirrored.tuning.set_flag(Style::Monet.manifest(), "mirrorLayout", true);
+    assert_eq!(gesture(&mirrored, &mut SceneState::default(), 40.0), vec![-40.0]);
+    let original = monet::layout(&scene, BOUNDS.size(), -40.0);
+    let reflected = monet::layout(&mirrored, BOUNDS.size(), -40.0);
+    for (left, right) in [(original.rail, reflected.rail), (original.portrait.unwrap(), reflected.portrait.unwrap())] {
+        assert!((left.x + right.x + left.width - BOUNDS.width).abs() < 0.01);
+    }
+    mirrored.tuning.set_choice(Style::Monet.manifest(), "portraitSource", "none");
+    let hidden = monet::layout(&mirrored, BOUNDS.size(), -40.0);
+    assert!(hidden.portrait.is_none() && hidden.hanger.is_none());
+    assert!(hidden.header_width > reflected.header_width);
 }
 
 #[test]

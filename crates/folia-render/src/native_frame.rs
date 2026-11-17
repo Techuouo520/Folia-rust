@@ -1,5 +1,8 @@
 // Keeps the DirectComposition host frameless during Windows non-client recalculation and repaint.
 use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, RECT, SetLastError, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::{
+    DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DwmGetWindowAttribute, DwmSetWindowAttribute,
+};
 use windows_sys::Win32::Graphics::Gdi::{BLACK_BRUSH, FillRect, GetDC, GetStockObject, HDC, ReleaseDC};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
@@ -12,6 +15,17 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 const SUBCLASS_ID: usize = 0x464f_4c49;
+
+pub fn system_reduced_motion() -> std::io::Result<bool> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
+    let mut enabled = 1i32;
+    // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL to the valid local output pointer.
+    let success = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&mut enabled as *mut i32).cast(), 0) };
+    if success == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(enabled == 0)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -29,9 +43,11 @@ pub enum Error {
     Refresh(#[source] std::io::Error),
     #[error("could not clear the native window backing bitmap")]
     Backing(#[source] std::io::Error),
+    #[error("native backdrop operation failed with HRESULT {0:#x}")]
+    Backdrop(i32),
 }
 
-pub fn install(window: &winit::window::Window, direct_composition: bool) -> Result<(), Error> {
+fn owned_window(window: &winit::window::Window) -> Result<HWND, Error> {
     let RawWindowHandle::Win32(handle) = window.window_handle()?.as_raw() else { return Err(Error::HandleKind) };
     let hwnd = handle.hwnd.get() as HWND;
     // SAFETY: The borrowed winit window keeps this HWND alive throughout setup.
@@ -39,6 +55,47 @@ pub fn install(window: &winit::window::Window, direct_composition: bool) -> Resu
     if owner != current {
         return Err(Error::Thread { owner, current });
     }
+    Ok(hwnd)
+}
+
+pub fn backdrop(window: &winit::window::Window) -> Result<i32, Error> {
+    let hwnd = owned_window(window)?;
+    let mut kind = 0i32;
+    // SAFETY: The borrowed window owns this HWND and DWM writes one i32 to the valid output pointer.
+    let result = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE as u32,
+            (&mut kind as *mut i32).cast(),
+            size_of::<i32>() as u32,
+        )
+    };
+    if result < 0 {
+        return Err(Error::Backdrop(result));
+    }
+    Ok(kind)
+}
+
+pub fn set_backdrop(window: &winit::window::Window, enabled: bool) -> Result<(), Error> {
+    let hwnd = owned_window(window)?;
+    let kind = if enabled { DWMSBT_TRANSIENTWINDOW } else { DWMSBT_NONE };
+    // SAFETY: This owner-thread call passes a live HWND and one initialized backdrop attribute value.
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE as u32,
+            (&kind as *const i32).cast(),
+            size_of::<i32>() as u32,
+        )
+    };
+    if result < 0 {
+        return Err(Error::Backdrop(result));
+    }
+    Ok(())
+}
+
+pub fn install(window: &winit::window::Window, direct_composition: bool) -> Result<(), Error> {
+    let hwnd = owned_window(window)?;
     // SAFETY: Setup runs on the owner thread; the callback is static and owns no reference data.
     if unsafe { SetWindowSubclass(hwnd, Some(frame_proc), SUBCLASS_ID, usize::from(direct_composition)) } == 0 {
         return Err(Error::Subclass);

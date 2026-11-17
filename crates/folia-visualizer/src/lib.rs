@@ -2,6 +2,7 @@
 
 mod anim;
 mod background;
+pub mod cinema;
 pub mod clock;
 mod common;
 mod cover_color;
@@ -19,7 +20,7 @@ mod tuning;
 
 pub use anim::{Ease, keyframes, spring, tween};
 pub use background::Background;
-pub use common::{Ground, background_view, drift, follow_spring};
+pub use common::{Ground, background_view, common_cover_image, drift, follow_spring};
 pub use cover_color::{
     PALETTE_CAP, PaletteStore, SAMPLE_SIDE, accept_art, cover_colors, cover_palette, resample_cover,
 };
@@ -38,7 +39,7 @@ pub use registry::Style;
 pub use sora::Tuning as SoraTuning;
 #[cfg(feature = "dev")]
 pub use sora::live_targets as sora_targets;
-pub use tuning::{Group, Item, Manifest, Values};
+pub use tuning::{Group, Item, Manifest, NumberFormat, Values};
 
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
@@ -59,6 +60,7 @@ pub struct Typography {
     pub family: Option<iced::font::Family>,
     pub weight: Option<iced::font::Weight>,
     pub subtitle: Option<Font>,
+    pub subtitle_weight: Option<iced::font::Weight>,
     pub subtitle_scale: f32,
     pub subtitle_mode: folia_core::SubtitleContentMode,
     pub hide_subtitle: bool,
@@ -69,6 +71,7 @@ impl Default for Typography {
             family: None,
             weight: None,
             subtitle: None,
+            subtitle_weight: None,
             subtitle_scale: 1.0,
             subtitle_mode: folia_core::SubtitleContentMode::Translation,
             hide_subtitle: false,
@@ -80,6 +83,12 @@ impl Typography {
         Font { family: self.family.unwrap_or(default.family), weight: self.weight.unwrap_or(default.weight), ..default }
     }
 
+    pub fn subtitle_font(self, default: Font) -> Font {
+        let font = self.subtitle.unwrap_or_else(|| self.font(default));
+        let explicit = self.subtitle_weight.or_else(|| self.subtitle.is_none().then_some(self.weight).flatten());
+        Font { weight: explicit.unwrap_or(default.weight), ..font }
+    }
+
     pub fn fingerprint(self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -87,6 +96,7 @@ impl Typography {
             self.family,
             self.weight,
             self.subtitle,
+            self.subtitle_weight,
             self.subtitle_scale.to_bits(),
             self.subtitle_mode as u8,
             self.hide_subtitle,
@@ -99,12 +109,19 @@ impl Typography {
 /// Everything a style needs to draw one frame.
 #[derive(Clone)]
 pub struct Scene<'a> {
+    /// Global quality after resolving this style's optional overrides.
+    pub render_quality: folia_core::LyricRenderQuality,
+    pub static_mode: bool,
     pub typography: Typography,
     pub style: Style,
     pub lyrics: &'a Lyrics,
     /// Playback position in seconds.
     pub time: f64,
     pub theme: &'a Theme,
+    pub daylight: bool,
+    pub smart_beat: folia_core::SmartBeat<'a>,
+    /// Stops local environment physics while lyric seeks can still redraw the current text.
+    pub paused: bool,
     pub font_scale: f32,
     /// Song id. Lumiere casts light positions from this string, matching the original program seed.
     pub seed: &'a str,
@@ -127,6 +144,11 @@ pub struct Scene<'a> {
 }
 
 impl Scene<'_> {
+    pub fn shows_shared_background(&self) -> bool {
+        self.style.shows_shared_background()
+            || self.style == Style::Nebbia && self.tuning.choice(self.style.manifest(), "behind") == "backdrop"
+    }
+
     pub fn layout_key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -191,7 +213,7 @@ impl<Message: From<styles::monet::Event>> canvas::Program<Message> for Stage<'_,
                 Some(geometry) => std::slice::from_ref(geometry),
                 None => &geometry,
             };
-            if !self.scene.backdrop && self.scene.style.shows_shared_background() && !under.is_empty() {
+            if !self.scene.backdrop && self.scene.shows_shared_background() && !under.is_empty() {
                 folia_render::capture_layers(&[&under, top]);
             } else {
                 folia_render::capture_canvas(top);
@@ -383,8 +405,25 @@ impl<T> LayoutCache<T> {
 /// Nebbia puts its shader under a clear lyric canvas; lumiere draws its lyrics in its own pass, then the front bokeh,
 /// then a clear canvas with the corner frame.
 pub fn lyric_view<'a, Message: From<styles::monet::Event> + 'a>(scene: Scene<'a>) -> Element<'a, Message> {
+    let quality = scene.render_quality;
+    let publish_blur = !scene.preview;
+    let capture = scene.publishes_blur();
+    folia_render::quality::layer(lyric_content(scene, capture), quality, publish_blur)
+}
+
+/// The live lyric layer for a scene-owned render texture; quality is applied by the owning surface.
+pub fn lyric_surface<'a, Message: From<styles::monet::Event> + 'a>(scene: Scene<'a>) -> Element<'a, Message> {
+    lyric_content(scene, false)
+}
+
+fn lyric_content<'a, Message: From<styles::monet::Event> + 'a>(
+    scene: Scene<'a>,
+    capture: bool,
+) -> Element<'a, Message> {
+    if scene.style == Style::Claddagh {
+        return styles::claddagh::view(scene, capture);
+    }
     if !matches!(scene.style, Style::Nebbia | Style::Lumiere) {
-        let capture = !scene.preview;
         let canvas = iced::widget::canvas(Stage { scene: scene.clone(), capture, _message: PhantomData })
             .width(Length::Fill)
             .height(Length::Fill);
@@ -394,22 +433,47 @@ pub fn lyric_view<'a, Message: From<styles::monet::Event> + 'a>(scene: Scene<'a>
         let picture = shader(folia_render::StyleScene::<Message>::new()).width(Length::Fill).height(Length::Fill);
         return stack![picture, canvas].into();
     }
+    let capture_backdrop =
+        scene.style == Style::Nebbia && capture && (!scene.backdrop || scene.shows_shared_background());
     let clear = iced::widget::canvas(Stage {
         scene: Scene { backdrop: false, ..scene.clone() },
-        capture: false,
+        capture: capture_backdrop,
         _message: PhantomData,
     })
     .width(Length::Fill)
     .height(Length::Fill);
     if scene.style == Style::Nebbia {
-        return stack![shader(styles::nebbia::view(scene)).width(Length::Fill).height(Length::Fill), clear].into();
+        if capture_backdrop {
+            return stack![
+                shader(folia_render::StyleScene::<Message>::new()).width(Length::Fill).height(Length::Fill),
+                shader(styles::nebbia::view(scene).capture_blur(capture)).width(Length::Fill).height(Length::Fill),
+                clear
+            ]
+            .into();
+        }
+        return stack![
+            shader(styles::nebbia::view(scene).capture_blur(capture)).width(Length::Fill).height(Length::Fill),
+            clear
+        ]
+        .into();
     }
     let veil_color = styles::lumiere::veil_color(scene.theme, styles::lumiere::Tuning::read(&scene.tuning).dark_field);
     let veil =
         iced::widget::canvas(styles::lumiere::Veil { color: veil_color }).width(Length::Fill).height(Length::Fill);
     let front = shader(styles::lumiere::front_view(scene.clone())).width(Length::Fill).height(Length::Fill);
-    stack![veil, shader(styles::lumiere::field_view(scene)).width(Length::Fill).height(Length::Fill), front, clear]
-        .into()
+    stack![
+        veil,
+        shader(styles::lumiere::field_view(scene).capture_blur(capture)).width(Length::Fill).height(Length::Fill),
+        front,
+        clear
+    ]
+    .into()
+}
+
+impl Scene<'_> {
+    pub(crate) fn publishes_blur(&self) -> bool {
+        !self.preview && self.render_quality.normalized() == folia_core::LyricRenderQuality::default()
+    }
 }
 
 pub fn color(rgb: Rgb, alpha: f32) -> Color {

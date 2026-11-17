@@ -1,6 +1,8 @@
 /target/
 /test/target/
 /test/ui/fixtures/fonts/surfaces/
+/assets/models/*.bin
+/assets/analysis/*.dll
 *.local.toml
 .env
 .env.*
@@ -8,6 +10,9 @@
 .vscode/
 .idea/
 .DS_Store
+/assets/acoustics/phonon.dll
+/assets/acoustics/libphonon.so
+/assets/acoustics/libphonon.dylib
 /docs/*
 !/docs/README.en.md
 !/docs/CONTRIBUTING.en.md

@@ -8,6 +8,8 @@ publish.workspace = true
 path = "lib.rs"
 
 [dependencies]
+folia-ai.workspace = true
+tokio = { version = "1.54.1", features = ["rt", "time", "net"] }
 tempfile.workspace = true
 folia-omni = { path = "../../crates/folia-omni" }
 folia-core.workspace = true
@@ -18,8 +20,9 @@ folia-i18n.workspace = true
 folia-lyrics.workspace = true
 folia-ui.workspace = true
 folia-render.workspace = true
-folia-visualizer.workspace = true
+folia-visualizer = { workspace = true, features = ["dev"] }
 iced.workspace = true
+iced_wgpu.workspace = true
 image.workspace = true
 pollster.workspace = true
 wgpu.workspace = true

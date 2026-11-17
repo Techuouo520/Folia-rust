@@ -12,11 +12,12 @@ pub struct ClassicTuning {
     pub word_spacing: f64,
     /// Original `useLegacyLayout`: raw words and a fixed gap, instead of the semantic spacing.
     pub legacy: bool,
+    pub avoid_overlap: bool,
 }
 
 impl Default for ClassicTuning {
     fn default() -> Self {
-        Self { word_rotation: true, breathing: 1.0, word_spacing: 0.7, legacy: false }
+        Self { word_rotation: true, breathing: 1.0, word_spacing: 0.7, legacy: false, avoid_overlap: false }
     }
 }
 
@@ -75,7 +76,7 @@ pub fn word_configs(
         |word_seed: f64| if chaotic { 0.8 + random(word_seed, 4.0) * 0.6 } else { 1.1 + random(word_seed, 4.0) * 0.2 };
     let x_of = |word_seed: f64| (random(word_seed, 1.0) - 0.5) * spread * 2.0;
 
-    (0..widths.len())
+    let mut configs: Vec<_> = (0..widths.len())
         .map(|i| {
             let word_seed = seed + i as f64;
             if interlude {
@@ -126,7 +127,18 @@ pub fn word_configs(
                 margin_right: wanted.max(minimum),
             }
         })
-        .collect()
+        .collect();
+    if tuning.avoid_overlap && !tuning.legacy && !interlude {
+        for index in 0..configs.len().saturating_sub(1) {
+            let gap = crate::styles::glow::word_pair_gap(
+                [f64::from(widths[index]), f64::from(widths[index + 1])],
+                [&configs[index], &configs[index + 1]],
+                font_px,
+            );
+            configs[index].margin_right = configs[index].margin_right.max(gap + 0.05 * font_px);
+        }
+    }
+    configs
 }
 
 /// Wraps word boxes into rows no wider than `max_width` and centres the block on `center_y`.

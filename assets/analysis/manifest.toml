@@ -1,0 +1,17 @@
+# Microsoft DirectX Shader Compiler, used only by the native analysis device on Windows.
+version = "1.9.2609"
+archive_url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip"
+archive_bytes = 32287592
+archive_sha256 = "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1"
+source = "https://github.com/microsoft/DirectXShaderCompiler/tree/v1.9.2609"
+release_notes = "https://github.com/microsoft/DirectXShaderCompiler/blob/v1.9.2609/docs/ReleaseNotes.md"
+
+[windows.x86_64]
+member = "bin/x64/dxcompiler.dll"
+bytes = 22274872
+sha256 = "0689e2fee0a1c9df8662a59680469f24e2a3ad7ce6bbbcc9284f7a83172bfc59"
+
+[windows.aarch64]
+member = "bin/arm64/dxcompiler.dll"
+bytes = 23748408
+sha256 = "ec234595c270a908da183eb04f1f5a1a667d3ce81e69f5bc55370503dab48373"

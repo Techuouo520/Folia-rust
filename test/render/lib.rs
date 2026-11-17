@@ -15,6 +15,7 @@ fn grain_frames_wrap_before_they_grow() {
 
 mod backend;
 mod blur;
+mod cinema;
 mod glyphs;
 #[cfg(windows)]
 mod native_frame;

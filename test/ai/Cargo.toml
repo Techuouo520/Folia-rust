@@ -1,0 +1,16 @@
+[package]
+name = "test-ai"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+folia-ai.workspace = true
+folia-core.workspace = true
+folia-store.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true
+tokio = { version = "1.54.1", features = ["rt", "time", "net"] }

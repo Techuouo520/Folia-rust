@@ -155,13 +155,14 @@ impl SearchPage {
 
     pub fn animating(&self, now: Instant) -> bool {
         self.list.animating(now)
-            || (self.fade_from - self.fade_goal).abs() > 0.001
+            || !crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion)
+                && (self.fade_from - self.fade_goal).abs() > 0.001
                 && now.saturating_duration_since(self.fade_at).as_secs_f64() * 1000.0 < FADE_MS
     }
 
     /// The searching mark spins, so the page keeps a frame subscription.
     pub fn spinning(&self) -> bool {
-        self.busy && self.results.is_empty()
+        self.busy && self.results.is_empty() && !crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion)
     }
 
     pub fn gone(&self, now: Instant) -> bool {
@@ -169,6 +170,9 @@ impl SearchPage {
     }
 
     pub fn fade(&self, now: Instant) -> f32 {
+        if crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion) {
+            return self.fade_goal;
+        }
         let t = (now.saturating_duration_since(self.fade_at).as_secs_f64() * 1000.0 / FADE_MS).clamp(0.0, 1.0);
         self.fade_from + (self.fade_goal - self.fade_from) * FADE_EASE.at(t) as f32
     }
@@ -574,7 +578,11 @@ fn center<'a>(body: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
 }
 
 fn spinner<'a>(ink: Color, now: Instant, from: Instant) -> Element<'a, Message> {
-    let turn = now.saturating_duration_since(from).as_secs_f32() * std::f32::consts::TAU;
+    let turn = if crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion) {
+        0.0
+    } else {
+        now.saturating_duration_since(from).as_secs_f32() * std::f32::consts::TAU
+    };
     svg(svg::Handle::from_memory(Icon::LoaderCircle.svg_bytes()))
         .width(Length::Fixed(36.0))
         .height(Length::Fixed(36.0))

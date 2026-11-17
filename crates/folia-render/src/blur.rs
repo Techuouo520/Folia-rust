@@ -78,8 +78,8 @@ pub struct Pyramid {
     outputs: Vec<Image>,
     /// Bumps when `outputs` is rebuilt, so a plate can keep its sample bind group.
     output_epoch: u64,
-    /// Sample group for the view `copy_into_source` last read, keyed by its address.
-    copy: Option<(usize, wgpu::BindGroup)>,
+    /// Sample group for the texture view `copy_into_source` last read.
+    copy: Option<(wgpu::TextureView, wgpu::BindGroup)>,
 }
 
 impl Pyramid {
@@ -160,6 +160,21 @@ impl Pyramid {
         self.output_epoch = self.output_epoch.wrapping_add(1);
     }
 
+    pub(crate) fn release_source(&mut self, view: &wgpu::TextureView) {
+        if self.copy.as_ref().is_some_and(|(source, _)| source == view) {
+            self.copy = None;
+        }
+    }
+
+    pub(crate) fn clear_copy(&mut self) {
+        self.copy = None;
+    }
+
+    #[cfg(feature = "dev")]
+    pub(crate) fn copy_held(&self) -> bool {
+        self.copy.is_some()
+    }
+
     /// Rebuilds the chain when the window or the deepest step changes. Pipelines stay.
     pub fn ensure(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, levels: u32) -> bool {
         let size = source_size(width, height);
@@ -231,12 +246,11 @@ impl Pyramid {
         from: &wgpu::TextureView,
     ) {
         let Some(source) = self.source.as_ref().map(|image| image.view.clone()) else { return };
-        let key = from as *const wgpu::TextureView as usize;
         let bind = match &self.copy {
-            Some((held, bind)) if *held == key => bind.clone(),
+            Some((held, bind)) if held == from => bind.clone(),
             _ => {
                 let bind = copy_bind(device, &self.copy_layout, &self.sampler, from);
-                self.copy = Some((key, bind.clone()));
+                self.copy = Some((from.clone(), bind.clone()));
                 bind
             }
         };

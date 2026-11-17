@@ -1,0 +1,9 @@
+Steam Audio 4.8.1
+https://github.com/ValveSoftware/steam-audio/releases/tag/v4.8.1
+SDK archive https://github.com/ValveSoftware/steam-audio/releases/download/v4.8.1/steamaudio_4.8.1.zip
+SHA256 4a0aa5ec1176f38f0b0993a37c2259d9e86f27e22d5e24f83ec4c3cb9a1d5449
+
+phonon.dll, libphonon.so and libphonon.dylib are release packaging inputs, excluded from Git.
+The SDK provides Windows x64, Linux x64 and universal macOS desktop libraries.
+LICENSE.md contains Valve's Apache-2.0 license. THIRDPARTY.md comes from the same SDK archive.
+The Rust ABI in crates/folia-acoustics/src/ffi.rs was generated with bindgen 0.73.2 from phonon.h in this archive.

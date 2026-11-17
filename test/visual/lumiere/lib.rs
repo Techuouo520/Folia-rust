@@ -189,6 +189,9 @@ fn stage<'a>(
 ) -> <lumiere::Field<'a, ()> as Program<()>>::Primitive {
     let theme = Theme::MIDNIGHT;
     let scene = folia_visualizer::Scene {
+        smart_beat: Default::default(),
+        paused: false,
+        daylight: false,
         style: Style::Lumiere,
         lyrics,
         time,
@@ -202,6 +205,8 @@ fn stage<'a>(
         artist: String::new(),
         album: String::new(),
         portrait: None,
+        render_quality: folia_core::LyricRenderQuality::default(),
+        static_mode: false,
         typography: folia_visualizer::Typography::default(),
         preview: false,
         audio: &folia_core::AudioFrame::SILENT,
@@ -336,6 +341,9 @@ impl Picture {
     ) -> (Vec<u8>, &'static str, usize, (u32, usize)) {
         let bounds = Rectangle { x: 0.0, y: 0.0, width: WIDTH as f32, height: HEIGHT as f32 };
         let scene = || folia_visualizer::Scene {
+            smart_beat: Default::default(),
+            paused: false,
+            daylight: false,
             style: Style::Lumiere,
             lyrics,
             time,
@@ -349,6 +357,8 @@ impl Picture {
             artist: String::new(),
             album: String::new(),
             portrait: None,
+            render_quality: folia_core::LyricRenderQuality::default(),
+            static_mode: false,
             typography: folia_visualizer::Typography::default(),
             preview: false,
             audio: &folia_core::AudioFrame::SILENT,

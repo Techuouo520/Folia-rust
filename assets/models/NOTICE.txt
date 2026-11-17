@@ -1,0 +1,13 @@
+Native music analysis model sources
+
+Beat This! final0 is provided by CPJKU under the MIT license.
+https://github.com/CPJKU/beat_this
+
+HTDemucs is provided by Meta Research under the MIT license. This packed export derives from the htdemucs.onnx model distributed by itamiArika.
+https://github.com/facebookresearch/demucs
+https://huggingface.co/itamiArika/htdemucs-int8-memory
+
+The packed WGSL tensor files and graph source follow chthollyphile/Folia commit 8006b40f6. The ported graph and shaders are covered by Folia-rust's AGPL-3.0-only license. Model licenses remain MIT.
+https://github.com/chthollyphile/folia-major
+
+manifest.toml is the single source of model file lengths and SHA256 checksums. Release archives include both verified model files alongside these notices. Model binaries are excluded from Git.

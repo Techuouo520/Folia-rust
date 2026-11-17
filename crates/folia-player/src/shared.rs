@@ -56,6 +56,10 @@ pub struct Shared {
     /// Callbacks that ran dry mid-track since the last report, and the frames they filled with silence.
     underruns: AtomicU64,
     silent_frames: AtomicU64,
+    output_sequence: AtomicU64,
+    output_end_ns: AtomicU64,
+    output_position: AtomicF64,
+    output_generation: AtomicU64,
 }
 
 impl Shared {
@@ -73,6 +77,10 @@ impl Shared {
             starved: AtomicBool::new(false),
             underruns: AtomicU64::new(0),
             silent_frames: AtomicU64::new(0),
+            output_sequence: AtomicU64::new(0),
+            output_end_ns: AtomicU64::new(0),
+            output_position: AtomicF64::default(),
+            output_generation: AtomicU64::new(0),
         }
     }
 
@@ -123,6 +131,45 @@ impl Shared {
 
     pub fn add_played(&self, frames: u64) {
         self.played_frames.fetch_add(frames, Ordering::AcqRel);
+    }
+
+    pub fn record_output(&self, playback_ns: u64, frames: u64, rate: u32) {
+        if frames == 0 {
+            return;
+        }
+        let end = playback_ns.saturating_add(frames.saturating_mul(1_000_000_000) / u64::from(rate));
+        self.output_sequence.fetch_add(1, Ordering::AcqRel);
+        self.output_end_ns.store(end, Ordering::Relaxed);
+        self.output_position
+            .store(self.base.load() + self.played_frames.load(Ordering::Relaxed) as f64 / f64::from(rate));
+        self.output_generation.store(self.flush_done.load(Ordering::Relaxed), Ordering::Relaxed);
+        self.output_sequence.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn heard_position(&self, now_ns: u64, rate: u32) -> f64 {
+        let requested = self.flush_requested.load(Ordering::Acquire);
+        if requested != self.flush_done.load(Ordering::Acquire) || !self.started() {
+            return self.pending_base.load();
+        }
+        loop {
+            let sequence = self.output_sequence.load(Ordering::Acquire);
+            if !sequence.is_multiple_of(2) {
+                std::hint::spin_loop();
+                continue;
+            }
+            let end = self.output_end_ns.load(Ordering::Relaxed);
+            let position = self.output_position.load();
+            let generation = self.output_generation.load(Ordering::Relaxed);
+            std::sync::atomic::fence(Ordering::Acquire);
+            if self.output_sequence.load(Ordering::Relaxed) != sequence {
+                continue;
+            }
+            if generation != requested || self.flush_requested.load(Ordering::Acquire) != requested {
+                return self.pending_base.load();
+            }
+            let queued = end.saturating_sub(now_ns) as f64 / 1_000_000_000.0;
+            return (position - queued).max(self.base.load()).min(self.position(rate));
+        }
     }
 
     /// True once the callback has played anything since the last flush, so a seek's refill is not an underrun.

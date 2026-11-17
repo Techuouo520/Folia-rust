@@ -1,0 +1,28 @@
+# Native GPU music analysis and verified model execution.
+[package]
+name = "folia-analysis"
+description = "Native GPU music analysis for beat-driven visualizers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+folia-core.workspace = true
+folia-render.workspace = true
+folia-player.workspace = true
+bytemuck.workspace = true
+realfft.workspace = true
+ring.workspace = true
+rubato.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+wgpu.workspace = true
+tokio.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

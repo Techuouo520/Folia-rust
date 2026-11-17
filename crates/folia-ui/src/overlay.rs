@@ -140,6 +140,9 @@ impl ChromeSpring {
     }
 
     pub fn value(self, now_ms: u64) -> f32 {
+        if crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion) {
+            return self.to;
+        }
         let elapsed = now_ms.saturating_sub(self.started_ms) as f64 / 1000.0;
         if elapsed * 1000.0 >= CAPSULE_SETTLE_MS as f64 {
             return self.to;
@@ -149,7 +152,9 @@ impl ChromeSpring {
     }
 
     pub fn running(self, now_ms: u64) -> bool {
-        (self.from - self.to).abs() > 0.001 && now_ms.saturating_sub(self.started_ms) < CAPSULE_SETTLE_MS
+        !crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion)
+            && (self.from - self.to).abs() > 0.001
+            && now_ms.saturating_sub(self.started_ms) < CAPSULE_SETTLE_MS
     }
 }
 
