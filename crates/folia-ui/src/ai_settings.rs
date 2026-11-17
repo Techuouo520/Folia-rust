@@ -121,11 +121,20 @@ pub fn connection_group<'a>(state: &'a SongThemes, i18n: &'a I18n, tokens: Token
     });
     let input = |value, placeholder, message: fn(String) -> Message, secure| {
         let field = text_input(placeholder, value)
-            .style(move |_, _| kit::input_style(tokens))
+            .style(move |_, status| {
+                let mut style = kit::input_style(tokens);
+                style.border.color = if matches!(status, iced::widget::text_input::Status::Focused { .. }) {
+                    tokens.accent
+                } else {
+                    iced::Color::TRANSPARENT
+                };
+                style
+            })
             .secure(secure)
             .size(13)
-            .padding([8, 10])
-            .width(Length::Fixed(280.0));
+            .line_height(iced::Pixels(18.0))
+            .padding([7, 10])
+            .width(Length::Fixed(260.0));
         let field = if state.connection_busy { field } else { field.on_input(move |value| change(message(value))) };
         field.into()
     };
@@ -202,7 +211,7 @@ pub fn connection_group<'a>(state: &'a SongThemes, i18n: &'a I18n, tokens: Token
         };
         rows.push(option(i18n, key, None, space().into()));
     }
-    Group { title: i18n.t("options.aiServiceProviders").to_owned(), bare: true, rows, foot: None }
+    Group { title: i18n.t("options.aiServiceProviders").to_owned(), bare: false, rows, foot: None }
 }
 
 fn loading(i18n: &I18n) -> Group<'_, crate::Message> {

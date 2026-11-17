@@ -460,11 +460,9 @@ fn lyric_content<'a, Message: From<styles::monet::Event> + 'a>(
     let veil_color = styles::lumiere::veil_color(scene.theme, styles::lumiere::Tuning::read(&scene.tuning).dark_field);
     let veil =
         iced::widget::canvas(styles::lumiere::Veil { color: veil_color }).width(Length::Fill).height(Length::Fill);
-    let front = shader(styles::lumiere::front_view(scene.clone())).width(Length::Fill).height(Length::Fill);
     stack![
         veil,
         shader(styles::lumiere::field_view(scene).capture_blur(capture)).width(Length::Fill).height(Length::Fill),
-        front,
         clear
     ]
     .into()

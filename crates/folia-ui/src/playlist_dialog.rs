@@ -8,7 +8,7 @@ use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Size,
 use lucide_static_svg::Icon;
 
 use crate::icons::icon;
-use crate::settings_kit::{self, Tokens};
+use crate::settings_kit::{self, Tokens, sheet_button};
 
 /// A playlist the playing song can go into.
 #[derive(Debug, Clone, PartialEq)]
@@ -350,27 +350,6 @@ fn row_button<'a>(tokens: Tokens, choice: &'a PlaylistChoice, index: usize) -> E
         button::Style { background: hot.then_some(Background::Color(tokens.fill)), ..button::Style::default() }
     })
     .into()
-}
-
-fn sheet_button<'a>(tokens: Tokens, label: &'a str, primary: bool, on_press: Option<Message>) -> Element<'a, Message> {
-    let enabled = on_press.is_some();
-    let text_color = if primary { tokens.on_accent } else { tokens.t1 };
-    let ink = if enabled { text_color } else { Color { a: text_color.a * 0.4, ..text_color } };
-    button(container(text(label).size(crate::typeface::size::CONTROL).color(ink)).center_y(Length::Fixed(32.0)))
-        .height(Length::Fixed(32.0))
-        .padding(Padding { top: 0.0, right: 12.0, bottom: 0.0, left: 12.0 })
-        .on_press_maybe(on_press)
-        .style(move |_theme: &IcedTheme, status| {
-            let hot = enabled && matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let base = if primary { tokens.accent } else { tokens.fill };
-            let fill = if enabled { base } else { Color { a: base.a * 0.4, ..base } };
-            button::Style {
-                background: Some(Background::Color(if hot { Color { a: fill.a * 0.9, ..fill } } else { fill })),
-                border: Border { radius: 8.0.into(), ..Border::default() },
-                ..button::Style::default()
-            }
-        })
-        .into()
 }
 
 fn card_style(tokens: Tokens) -> impl Fn(&IcedTheme) -> container::Style {

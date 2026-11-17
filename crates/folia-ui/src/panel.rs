@@ -735,6 +735,8 @@ pub struct View<'a> {
     pub quick: &'a [QuickControl],
     pub theme_source: ThemeSource,
     pub transparent_background: bool,
+    /// The page is transparent through either the setting or applied system glass.
+    pub transparent_surface: bool,
     pub has_custom_theme: bool,
     pub can_generate_theme: bool,
     pub generating_theme: bool,
@@ -804,7 +806,7 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
         shadow_y: SHADOW_Y,
         shadow_spread: 0.0,
         ring,
-        backdrop: 40.0,
+        backdrop: if view.transparent_surface { 0.0 } else { 40.0 },
         fade: open,
         saturate: 1.3,
     })
@@ -1945,7 +1947,7 @@ fn handle_button<'a>(view: View<'a>, look: HandleLook) -> Element<'a, Message> {
         shadow_y: 0.0,
         shadow_spread: 0.0,
         ring: [0.0; 4],
-        backdrop: 12.0,
+        backdrop: if view.transparent_surface { 0.0 } else { 12.0 },
         fade: alpha,
         saturate: 1.0,
     })

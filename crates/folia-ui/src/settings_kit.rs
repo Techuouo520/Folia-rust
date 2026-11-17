@@ -7,6 +7,9 @@ use iced::{Alignment, Background, Border, Color, Element, Font, Length, Padding,
 
 use crate::icons::icon;
 
+#[path = "select_popup.rs"]
+mod select_popup;
+
 const ON_ACCENT_DARK: Rgb = Rgb::hex(0x17171a);
 const ON_ACCENT_LIGHT: Rgb = Rgb::hex(0xffffff);
 pub const SEMIBOLD: Font = crate::typeface::SEMIBOLD;
@@ -285,7 +288,9 @@ pub(crate) fn group_with_rows<'a, M: 'a>(
         let mut row = column![];
         if index > 0 {
             let inset = if entry.sub { 40.0 } else { 16.0 };
-            row = row.push(container(fill_box(tokens.line).height(1)).padding(Padding::ZERO.left(inset)));
+            row = row.push(
+                container(fill_box(tokens.line).width(Length::Fill).height(1)).padding(Padding::ZERO.left(inset)),
+            );
         }
         entries.push(row.push(row_view(tokens, entry)).into());
     }
@@ -480,7 +485,9 @@ pub fn select<'a, T: Clone + PartialEq + 'a, M: Clone + 'a>(
 ) -> Element<'a, M> {
     let widest = options.iter().map(|choice| label_width(&choice.label, 13.0)).fold(0.0, f32::max);
     let width = (widest + 12.0 + 8.0 + 8.0 + 16.0).clamp(136.0, 240.0);
-    pick_list(options, Some(value), on_change)
+    let opacity = std::rc::Rc::new(std::cell::Cell::new(1.0));
+    let menu_opacity = opacity.clone();
+    let select = pick_list(options, Some(value), on_change)
         .font(crate::typeface::adapt(crate::typeface::SYSTEM))
         .width(width)
         .padding(Padding { top: 7.0, right: 8.0, bottom: 7.0, left: 12.0 })
@@ -494,19 +501,22 @@ pub fn select<'a, T: Clone + PartialEq + 'a, M: Clone + 'a>(
             background: if status == pick_list::Status::Active { tokens.fill } else { tokens.fill2 }.into(),
             border: Border { radius: 8.0.into(), ..Border::default() },
         })
-        .menu_style(move |_| iced::overlay::menu::Style {
-            background: tokens.menu.into(),
-            border: Border { color: tokens.line2, width: 1.0, radius: 10.0.into() },
-            text_color: tokens.t1,
-            selected_text_color: tokens.t1,
-            selected_background: tokens.hover.into(),
-            shadow: Shadow {
-                color: Color { a: 0.36 * tokens.shadow.a, ..Color::BLACK },
-                offset: Vector::new(0.0, 14.0),
-                blur_radius: 36.0,
-            },
-        })
-        .into()
+        .menu_style(move |_| {
+            let tokens = tokens.faded(menu_opacity.get());
+            iced::overlay::menu::Style {
+                background: tokens.menu.into(),
+                border: Border { color: tokens.line2, width: 1.0, radius: 10.0.into() },
+                text_color: tokens.t1,
+                selected_text_color: tokens.t1,
+                selected_background: tokens.hover.into(),
+                shadow: Shadow {
+                    color: Color { a: 0.36 * tokens.shadow.a, ..Color::BLACK },
+                    offset: Vector::new(0.0, 14.0),
+                    blur_radius: 36.0,
+                },
+            }
+        });
+    select_popup::view(select.into(), opacity)
 }
 
 /// Text tabs over a hairline; the accent line under the chosen one sits at `mark`, a fractional index while it slides.
@@ -613,6 +623,35 @@ pub fn rounded_button(color: Color, radius: f32) -> button::Style {
         border: Border { radius: radius.into(), ..Border::default() },
         ..button::Style::default()
     }
+}
+
+/// The shared sheet's 32px action with theme-aware fill, contrast and hover feedback.
+pub(crate) fn sheet_button<'a, M: Clone + 'a>(
+    tokens: Tokens,
+    label: &'a str,
+    primary: bool,
+    on_press: Option<M>,
+) -> Element<'a, M> {
+    let enabled = on_press.is_some();
+    let text_color = if primary { tokens.on_accent } else { tokens.t1 };
+    let ink = if enabled { text_color } else { Color { a: text_color.a * 0.4, ..text_color } };
+    button(container(text(label).size(crate::typeface::size::CONTROL).color(ink)).center_y(32))
+        .height(32)
+        .padding([0, 12])
+        .on_press_maybe(on_press)
+        .style(move |_, status| {
+            let hot = enabled && matches!(status, button::Status::Hovered | button::Status::Pressed);
+            let fill = if primary {
+                Color { a: tokens.accent.a * if hot { 0.9 } else { 1.0 }, ..tokens.accent }
+            } else if hot {
+                tokens.fill2
+            } else {
+                tokens.fill
+            };
+            let fill = if enabled { fill } else { Color { a: fill.a * 0.4, ..fill } };
+            rounded_button(fill, 8.0)
+        })
+        .into()
 }
 
 pub fn input_style(tokens: Tokens) -> iced::widget::text_input::Style {

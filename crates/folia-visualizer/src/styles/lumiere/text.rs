@@ -44,6 +44,7 @@ pub struct Light<'a> {
     pub unlit: [f32; 3],
     pub unlit_alpha: f32,
     pub intensity: f32,
+    pub exit: f32,
     pub hide_trails: bool,
     pub camera: &'a Camera,
     pub height: f32,
@@ -141,7 +142,7 @@ impl Text {
     /// Echo sprites (graphics group).
     pub fn paint_echo(&mut self, lyrics: &Lyrics, time: f64, light: &Light<'_>, sprites: &mut Vec<Sprite>) {
         let lines = lyrics.lines.get(self.lines.clone()).unwrap_or_default();
-        let intensity = slots::smooth(((time - self.start) / 1.2) as f32);
+        let intensity = slots::smooth(((time - self.start) / 1.2) as f32) * light.exit;
         if let Some(echo) = &mut self.echo {
             echo.paint(lines, time, light, intensity, sprites);
         }

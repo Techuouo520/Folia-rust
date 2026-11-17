@@ -32,6 +32,7 @@ pub struct DrumHits {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct VocalEnvelope {
     pub fps: u32,
+    /// Levels beginning at `from`, with one value per frame.
     pub db: Vec<f32>,
     pub top: f32,
     pub onsets: Vec<u32>,

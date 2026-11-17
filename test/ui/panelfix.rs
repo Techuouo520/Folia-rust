@@ -125,6 +125,7 @@ pub(super) fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia
         quick: &[],
         theme_source: ThemeSource::Default,
         transparent_background: false,
+        transparent_surface: false,
         has_custom_theme: false,
         can_generate_theme: false,
         generating_theme: false,

@@ -233,7 +233,8 @@ fn atlas_over_a_whole_song() {
     let mut side_at = Vec::new();
     let mut time = 0.0;
     while time < end {
-        let pass = stage(&lyrics, time, "lumiere", &state);
+        let scene_pass = stage(&lyrics, time, "lumiere", &state);
+        let pass = scene_pass.current_pass().unwrap();
         let sprites = pass.glyphs.lock();
         most_sprites = most_sprites.max(sprites.len());
         most_echo = most_echo.max(pass.echo);
@@ -330,7 +331,7 @@ impl Picture {
         }
     }
 
-    /// The stack `lyric_view` builds: stage pass, front bokeh, then the clear canvas with the frame.
+    /// The stack `lyric_view` builds: complete scene pass, then the clear canvas with the frame.
     fn render(
         &mut self,
         lyrics: &Lyrics,
@@ -366,21 +367,15 @@ impl Picture {
         let state = lumiere::LiveState::default();
         let field = lumiere::field_view::<()>(scene());
         let pass = Program::draw(&field, &state, mouse::Cursor::Unavailable, bounds);
-        let scale = f32::from_le_bytes(pass.bytes[824..828].try_into().unwrap());
+        let current = pass.current_pass().unwrap();
+        let scale = f32::from_le_bytes(current.bytes[824..828].try_into().unwrap());
         assert!(scale > 0.5, "camera scale {scale}");
-        let line_bytes = pass.lines.as_ref().map(|bytes| bytes.len()).unwrap_or(0);
-        let sprites = (pass.echo, pass.glyphs.lock().len());
-        let kind = pass.kind;
+        let line_bytes = current.lines.as_ref().map(|bytes| bytes.len()).unwrap_or(0);
+        let sprites = (current.echo, current.glyphs.lock().len());
+        let kind = current.kind;
         self.reset();
         ShaderDraw::draw_primitive(&mut self.renderer, bounds, pass);
         present(&mut self.renderer, self.format, Some(iced::Color::BLACK), &self.frame_view, &self.viewport);
-
-        self.reset();
-        let front_state = lumiere::LiveState::default();
-        let front = lumiere::front_view::<()>(scene());
-        let over = Program::draw(&front, &front_state, mouse::Cursor::Unavailable, bounds);
-        ShaderDraw::draw_primitive(&mut self.renderer, bounds, over);
-        present(&mut self.renderer, self.format, None, &self.frame_view, &self.viewport);
 
         self.reset();
         let canvas_state = folia_visualizer::SceneState::default();

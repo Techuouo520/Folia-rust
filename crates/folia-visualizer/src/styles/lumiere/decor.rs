@@ -239,7 +239,7 @@ impl Store {
     }
 }
 
-pub(super) fn uniform(program: &Program, time: f64, tuning: Tuning, mote_lift: f32) -> [u8; DECOR_BYTES] {
+pub(super) fn uniform(program: &Program, time: f64, tuning: Tuning, mote_lift: f32, exit: f32) -> [u8; DECOR_BYTES] {
     let mut out = [0_u8; DECOR_BYTES];
     let lead = &PROFILES[unit_lead(program, time)];
     write4(&mut out, 0, [lead.mote_drift[0], lead.mote_drift[1], lead.mote_swirl, lead.mote_period]);
@@ -248,6 +248,7 @@ pub(super) fn uniform(program: &Program, time: f64, tuning: Tuning, mote_lift: f
     write4(&mut out, 3, [lead.front_twinkle, lead.front_ambient, lead.front_gain, 1.0]);
     let clock = star_clock(program, time, tuning);
     write4(&mut out, 4, [clock.opening, clock.brightness, lead.rain_speed, clock.local]);
+    write4(&mut out, 5, [exit, 0.0, 0.0, 0.0]);
     for slot in 0..MAX_BURSTS {
         write4(&mut out, 6 + slot, [0.0, 0.0, -1.0, 0.0]);
     }
@@ -534,7 +535,7 @@ fn span_at(program: &Program, time: f64) -> Option<&Span> {
 }
 
 fn span_index(program: &Program, time: f64) -> usize {
-    program.spans.iter().rposition(|span| span.start <= time).unwrap_or(0)
+    program.paragraph(time)
 }
 
 fn geo_key(program: &Program, view: &View, time: f64, tuning: Tuning) -> GeoKey {

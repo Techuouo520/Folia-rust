@@ -5,6 +5,7 @@ mod audio;
 mod beams;
 pub mod bloom;
 mod catalog;
+mod composite;
 mod decor;
 mod field;
 mod gpu;
@@ -13,6 +14,7 @@ mod palette;
 mod profiles;
 mod program;
 mod text;
+mod transitions;
 mod tuning;
 
 use std::cell::RefCell;
@@ -45,10 +47,24 @@ pub struct LiveState {
 pub struct Cache {
     seed: u32,
     program: program::Program,
+    frame: FrameCache,
+    units: [UnitCache; 2],
+    transitions: Vec<transitions::Transition>,
+    audio: audio::Sampler,
+}
+
+#[derive(Default)]
+struct FrameCache {
     decor: decor::Store,
     text: text::Text,
     glyphs: Batch,
-    audio: audio::Sampler,
+}
+
+#[derive(Default)]
+struct UnitCache {
+    index: Option<usize>,
+    program: program::Program,
+    frame: FrameCache,
 }
 
 /// The graphics and text groups for one frame. Only the foreground bokeh and the frame are drawn above it.
@@ -99,7 +115,7 @@ pub fn veil_color(theme: &folia_core::Theme, amount: f32) -> Color {
 
 impl<Message> shader::Program<Message> for Field<'_, Message> {
     type State = LiveState;
-    type Primitive = gpu::Pass;
+    type Primitive = gpu::ScenePass;
 
     fn update(
         &self,
@@ -116,18 +132,63 @@ impl<Message> shader::Program<Message> for Field<'_, Message> {
     fn draw(&self, state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
         let mut cache = state.cache.borrow_mut();
         if !state.owner.load(std::sync::atomic::Ordering::Acquire) {
-            cache.decor.invalidate();
+            cache.frame.decor.invalidate();
+            for unit in &mut cache.units {
+                unit.frame.decor.invalidate();
+            }
         }
         let size = bounds.size();
         let tuning = Tuning::read(&self.scene.tuning);
         cache.sync(self.scene.lyrics, self.scene.seed, tuning.seamless);
         let heard = cache.audio.sample(audio::wall_ms(), self.scene.audio);
-        let view = field::prepare(&cache.program, self.scene.time, size, self.scene.theme, tuning, heard);
-        let mut pass = stage_pass(&mut cache, &self.scene, &view, tuning, heard);
-        pass.slot = Arc::as_ptr(&state.owner) as u64;
-        pass.owner = Arc::downgrade(&state.owner);
-        pass.publish_blur = self.capture;
-        pass
+        let frames = transitions::frames(&cache.program, &cache.transitions, self.scene.time, !self.scene.static_mode);
+        let slot = Arc::as_ptr(&state.owner) as u64;
+        let owner = Arc::downgrade(&state.owner);
+        let Cache { seed, program, frame, units, .. } = &mut *cache;
+        let layers = frames.map(|layer| {
+            layer.map(|layer| {
+                let (unit_program, frame) = if program.seamless {
+                    (&*program, &mut *frame)
+                } else {
+                    let unit = &mut units[layer.index % 2];
+                    if unit.index != Some(layer.index) {
+                        *unit = UnitCache {
+                            index: Some(layer.index),
+                            program: program.unit(layer.index),
+                            ..UnitCache::default()
+                        };
+                    }
+                    (&unit.program, &mut unit.frame)
+                };
+                let mut view = field::prepare(unit_program, self.scene.time, size, self.scene.theme, tuning, heard);
+                for beam in &mut view.beams {
+                    beam.intensity *= layer.light;
+                }
+                view.glare[3] *= layer.light;
+                view.enter *= layer.light;
+                view.exit = layer.light;
+                let mut pass = stage_pass(frame, unit_program, *seed, &self.scene, &view, tuning, heard);
+                pass.slot = slot | (layer.index % 2) as u64;
+                pass.owner = owner.clone();
+                let front = gpu::FrontPass {
+                    bytes: pass.bytes,
+                    decor: pass.decor,
+                    particles: frame.decor.front(unit_program, &view, self.scene.time, tuning),
+                    slot: pass.slot,
+                    owner: owner.clone(),
+                };
+                gpu::Layer { pass, front, frame: layer }
+            })
+        });
+        let color = veil_color(self.scene.theme, tuning.dark_field);
+        gpu::ScenePass {
+            layers,
+            slot,
+            owner,
+            publish_blur: self.capture,
+            veil: [color.r, color.g, color.b, color.a],
+            seamless: program.seamless,
+        }
     }
 }
 
@@ -160,7 +221,7 @@ impl<Message> shader::Program<Message> for Front<'_, Message> {
     fn draw(&self, state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
         let mut cache = state.cache.borrow_mut();
         if !state.owner.load(std::sync::atomic::Ordering::Acquire) {
-            cache.decor.invalidate();
+            cache.frame.decor.invalidate();
         }
         let size = bounds.size();
         let tuning = Tuning::read(&self.scene.tuning);
@@ -168,12 +229,12 @@ impl<Message> shader::Program<Message> for Front<'_, Message> {
         let heard = cache.audio.sample(audio::wall_ms(), self.scene.audio);
         let view = field::prepare(&cache.program, self.scene.time, size, self.scene.theme, tuning, heard);
         let particles = {
-            let Cache { decor, program, .. } = &mut *cache;
-            decor.front(program, &view, self.scene.time, tuning)
+            let Cache { frame, program, .. } = &mut *cache;
+            frame.decor.front(program, &view, self.scene.time, tuning)
         };
         gpu::FrontPass {
             bytes: field::pack(&view),
-            decor: decor::uniform(&cache.program, self.scene.time, tuning, mote_lift(heard, tuning)),
+            decor: decor::uniform(&cache.program, self.scene.time, tuning, mote_lift(heard, tuning), 1.0),
             particles,
             slot: Arc::as_ptr(&state.owner) as u64,
             owner: Arc::downgrade(&state.owner),
@@ -197,16 +258,25 @@ fn light<'a>(view: &'a View, tuning: Tuning, intensity: f32) -> text::Light<'a> 
         lit: view.palette.lit,
         unlit: view.palette.unlit,
         unlit_alpha: tuning.unlit_opacity,
-        intensity,
+        intensity: intensity * view.exit,
+        exit: view.exit,
         hide_trails: tuning.hide_trails,
         camera: &view.camera,
         height: view.height,
     }
 }
 
-fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning, heard: audio::Heard) -> gpu::Pass {
-    let Cache { decor, program, seed, text, glyphs, .. } = cache;
-    text.sync(program, scene, *seed, view, tuning);
+fn stage_pass(
+    cache: &mut FrameCache,
+    program: &Program,
+    seed: u32,
+    scene: &Scene<'_>,
+    view: &View,
+    tuning: Tuning,
+    heard: audio::Heard,
+) -> gpu::Pass {
+    let FrameCache { decor, text, glyphs } = cache;
+    text.sync(program, scene, seed, view, tuning);
     let light = light(view, tuning, text.window_intensity(scene.time));
     let echo = {
         let mut sprites = glyphs.lock();
@@ -216,10 +286,10 @@ fn stage_pass(cache: &mut Cache, scene: &Scene<'_>, view: &View, tuning: Tuning,
         text.paint_window(scene.lyrics, scene.time, &light, &mut sprites);
         echo
     };
-    decor.ensure(*seed, scene.lyrics, program);
+    decor.ensure(seed, scene.lyrics, program);
     let bursts = decor.active(scene.time);
     let (lines, particles) = decor.rebuild(program, view, scene.time, tuning, &scene.theme.lyrics_icons);
-    let mut decor_bytes = decor::uniform(program, scene.time, tuning, mote_lift(heard, tuning));
+    let mut decor_bytes = decor::uniform(program, scene.time, tuning, mote_lift(heard, tuning), view.exit);
     for (slot, burst) in bursts.iter().enumerate() {
         let Some(burst) = burst else { continue };
         let Some([x, y, font_px]) = text.glyph_anchor(scene.lyrics, burst.line, burst.grapheme, scene.time) else {
@@ -269,7 +339,8 @@ pub fn draw(scene: &Scene<'_>, cache: &mut Cache, frame: &mut Frame, size: Size)
     let heard = cache.audio.sample(audio::wall_ms(), scene.audio);
     let view = field::prepare(&cache.program, scene.time, size, scene.theme, tuning, heard);
     if scene.backdrop && active_line(&scene.lyrics.lines, scene.time).is_some() {
-        let Cache { program, seed, text, .. } = cache;
+        let Cache { program, seed, frame: cached_frame, .. } = cache;
+        let text = &mut cached_frame.text;
         text.sync(program, scene, *seed, &view, tuning);
         let light = light(&view, tuning, text.window_intensity(scene.time));
         frame.with_save(|frame| {
@@ -305,6 +376,9 @@ impl Cache {
         let seamless_changed = self.program.seamless != (seamless && self.program.spans.len() >= 2);
         if lyric_changed || seamless_changed || self.program.shots.is_empty() || self.program.seed != seed {
             self.program = program::Program::compile(lyrics, seed, seamless);
+            self.frame.decor.invalidate();
+            self.transitions = transitions::compile(&self.program);
+            self.units = std::array::from_fn(|_| UnitCache::default());
         }
     }
 }

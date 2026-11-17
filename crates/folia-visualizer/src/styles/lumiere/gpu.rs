@@ -10,8 +10,8 @@ use iced::Rectangle;
 use iced::widget::shader::{self, Primitive as ShaderPrimitive};
 
 use super::art::MAX_LINE_FLOATS;
-use super::bloom;
 use super::field::UNIFORM_BYTES;
+use super::{bloom, composite, transitions};
 
 const LIGHT: &str = include_str!("../../../shaders/lumiere/light_field.wgsl");
 const DECOR: &str = include_str!("../../../shaders/lumiere/decor.wgsl");
@@ -101,6 +101,40 @@ pub struct FrontPass {
     pub particles: Option<Vec<u8>>,
     pub slot: u64,
     pub owner: Weak<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(Debug)]
+pub(super) struct Layer {
+    pub pass: Pass,
+    pub front: FrontPass,
+    pub frame: transitions::Frame,
+}
+
+/// Composes each complete paragraph before applying its outer optical transition.
+#[derive(Debug)]
+pub struct ScenePass {
+    pub(super) layers: [Option<Layer>; 2],
+    pub(super) slot: u64,
+    pub(super) owner: Weak<std::sync::atomic::AtomicBool>,
+    pub(super) publish_blur: bool,
+    pub(super) veil: [f32; 4],
+    pub(super) seamless: bool,
+}
+
+impl ScenePass {
+    /// The current paragraph's geometry and glyph batch for render diagnostics.
+    pub fn current_pass(&self) -> Option<&Pass> {
+        self.layers.iter().rev().flatten().next().map(|layer| &layer.pass)
+    }
+
+    fn compositing(&self) -> bool {
+        self.layers[0].is_some()
+            || self
+                .layers
+                .iter()
+                .flatten()
+                .any(|layer| layer.frame.alpha < 1.0 || layer.frame.scale != 1.0 || layer.frame.blur > 0.3)
+    }
 }
 
 struct Targets {
@@ -464,6 +498,141 @@ impl ShaderPrimitive for Pass {
     }
 }
 
+impl ShaderPrimitive for ScenePass {
+    type Pipeline = SceneGpu;
+
+    fn prepare(
+        &self,
+        pipeline: &mut SceneGpu,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bounds: &Rectangle,
+        viewport: &shader::Viewport,
+    ) {
+        let Some(owner) = self.owner.upgrade() else { return };
+        let mut ready = true;
+        for index in 0..if self.seamless { 1 } else { 2 } {
+            owner.store(false, std::sync::atomic::Ordering::Release);
+            let _ = pipeline.stage.slot(self.slot | index, self.owner.clone());
+            ready &= owner.load(std::sync::atomic::Ordering::Acquire);
+            owner.store(false, std::sync::atomic::Ordering::Release);
+            let _ = pipeline.front.slot(self.slot | index, self.owner.clone(), device);
+            ready &= owner.load(std::sync::atomic::Ordering::Acquire);
+        }
+        for layer in self.layers.iter().flatten() {
+            layer.pass.prepare(&mut pipeline.stage, device, queue, bounds, viewport);
+            layer.front.prepare(&mut pipeline.front, device, queue, bounds, viewport);
+        }
+        owner.store(false, std::sync::atomic::Ordering::Release);
+        let composite = if self.seamless { None } else { pipeline.slot(self.slot, self.owner.clone()) };
+        ready &= self.seamless || owner.load(std::sync::atomic::Ordering::Acquire);
+        if self.compositing()
+            && let Some(composite) = composite
+        {
+            let (width, height) = pixel_size(bounds, viewport, 1.0);
+            composite.sync(
+                device,
+                queue,
+                [width, height],
+                [bounds.width.max(1.0), bounds.height.max(1.0)],
+                self.layers.each_ref().map(|layer| layer.as_ref().map(|layer| layer.frame)),
+            );
+        }
+        owner.store(ready, std::sync::atomic::Ordering::Release);
+    }
+
+    fn draw(&self, _pipeline: &SceneGpu, _pass: &mut wgpu::RenderPass<'_>) -> bool {
+        false
+    }
+
+    fn render(
+        &self,
+        pipeline: &SceneGpu,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        clip: &Rectangle<u32>,
+    ) {
+        if clip.width == 0 || clip.height == 0 {
+            return;
+        }
+        if !self.compositing() {
+            if let Some(layer) = self.layers.iter().flatten().next() {
+                layer.pass.render(&pipeline.stage, encoder, target, clip);
+                draw_front(&layer.front, &pipeline.front, encoder, target, clip);
+                if let Some(gpu) = pipeline.stage.targets(layer.pass.slot)
+                    && let Some(source) = gpu.bloom.scene()
+                {
+                    self.publish(pipeline, encoder, source, gpu.window);
+                }
+            }
+            return;
+        }
+        let Some(composite) = pipeline.slots.iter().find(|slot| slot.key == self.slot).and_then(|slot| slot.gpu.get())
+        else {
+            return;
+        };
+        let Some(output) = composite.output() else { return };
+        drop(composite::clear(encoder, output));
+        let mut window = [1.0; 2];
+        for (index, layer) in self.layers.iter().enumerate() {
+            let Some(layer) = layer.as_ref().filter(|layer| layer.frame.alpha > 0.002) else { continue };
+            let Some((scene, area)) = composite.scene(index) else { continue };
+            drop(composite::clear(encoder, scene));
+            layer.pass.render(&pipeline.stage, encoder, scene, &area);
+            draw_front(&layer.front, &pipeline.front, encoder, scene, &area);
+            composite.layer(encoder, index);
+            if let Some(gpu) = pipeline.stage.targets(layer.pass.slot) {
+                window = gpu.window;
+            }
+        }
+        composite.render(encoder, target, clip);
+        self.publish(pipeline, encoder, output, window);
+    }
+}
+
+impl ScenePass {
+    fn publish(
+        &self,
+        pipeline: &SceneGpu,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        window: [f32; 2],
+    ) {
+        if !self.publish_blur {
+            return;
+        }
+        let mut stamp = 0_u64;
+        for layer in self.layers.iter().flatten() {
+            for byte in layer.pass.bytes.iter().chain(&layer.pass.decor) {
+                stamp = stamp.wrapping_mul(0x0000_0100_0000_01b3).wrapping_add(u64::from(*byte));
+            }
+            for value in [layer.frame.alpha, layer.frame.scale, layer.frame.blur] {
+                stamp = stamp.wrapping_mul(0x0000_0100_0000_01b3).wrapping_add(u64::from(value.to_bits()));
+            }
+        }
+        folia_render::paint_over_underlay(
+            &pipeline.device,
+            &pipeline.queue,
+            encoder,
+            pipeline.format,
+            folia_render::UnderlayOverlay { foreground: source, stamp, window, veil: self.veil },
+        );
+    }
+}
+
+fn draw_front(
+    front: &FrontPass,
+    pipeline: &FrontStage,
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+    clip: &Rectangle<u32>,
+) {
+    let mut render = composite::load(encoder, target);
+    render.set_viewport(clip.x as f32, clip.y as f32, clip.width as f32, clip.height as f32, 0.0, 1.0);
+    render.set_scissor_rect(clip.x, clip.y, clip.width, clip.height);
+    front.draw(pipeline, &mut render);
+}
+
 fn scene_pass<'a>(
     encoder: &'a mut wgpu::CommandEncoder,
     view: &'a wgpu::TextureView,
@@ -620,6 +789,55 @@ pub struct StageGpu {
 pub struct FrontStage {
     slots: Vec<FrontSlot>,
     format: wgpu::TextureFormat,
+}
+
+struct SceneSlot {
+    key: u64,
+    owner: Weak<std::sync::atomic::AtomicBool>,
+    gpu: folia_render::Prepared<composite::Composite>,
+}
+
+pub struct SceneGpu {
+    stage: StageGpu,
+    front: FrontStage,
+    slots: Vec<SceneSlot>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    format: wgpu::TextureFormat,
+}
+
+impl SceneGpu {
+    fn slot(&mut self, key: u64, owner: Weak<std::sync::atomic::AtomicBool>) -> Option<&mut composite::Composite> {
+        if let Some(index) = self.slots.iter().position(|slot| slot.key == key) {
+            self.slots[index].owner = owner;
+            return self.slots[index].gpu.poll();
+        }
+        let (device, queue, format) = (self.device.clone(), self.queue.clone(), self.format);
+        let gpu =
+            folia_render::Prepared::new(owner.clone(), move || composite::Composite::new(&device, &queue, format));
+        self.slots.push(SceneSlot { key, owner, gpu });
+        let index = self.slots.len() - 1;
+        self.slots[index].gpu.poll()
+    }
+}
+
+impl shader::Pipeline for SceneGpu {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        Self {
+            stage: <StageGpu as shader::Pipeline>::new(device, queue, format),
+            front: <FrontStage as shader::Pipeline>::new(device, queue, format),
+            slots: Vec::new(),
+            device: device.clone(),
+            queue: queue.clone(),
+            format,
+        }
+    }
+
+    fn trim(&mut self) {
+        <StageGpu as shader::Pipeline>::trim(&mut self.stage);
+        <FrontStage as shader::Pipeline>::trim(&mut self.front);
+        self.slots.retain(|slot| slot.owner.strong_count() > 0);
+    }
 }
 
 impl StageGpu {

@@ -182,7 +182,7 @@ fn vs_line(in: LineIn) -> VertOut {
     let ndc = vec2<f32>(px.x / max(u.frame.x, 1.0) * 2.0 - 1.0, 1.0 - px.y / max(u.frame.y, 1.0) * 2.0);
     var out: VertOut;
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
-    out.color = vec4<f32>(u.fog_color.rgb, clamp(alpha, 0.0, 1.0));
+    out.color = vec4<f32>(u.fog_color.rgb, clamp(alpha, 0.0, 1.0) * d.tint.x);
     out.local = vec2<f32>(0.0, 0.0);
     return out;
 }
@@ -351,7 +351,7 @@ fn vs_particle(@builtin(vertex_index) index: u32, in: ParticleIn) -> VertOut {
     let ndc = ndc_center + quad * vec2<f32>(pixel / max(u.frame.x, 1.0), pixel / height);
     var out: VertOut;
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
-    out.color = vec4<f32>(u.fog_color.rgb, alpha);
+    out.color = vec4<f32>(u.fog_color.rgb, alpha * d.tint.x);
     out.local = quad;
     return out;
 }

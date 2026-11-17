@@ -109,8 +109,9 @@ pub fn native_blur_question<'a>(
     tokens: crate::settings_kit::Tokens,
     window: iced::Size,
 ) -> iced::Element<'a, crate::Message> {
+    use crate::settings_kit::sheet_button;
     use crate::typeface::text;
-    use iced::widget::{button, column, container, mouse_area, opaque, row, space, stack};
+    use iced::widget::{column, container, mouse_area, opaque, row, space, stack};
     use iced::{Color, Length};
     let cancel = crate::Message::Settings(crate::settings::Message::CancelNativeBlur);
     let veil = container(space()).width(Length::Fill).height(Length::Fill).style(|_| container::Style {
@@ -119,9 +120,13 @@ pub fn native_blur_question<'a>(
     });
     let footer = row![
         space().width(Length::Fill),
-        button(text(i18n.t("ui.cancel"))).on_press(cancel.clone()).style(button::secondary),
-        button(text(i18n.t("options.nativeBlurConfirmAction")))
-            .on_press(crate::Message::Graphics(Message::NativeBlur(true))),
+        sheet_button(tokens, i18n.t("ui.cancel"), false, Some(cancel.clone())),
+        sheet_button(
+            tokens,
+            i18n.t("options.nativeBlurConfirmAction"),
+            true,
+            Some(crate::Message::Graphics(Message::NativeBlur(true))),
+        ),
     ]
     .spacing(8);
     let body = column![

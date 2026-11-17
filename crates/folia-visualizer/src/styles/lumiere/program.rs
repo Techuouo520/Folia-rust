@@ -127,6 +127,19 @@ impl Program {
     pub fn lead(&self) -> usize {
         self.shots.iter().find(|shot| shot.line_count > 0).map_or(0, |shot| shot.profile)
     }
+
+    pub(super) fn paragraph(&self, time: f64) -> usize {
+        self.shots.get(self.active(time)).map_or(0, |shot| usize::from(shot.paragraph))
+    }
+
+    pub(super) fn unit(&self, index: usize) -> Self {
+        Self {
+            shots: self.shots.iter().filter(|shot| usize::from(shot.paragraph) == index).cloned().collect(),
+            spans: self.spans.clone(),
+            seed: self.seed.clone(),
+            seamless: false,
+        }
+    }
 }
 
 /// A paragraph to cut into shots (`ParagraphPlan`).

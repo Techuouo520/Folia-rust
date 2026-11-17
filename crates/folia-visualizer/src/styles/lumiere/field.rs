@@ -39,6 +39,7 @@ pub struct View {
     pub lead: usize,
     pub handoff: f32,
     pub enter: f32,
+    pub exit: f32,
 }
 
 pub struct Camera {
@@ -140,6 +141,7 @@ pub fn prepare(
         lead: program.lead(),
         handoff,
         enter,
+        exit: 1.0,
     }
 }
 
@@ -319,20 +321,15 @@ fn camera(program: &Program, time: f64, size: Size, theme: &Theme) -> Camera {
 }
 
 fn section_progress(program: &Program, time: f64) -> f32 {
-    let mut index = 0;
-    for (slot, span) in program.spans.iter().enumerate() {
-        if span.start <= time {
-            index = slot;
-        }
-    }
+    let index = program.paragraph(time);
     let Some(span) = program.spans.get(index) else { return 0.0 };
     let linear = ((time - span.start) / (span.end - span.start).max(0.001)).clamp(0.0, 1.0) as f32;
     let eased = (1.0 - (linear * std::f32::consts::PI).cos()) * 0.5;
-    if index.is_multiple_of(2) { eased } else { 1.0 - eased }
+    if !program.seamless || index.is_multiple_of(2) { eased } else { 1.0 - eased }
 }
 
 fn enter(program: &Program, time: f64) -> f32 {
-    let span = program.spans.iter().rev().find(|span| span.start <= time);
+    let span = program.spans.get(program.paragraph(time));
     let Some(span) = span else { return 1.0 };
     if !span.opening {
         return 1.0;

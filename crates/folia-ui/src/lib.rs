@@ -2502,8 +2502,9 @@ impl Shell {
         };
         if playing && self.back_hotspot() {
             // `VisualizerShell` back: `backdrop-blur-md` (12px) under `bg-black/20`.
+            let backdrop = if self.player_transparent() { 0.0 } else { 12.0 };
             let back = iced::widget::stack![
-                chrome::glass_disc(40.0, [0.0; 4], 12.0, 1.0),
+                chrome::glass_disc(40.0, [0.0; 4], backdrop, 1.0),
                 chrome::round_button(
                     Icon::ChevronLeft,
                     20.0,
@@ -2530,7 +2531,7 @@ impl Shell {
                 secondary: muted,
                 background: folia_visualizer::color(self.theme.background, 1.0),
                 daylight,
-                transparent_background: playing && self.theme_settings.transparent_player_background,
+                transparent_background: self.player_transparent(),
                 window: self.window_size,
                 bottom: self.bar_offset(),
                 modal: self.modal_open(),
@@ -2612,6 +2613,7 @@ impl Shell {
                 quick,
                 theme_source: self.theme_settings.source,
                 transparent_background: self.theme_settings.transparent_player_background,
+                transparent_surface: self.player_transparent(),
                 has_custom_theme: self.theme_settings.custom_dual_theme.is_some(),
                 can_generate_theme: self.song_themes.can_generate(&self.playback),
                 generating_theme: self.song_themes.generating,

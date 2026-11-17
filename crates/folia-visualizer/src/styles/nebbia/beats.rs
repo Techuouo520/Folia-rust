@@ -44,7 +44,10 @@ impl VocalRain {
         self.large.extend(scene.big.iter().filter(|hit| hit.t < start).cloned());
         let mut random = Rng((scene.seed ^ 911).wrapping_mul(2654435761));
         for onset in &envelope.onsets {
-            if self.levels.get(*onset as usize).copied().unwrap_or(0.0) <= 0.15 && random.unit() >= 0.3 {
+            let Some(level) = self.level(i64::from(*onset)) else {
+                continue;
+            };
+            if level <= 0.15 && random.unit() >= 0.3 {
                 continue;
             }
             let time = f64::from(*onset) / f64::from(envelope.fps);
@@ -59,8 +62,13 @@ impl VocalRain {
         if bucket >= 0 && bucket < i64::from(self.from) {
             return fallback;
         }
-        let level = usize::try_from(bucket).ok().and_then(|index| self.levels.get(index)).copied().unwrap_or(0.0);
+        let level = self.level(bucket).unwrap_or(0.0);
         f64::from((0.15 + 7.0 * level * level) * density * self.loudness) * 0.02
+    }
+
+    fn level(&self, frame: i64) -> Option<f32> {
+        let offset = frame.checked_sub(i64::from(self.from))?;
+        self.levels.get(usize::try_from(offset).ok()?).copied()
     }
 }
 
