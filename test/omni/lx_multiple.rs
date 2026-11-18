@@ -174,7 +174,7 @@ async fn version_one_selection_is_migrated_and_restored() {
     assert_eq!(settings.scripts[0].metadata.name, "legacy");
     assert_eq!(catalog.store.load::<SourceSettings>().unwrap(), settings);
     assert!(
-        std::fs::read_to_string(catalog.store.dir().join("sources.toml")).unwrap().starts_with("schema_version = 2\n")
+        std::fs::read_to_string(catalog.store.dir().join("sources.toml")).unwrap().starts_with("schema_version = 3\n")
     );
     assert_eq!(
         catalog.omni.resolve_audio_source(&track(), AudioQuality::Standard).await.unwrap().url,
@@ -190,8 +190,8 @@ fn disabled_legacy_settings_migrate_and_unknown_versions_are_untouched() {
     std::fs::write(&path, "schema_version = 1\nscripts = []\n").unwrap();
     assert_eq!(SourceSettings::load(&store).unwrap(), SourceSettings::default());
     assert_eq!(store.load::<SourceSettings>().unwrap(), SourceSettings::default());
-    let future = "schema_version = 3\nscripts = []\nenabled = []\n";
+    let future = "schema_version = 4\nscripts = []\nenabled = []\n";
     std::fs::write(&path, future).unwrap();
-    assert!(matches!(SourceSettings::load(&store), Err(folia_store::StoreError::SchemaVersion { found: 3, .. })));
+    assert!(matches!(SourceSettings::load(&store), Err(folia_store::StoreError::SchemaVersion { found: 4, .. })));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), future);
 }

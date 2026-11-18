@@ -2,6 +2,10 @@
 name = "Folia"
 
 [options]
+sourceCustomOnly = "Hanya gunakan sumber kustom"
+sourceCustomOnlyHint = "Sembunyikan kontrol akun platform dan putar melalui sumber kustom yang aktif. Saat nonaktif, coba sumber kustom terlebih dahulu, lalu platform. Mengubah mode menghentikan pemutaran online dan mempertahankan antrean."
+sourceCustomOnlyPriorityHint = "Seret baris untuk mengurutkan sumber. Sumber aktif dicoba dari atas ke bawah; pemutaran berhenti jika semuanya gagal."
+sourceCustomOnlySearchHint = "Temukan lagu melalui pencarian. Sumber kustom menyediakan URL pemutaran sesuai urutan daftar. Pencarian dan lirik menggunakan platform yang dipilih."
 lyricRenderSection = "Rendering"
 lyricRenderFollowGlobal = "Ikuti global"
 lyricRenderScaleStyleHint = "Berapa kali resolusi gaya ini digambar; di atas 1× melakukan supersampling. Ikuti global memakai pengaturan di Performa & gerakan (sekarang {{value}})."
@@ -892,6 +896,7 @@ midnightDefault = "Bawaan Tengah Malam"
 daylightDefault = "Bawaan Siang Hari"
 
 [status]
+customSourceUnavailable = "Sumber kustom belum dapat memutar lagu ini. Periksa sumber yang aktif dan platform yang didukung."
 themeGenerationFailed = "Gagal membuat tema."
 graphicsInitializationFailed = "Inisialisasi grafis gagal. Coba atur WGPU_BACKEND=dx12 atau WGPU_BACKEND=vulkan."
 loadingSong = "Memuat URL lagu..."

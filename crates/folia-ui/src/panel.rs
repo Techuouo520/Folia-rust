@@ -716,6 +716,8 @@ pub struct View<'a> {
     pub pill_hover: bool,
     /// The track's platform, and that platform's cached account.
     pub platform: Option<Platform>,
+    /// Whether the account card, sign-in and account actions are available.
+    pub account_controls: bool,
     pub account: Option<&'a Account>,
     pub account_avatar: Option<&'a iced::widget::image::Handle>,
     pub syncing: bool,
@@ -772,8 +774,9 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     let inner = (panel_w - 24.0).max(96.0);
     let max_h = (view.height - under - view.bottom - TOP_MARGIN).max(220.0);
     // The header and body heights move with the fold, between the cover tab and the last other tab.
-    let (big_h, _, cover_px) = measure(Tab::Cover, view.queue.len(), view.account.is_some(), inner, max_h, 0.0);
-    let body_of = |tab| measure(tab, view.queue.len(), view.account.is_some(), inner, max_h, panel.bodies.get(tab)).1;
+    let account = view.account_controls.then_some(view.account.is_some());
+    let (big_h, _, cover_px) = measure(Tab::Cover, view.queue.len(), account, inner, max_h, 0.0);
+    let body_of = |tab| measure(tab, view.queue.len(), account, inner, max_h, panel.bodies.get(tab)).1;
     let (from_body, to_body) = (body_of(panel.body_from), body_of(panel.body_tab));
     let full_body = from_body + (to_body - from_body) * panel.grow.value(now);
     let fold =
@@ -840,8 +843,7 @@ fn surface<'a>(panel: &'a PlayerPanel, view: View<'a>, open: f32, now: Instant) 
     if tab == Tab::Quality {
         // The account block (56 signed in, 44 for a guest row), the hairline and the 44px quality row, whose
         // trigger is 6px inside it. The menu is drawn over the face, as the mode pickers are.
-        let account_h = if view.account.is_some() { 56.0 } else { 44.0 };
-        let trigger_top = header_h + account_h + 56.0;
+        let trigger_top = header_h + quality_account_height(account) + 39.0;
         let place = quality_select::Place {
             window_height: view.height,
             window_top: visual_top,
@@ -1187,7 +1189,7 @@ fn dock<'a>(
         (Tab::Cover, view.i18n.t("panel.cover")),
         (Tab::Controls, view.i18n.t("panel.controls")),
         (Tab::Queue, view.i18n.t("panel.playlist")),
-        (Tab::Quality, view.i18n.t("panel.account")),
+        (Tab::Quality, view.i18n.t(if view.account_controls { "panel.account" } else { "account.audioQuality" })),
     ];
     if local {
         tabs.insert(1, (Tab::Source, view.i18n.t("localMusic.folder")));
@@ -1777,6 +1779,14 @@ fn quality_tab<'a>(
     select: &'a quality_select::Select,
     now: Instant,
 ) -> Element<'a, Message> {
+    let quality = labeled(
+        ink,
+        view.i18n.t("account.audioQuality"),
+        select.trigger(view.i18n, tokens.tokens(), ink, view.quality, now),
+    );
+    if !view.account_controls {
+        return quality;
+    }
     let account = match (view.platform, view.account) {
         (Some(platform), Some(account)) => account_card(view, platform, account, tokens, ink),
         _ => labeled(
@@ -1793,18 +1803,7 @@ fn quality_tab<'a>(
         space().height(0).into()
     };
     let line = container(hairline(tokens)).padding(pad(8.0, 4.0, 8.0, 4.0));
-    column![
-        account,
-        line,
-        labeled(
-            ink,
-            view.i18n.t("account.audioQuality"),
-            select.trigger(view.i18n, tokens.tokens(), ink, view.quality, now)
-        ),
-        sync,
-    ]
-    .spacing(0)
-    .into()
+    column![account, line, quality, sync].spacing(0).into()
 }
 
 /// `AccountTab`'s signed-in card: a 40px face with the platform's mark on its corner, the name and the member crown,
@@ -2223,7 +2222,14 @@ fn shown_tab(tab: Tab, local: bool, online: bool) -> Tab {
 }
 
 /// `measured` is the tab body's laid-out height; 0 falls back to the estimate below.
-fn measure(tab: Tab, queue_len: usize, signed: bool, inner: f32, max_h: f32, measured: f32) -> (f32, f32, f32) {
+fn measure(
+    tab: Tab,
+    queue_len: usize,
+    account: Option<bool>,
+    inner: f32,
+    max_h: f32,
+    measured: f32,
+) -> (f32, f32, f32) {
     let under = 14.0 + 26.0 + 20.0 + 18.0 + 14.0 + 32.0;
     let room = (max_h - 24.0 - 12.0 - 36.0).max(under + 96.0);
     let cover_px = (room - under).clamp(96.0, inner);
@@ -2235,7 +2241,7 @@ fn measure(tab: Tab, queue_len: usize, signed: bool, inner: f32, max_h: f32, mea
         Tab::Controls => 460.0,
         Tab::Queue => 36.0 + queue_island::list_height(queue_len),
         Tab::Source => 210.0,
-        Tab::Quality => quality_body(signed),
+        Tab::Quality => quality_body(account),
         Tab::Cover => 0.0,
     };
     let chrome = 24.0 + 48.0 + body + 12.0 + 36.0;
@@ -2245,10 +2251,17 @@ fn measure(tab: Tab, queue_len: usize, signed: bool, inner: f32, max_h: f32, mea
 
 /// `AccountTab`: the account block, the group line's 8px above and below, the 44px quality row and the
 /// 48px sync row.
-fn quality_body(signed: bool) -> f32 {
-    let account = if signed { 56.0 } else { 44.0 };
-    let sync = if signed { 48.0 } else { 0.0 };
-    account + 17.0 + 44.0 + sync
+fn quality_body(account: Option<bool>) -> f32 {
+    let sync = if account == Some(true) { 48.0 } else { 0.0 };
+    quality_account_height(account) + 44.0 + sync
+}
+
+fn quality_account_height(account: Option<bool>) -> f32 {
+    match account {
+        Some(true) => 56.0 + 17.0,
+        Some(false) => 44.0 + 17.0,
+        None => 0.0,
+    }
 }
 
 /// The queue list's height: what `measure` leaves the queue tab under its 36px head.
@@ -2257,7 +2270,7 @@ fn queue_list_h(width: f32, height: f32, bottom: f32, chrome: bool, len: usize) 
     let panel_w = (width - 32.0).clamp(200.0, 360.0);
     let inner = (panel_w - 24.0).max(96.0);
     let max_h = (height - under - bottom - TOP_MARGIN).max(220.0);
-    let (_, body, _) = measure(Tab::Queue, len, false, inner, max_h, 0.0);
+    let (_, body, _) = measure(Tab::Queue, len, None, inner, max_h, 0.0);
     queue_island::list_height(len).min((body - 21.0 - 36.0).max(0.0))
 }
 

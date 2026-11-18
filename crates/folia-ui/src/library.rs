@@ -1470,6 +1470,12 @@ impl LibraryPage {
             return empty.then(|| (i18n.t("libraryBravaisHome.wallHint.localTitle").to_owned(), body));
         }
         let AccountState::Guest { ran_out } = self.online.account else { return None };
+        if self.online.omni().is_some_and(Omni::custom_source_only) {
+            return Some((
+                i18n.t("options.sourceCustomOnly").to_owned(),
+                i18n.t("options.sourceCustomOnlySearchHint").to_owned(),
+            ));
+        }
         let connect = i18n.t("libraryBravaisHome.connect");
         if ran_out {
             let provider = provider_label(self.online.omni(), self.online.provider());

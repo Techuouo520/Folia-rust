@@ -108,7 +108,9 @@ impl Omni {
                 keys.push(format!("{stem}-lx-{id}-{}", quality.id()));
             }
         }
-        keys.push(format!("{stem}-{}", resolve_quality(provider.audio_quality_levels(), quality).id()));
+        if !self.sources.custom_only() {
+            keys.push(format!("{stem}-{}", resolve_quality(provider.audio_quality_levels(), quality).id()));
+        }
         let entries = self.audio_cache.entries.lock();
         keys.iter().any(|key| {
             entries.iter().find(|(name, _)| name == key).is_some_and(|(_, entry)| {
@@ -137,10 +139,17 @@ impl Omni {
     }
     /// Resolves the original lightweight prefetch window sequentially; dropping the future cancels the pass.
     pub async fn prefetch(&self, plan: PrefetchPlan) {
+        let revision = self.audio_cache_revision();
         for track in &plan.tracks {
             tokio::time::sleep(Duration::from_millis(100)).await;
+            if self.audio_cache_revision() != revision {
+                return;
+            }
             if let Err(err) = self.track_input(track, plan.quality, Load::Prefetch, &[]).await {
                 tracing::debug!(error = &err as &dyn std::error::Error, "audio prefetch unavailable");
+            }
+            if self.audio_cache_revision() != revision {
+                return;
             }
             if let Some(song) = &track.online
                 && let Err(err) = self.lyrics(song).await
@@ -179,7 +188,6 @@ impl Omni {
     ) -> Result<AudioInput, OmniError> {
         let song = track.online.as_ref().ok_or(OmniError::Unavailable)?;
         let provider = self.provider(&song.provider)?;
-        let level = resolve_quality(provider.audio_quality_levels(), preference);
         let stem = format!("{}-{}", song.provider, song.id);
         if let Some(info) = provider.lx_music_info(track) {
             for (id, script) in self.sources.active(info.source) {
@@ -200,6 +208,22 @@ impl Omni {
                 }
             }
         }
+        self.allow_native_audio()?;
+        let result = self.platform_track_input(song, preference, load, failed).await;
+        self.allow_native_audio()?;
+        result
+    }
+
+    async fn platform_track_input(
+        &self,
+        song: &folia_core::OnlineId,
+        preference: AudioQuality,
+        load: Load,
+        failed: &[PathBuf],
+    ) -> Result<AudioInput, OmniError> {
+        let provider = self.provider(&song.provider)?;
+        let level = resolve_quality(provider.audio_quality_levels(), preference);
+        let stem = format!("{}-{}", song.provider, song.id);
         let key = format!("{stem}-{}", level.id());
         if failed_key(failed, &key) || failed_key(failed, &stem) {
             return Err(OmniError::Unavailable);

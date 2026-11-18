@@ -103,6 +103,7 @@ const OPTIONS: &[(Section, GroupDef, &str)] = &[
     (Section::Ai, AI, "options.aiApiKey"),
     (Section::Ai, AI, "options.openaiApiTemperature"),
     (Section::Ai, AI, "options.useSystemProxyAI"),
+    (Section::Sources, SOURCES, "options.sourceCustomOnly"),
     (Section::Sources, SOURCES, "options.sourceImportUrl"),
     (Section::Sources, SOURCES, "options.sourceImport"),
     (Section::Appearance, LYRICS, "options.lyricsAnimationAdjust"),

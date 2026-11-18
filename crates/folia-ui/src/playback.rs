@@ -33,7 +33,7 @@ pub struct Playback {
     fm: Option<Collection>,
     /// A batch is on its way; steps wait for it.
     topping_up: bool,
-    notice: Option<(String, Instant)>,
+    notice: Option<(Notice, Instant)>,
     notice_serial: u64,
     request: u64,
     pub loading: Loading,
@@ -57,7 +57,13 @@ pub struct Playback {
 #[derive(Debug, Clone)]
 pub enum AudioFailure {
     SubscriptionRequired,
+    CustomSourceUnavailable,
     Other(String),
+}
+
+enum Notice {
+    Subscription(String),
+    CustomSourceUnavailable,
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +363,26 @@ impl Playback {
         self.refresh();
     }
 
+    /// Applies an audio-source policy change without accepting requests started under the previous policy.
+    pub fn source_mode_changed(&mut self) -> Task<Message> {
+        self.prefetch_task = None;
+        self.prefetch_dirty = true;
+        self.failed_inputs.clear();
+        let stop = if self.current().is_some_and(|track| track.online.is_some()) {
+            self.active_input = None;
+            self.lyrics_pending = false;
+            self.topping_up = false;
+            self.seeking = None;
+            self.failures = 0;
+            self.notice = None;
+            self.notice_serial = self.notice_serial.wrapping_add(1);
+            self.stop_current()
+        } else {
+            Task::none()
+        };
+        Task::batch([stop, self.refresh_prefetch()])
+    }
+
     pub fn update(&mut self, message: Message, store: &Store) -> Task<Message> {
         if matches!(
             &message,
@@ -502,13 +528,16 @@ impl Playback {
                         self.refresh();
                         self.end_loading();
                         self.loading_toast = false;
-                        self.notice_serial = self.notice_serial.wrapping_add(1);
-                        let serial = self.notice_serial;
-                        self.notice = provider.map(|provider| (provider, Instant::now()));
                         tracing::info!("online playback stopped: subscription required");
-                        Task::perform(blocking(|| std::thread::sleep(Duration::from_secs(6))), move |_| {
-                            Message::NoticeLeaving(serial)
-                        })
+                        provider.map_or_else(Task::none, |provider| self.show_notice(Notice::Subscription(provider)))
+                    }
+                    Err(AudioFailure::CustomSourceUnavailable) => {
+                        self.active_input = None;
+                        self.lyrics_pending = false;
+                        self.topping_up = false;
+                        tracing::info!("online playback stopped: custom sources unavailable");
+                        let stopped = self.stop_current();
+                        Task::batch([stopped, self.show_notice(Notice::CustomSourceUnavailable)])
                     }
                     Err(AudioFailure::Other(err)) => {
                         tracing::warn!(track = %track.display_name(), error = %err, "online track unavailable");
@@ -710,6 +739,7 @@ impl Playback {
                     id,
                     result.map_err(|err| match err {
                         folia_omni::OmniError::SubscriptionRequired => AudioFailure::SubscriptionRequired,
+                        folia_omni::OmniError::CustomSourceUnavailable => AudioFailure::CustomSourceUnavailable,
                         err => AudioFailure::Other(error_chain(&err)),
                     }),
                 )
@@ -728,11 +758,21 @@ impl Playback {
     }
 
     pub fn subscription_notice(&self, now: Instant) -> Option<(&str, f32, f32)> {
-        let (provider, started) = self.notice.as_ref()?;
-        let ms = now.saturating_duration_since(*started).as_secs_f64() * 1000.0;
-        let entered = folia_visualizer::Ease::new(0.2, 0.8, 0.2, 1.0).at((ms / 320.0).clamp(0.0, 1.0)) as f32;
-        let left = folia_visualizer::Ease::new(0.4, 0.0, 1.0, 1.0).at(((ms - 6000.0) / 220.0).clamp(0.0, 1.0)) as f32;
-        Some((provider, entered * (1.0 - left), -18.0 * (1.0 - entered) - 10.0 * left))
+        let (Notice::Subscription(provider), started) = self.notice.as_ref()? else { return None };
+        let (opacity, shift) = notice_frame(*started, now);
+        Some((provider, opacity, shift))
+    }
+
+    pub fn custom_source_notice(&self, now: Instant) -> Option<(f32, f32)> {
+        let (Notice::CustomSourceUnavailable, started) = self.notice.as_ref()? else { return None };
+        Some(notice_frame(*started, now))
+    }
+
+    fn show_notice(&mut self, notice: Notice) -> Task<Message> {
+        self.notice_serial = self.notice_serial.wrapping_add(1);
+        let serial = self.notice_serial;
+        self.notice = Some((notice, Instant::now()));
+        Task::perform(blocking(|| std::thread::sleep(Duration::from_secs(6))), move |_| Message::NoticeLeaving(serial))
     }
 
     fn refresh(&mut self) {
@@ -809,6 +849,13 @@ impl Playback {
         self.prefetch_task = Some(handle.abort_on_drop());
         task
     }
+}
+
+fn notice_frame(started: Instant, now: Instant) -> (f32, f32) {
+    let ms = now.saturating_duration_since(started).as_secs_f64() * 1000.0;
+    let entered = folia_visualizer::Ease::new(0.2, 0.8, 0.2, 1.0).at((ms / 320.0).clamp(0.0, 1.0)) as f32;
+    let left = folia_visualizer::Ease::new(0.4, 0.0, 1.0, 1.0).at(((ms - 6000.0) / 220.0).clamp(0.0, 1.0)) as f32;
+    (entered * (1.0 - left), -18.0 * (1.0 - entered) - 10.0 * left)
 }
 
 /// Request-scoped loading state prevents an old completion from clearing a newer song's indicator.

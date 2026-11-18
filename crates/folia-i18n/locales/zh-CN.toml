@@ -2,6 +2,10 @@
 name = "Folia"
 
 [options]
+sourceCustomOnly = "仅使用自定义音源"
+sourceCustomOnlyHint = "开启后隐藏平台账号入口，播放仅尝试已启用的自定义音源。关闭时优先自定义音源，失败后回退平台。切换模式会停止当前在线播放并保留队列。"
+sourceCustomOnlyPriorityHint = "按住音源行拖动排序，按从上到下的顺序尝试已启用的音源；全部失败时停止播放。"
+sourceCustomOnlySearchHint = "可通过搜索查找歌曲，自定义音源按列表顺序提供播放地址。搜索与歌词由当前所选平台提供。"
 lyricRenderSection = "渲染"
 lyricRenderFollowGlobal = "跟随全局"
 lyricRenderScaleStyleHint = "这个样式按几倍分辨率画，高于 1× 是超采样。跟随全局时用「动画与性能」里的挡位（现在是 {{value}}）。"
@@ -892,6 +896,7 @@ midnightDefault = "午夜墨染"
 daylightDefault = "日光素白"
 
 [status]
+customSourceUnavailable = "自定义音源暂时无法播放这首歌，请检查已启用的音源及其支持的平台。"
 themeGenerationFailed = "主题生成失败。"
 graphicsInitializationFailed = "无法初始化图形界面。可尝试设置环境变量 WGPU_BACKEND=dx12 或 WGPU_BACKEND=vulkan。"
 loadingSong = "正在获取歌曲链接..."

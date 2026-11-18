@@ -1424,7 +1424,18 @@ impl Shell {
                     self.workbench(message)
                 }
             }
-            Message::Sources(message) => self.sources.update(message, self.omni.clone()),
+            Message::Sources(message) => {
+                let before = self.sources.custom_only();
+                let task = self.sources.update(message, self.omni.clone());
+                if before == self.sources.custom_only() {
+                    return task;
+                }
+                if self.sources.custom_only() {
+                    self.login.close();
+                }
+                self.play_navigation.cancel();
+                Task::batch([task, self.playback.source_mode_changed().map(Message::Playback)])
+            }
             Message::SongTheme(message) => {
                 let prefer_custom = matches!(message, song_theme::Message::PreferCustom(true));
                 let loaded = matches!(message, song_theme::Message::Loaded(..));
@@ -1984,6 +1995,7 @@ impl Shell {
                 Task::none()
             }
             Message::Timeline(message) => self.timeline(message),
+            Message::Login(_) if self.sources.custom_only() => Task::none(),
             Message::Login(message) => {
                 let (task, effect) = self.login.update(
                     message,
@@ -2040,6 +2052,9 @@ impl Shell {
 
     /// The sign-in window on `provider`, from the home page when the player's account tab asks for it.
     fn open_login_on(&mut self, provider: Option<&'static str>) -> Task<Message> {
+        if self.sources.custom_only() {
+            return Task::none();
+        }
         self.return_home();
         self.login.open(provider, &self.library.online, self.omni.as_ref()).map(Message::Login)
     }
@@ -2600,6 +2615,7 @@ impl Shell {
                 pill_hover: self.panel.pill_hover(),
                 platform,
                 account,
+                account_controls: !self.sources.custom_only(),
                 account_avatar: self.library.online.avatar_for(provider),
                 syncing: self.library.online.syncing(provider),
                 quality_levels,
@@ -2720,7 +2736,9 @@ impl Shell {
                 .avatar_for(self.login.chosen_provider().unwrap_or(self.library.online.provider())),
             has_track: !self.playback.queue.items().is_empty(),
         };
-        if let Some(window) = self.login.view(look, now) {
+        if !self.sources.custom_only()
+            && let Some(window) = self.login.view(look, now)
+        {
             frame = frame.push(window.map(Message::Login));
         }
         if let Some(layer) =
@@ -2754,6 +2772,15 @@ impl Shell {
                 opacity,
                 shift,
                 self.playback.loading_angle(now),
+            ));
+        }
+        if let Some((opacity, shift)) = self.playback.custom_source_notice(now) {
+            frame = frame.push(status_toast::custom_source_view(
+                &self.i18n,
+                daylight,
+                self.window_size.width,
+                opacity,
+                shift,
             ));
         }
         if let Some((provider, opacity, shift)) = self.playback.subscription_notice(now)
@@ -2884,6 +2911,7 @@ impl Shell {
     /// A status toast is on screen, so the page under it has to feed the blur.
     fn notice_visible(&self, now: std::time::Instant) -> bool {
         self.playback.subscription_notice(now).is_some_and(|(_, opacity, _)| opacity > 0.0)
+            || self.playback.custom_source_notice(now).is_some_and(|(opacity, _)| opacity > 0.0)
             || self.playback.loading_notice(now).is_some_and(|(opacity, _)| opacity > 0.0)
             || self.library.online.sync_notice(now).is_some_and(|(_, _, _, opacity, _)| opacity > 0.0)
     }
@@ -3562,7 +3590,7 @@ impl Shell {
 
     /// The seam's account entry on online tabs (`useBravaisHomeAccount`).
     fn account_slot(&self) -> Option<home::AccountSlot<'_>> {
-        if !self.library.tab.is_online() || self.library.layer.is_some() {
+        if self.sources.custom_only() || !self.library.tab.is_online() || self.library.layer.is_some() {
             return None;
         }
         let platforms = self.library.online.platforms();
@@ -3749,6 +3777,9 @@ impl Shell {
             panel::Effect::Visualizer(style) => {
                 self.appearance.visualizer = style.map_or(RANDOM_STYLE, Style::id).to_owned();
                 save(&self.store, &self.appearance)
+            }
+            panel::Effect::Login | panel::Effect::Sync | panel::Effect::SignOut if self.sources.custom_only() => {
+                Task::none()
             }
             panel::Effect::Login => {
                 let provider = self.playing_provider();

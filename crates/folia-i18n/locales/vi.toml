@@ -2,6 +2,10 @@
 name = "Folia"
 
 [options]
+sourceCustomOnly = "Chỉ dùng nguồn tùy chỉnh"
+sourceCustomOnlyHint = "Ẩn các mục tài khoản nền tảng và phát qua nguồn tùy chỉnh đang bật. Khi tắt, ưu tiên nguồn tùy chỉnh rồi chuyển sang nền tảng nếu thất bại. Đổi chế độ sẽ dừng phát nhạc trực tuyến và giữ hàng đợi."
+sourceCustomOnlyPriorityHint = "Kéo các dòng để sắp xếp nguồn. Các nguồn đang bật được thử từ trên xuống dưới; phát nhạc sẽ dừng nếu tất cả đều thất bại."
+sourceCustomOnlySearchHint = "Tìm bài hát bằng tính năng tìm kiếm. Nguồn tùy chỉnh cung cấp URL phát theo thứ tự trong danh sách. Tìm kiếm và lời bài hát sử dụng nền tảng đã chọn."
 lyricRenderSection = "Kết xuất"
 lyricRenderFollowGlobal = "Theo cài đặt chung"
 lyricRenderScaleStyleHint = "Kiểu này vẽ ở bao nhiêu lần độ phân giải; trên 1× là siêu lấy mẫu. Theo cài đặt chung dùng giá trị trong Hiệu năng & Hoạt họa (hiện là {{value}})."
@@ -891,6 +895,7 @@ midnightDefault = "Mặc định nửa đêm"
 daylightDefault = "Mặc định ban ngày"
 
 [status]
+customSourceUnavailable = "Các nguồn tùy chỉnh hiện không phát được bài hát này. Hãy kiểm tra nguồn đang bật và nền tảng được hỗ trợ."
 themeGenerationFailed = "Tạo chủ đề thất bại."
 graphicsInitializationFailed = "Không thể khởi tạo đồ họa. Hãy thử đặt WGPU_BACKEND=dx12 hoặc WGPU_BACKEND=vulkan."
 loadingSong = "Đang tải URL bài hát..."

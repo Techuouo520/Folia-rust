@@ -38,22 +38,34 @@ pub struct CustomSource {
 pub struct SourceSettings {
     pub enabled: Vec<String>,
     pub scripts: Vec<CustomSource>,
+    pub custom_only: bool,
 }
 
 impl Domain for SourceSettings {
     const FILE: &'static str = "sources.toml";
-    const SCHEMA_VERSION: u32 = 2;
+    const SCHEMA_VERSION: u32 = 3;
 }
 
 impl SourceSettings {
-    /// Migrates version 1 without changing the imported scripts or losing the selected source.
+    /// Preserves source order and activation while migrating older playback routing settings.
     pub fn load(store: &Store) -> Result<Self, StoreError> {
         match store.load::<Self>() {
             Err(StoreError::SchemaVersion { found: 1, .. }) => {
                 let previous: SingleSourceSettings = store.load()?;
-                let settings = Self { enabled: previous.enabled.into_iter().collect(), scripts: previous.scripts };
+                let settings = Self {
+                    enabled: previous.enabled.into_iter().collect(),
+                    scripts: previous.scripts,
+                    custom_only: false,
+                };
                 store.save(&settings)?;
-                tracing::info!("custom source settings migrated to multiple activation");
+                tracing::info!(from = 1, "custom source settings migrated to playback routing");
+                Ok(settings)
+            }
+            Err(StoreError::SchemaVersion { found: 2, .. }) => {
+                let previous: MultipleSourceSettings = store.load()?;
+                let settings = Self { enabled: previous.enabled, scripts: previous.scripts, custom_only: false };
+                store.save(&settings)?;
+                tracing::info!(from = 2, "custom source settings migrated to playback routing");
                 Ok(settings)
             }
             result => result,
@@ -71,4 +83,16 @@ struct SingleSourceSettings {
 impl Domain for SingleSourceSettings {
     const FILE: &'static str = SourceSettings::FILE;
     const SCHEMA_VERSION: u32 = 1;
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct MultipleSourceSettings {
+    enabled: Vec<String>,
+    scripts: Vec<CustomSource>,
+}
+
+impl Domain for MultipleSourceSettings {
+    const FILE: &'static str = SourceSettings::FILE;
+    const SCHEMA_VERSION: u32 = 2;
 }

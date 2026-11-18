@@ -40,6 +40,24 @@ pub fn view<'a, M: 'a>(
     plate(mark_faded(platform, 20.0, opacity), title, daylight, width, opacity, shift)
 }
 
+pub fn custom_source_view<'a, M: 'a>(
+    i18n: &I18n,
+    daylight: bool,
+    width: f32,
+    opacity: f32,
+    shift: f32,
+) -> Element<'a, M> {
+    let color = Color { a: opacity, ..Color::from_rgb8(0xef, 0x44, 0x44) };
+    plate(
+        crate::icons::icon(lucide_static_svg::Icon::Plug, 20.0, color).into(),
+        i18n.t("status.customSourceUnavailable").to_owned(),
+        daylight,
+        width,
+        opacity,
+        shift,
+    )
+}
+
 /// What the sync button's read did, as the toast says it.
 #[derive(Debug, Clone, Copy)]
 pub struct SyncOutcome {

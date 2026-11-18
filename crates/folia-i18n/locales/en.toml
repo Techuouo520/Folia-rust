@@ -2,6 +2,10 @@
 name = "Folia"
 
 [options]
+sourceCustomOnly = "Use custom sources only"
+sourceCustomOnlyHint = "Hide platform account controls and use enabled custom sources for playback. When off, try custom sources first, then the platform. Changing mode stops online playback and keeps the queue."
+sourceCustomOnlyPriorityHint = "Drag source rows to reorder them. Enabled sources are tried from top to bottom; playback stops if all fail."
+sourceCustomOnlySearchHint = "Find songs through search. Custom sources provide playback URLs in list order. Search and lyrics use the selected platform."
 lyricRenderSection = "Rendering"
 lyricRenderFollowGlobal = "Follow global"
 lyricRenderScaleStyleHint = "How many times the resolution this style draws at; above 1× supersamples. Follow global uses the setting in Performance & motion (now {{value}})."
@@ -892,6 +896,7 @@ midnightDefault = "Midnight Default"
 daylightDefault = "Daylight Default"
 
 [status]
+customSourceUnavailable = "Custom sources cannot play this song right now. Check your enabled sources and the platforms they support."
 themeGenerationFailed = "Theme generation failed."
 graphicsInitializationFailed = "Graphics initialization failed. Try setting WGPU_BACKEND=dx12 or WGPU_BACKEND=vulkan."
 loadingSong = "Loading song URL..."

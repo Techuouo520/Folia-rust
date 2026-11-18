@@ -67,6 +67,24 @@ impl Sources {
         self.state.lock().unwrap_or_else(PoisonError::into_inner).settings.clone()
     }
 
+    pub fn custom_only(&self) -> bool {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner).settings.custom_only
+    }
+
+    pub fn set_custom_only(&self, custom_only: bool) -> Result<SourceSettings, SourceError> {
+        let _operation = self.mutations.lock().unwrap_or_else(PoisonError::into_inner);
+        let config = self.config()?;
+        let mut settings = self.list();
+        if settings.custom_only == custom_only {
+            return Ok(settings);
+        }
+        settings.custom_only = custom_only;
+        config.store.save(&settings)?;
+        self.state.lock().unwrap_or_else(PoisonError::into_inner).settings = settings.clone();
+        tracing::info!(custom_only, "custom source playback routing changed");
+        Ok(settings)
+    }
+
     pub fn active(&self, platform: &str) -> Vec<(String, Script)> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state

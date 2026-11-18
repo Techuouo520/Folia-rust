@@ -52,6 +52,8 @@ pub enum OmniError {
     Unavailable,
     #[error("a paid subscription is required to play this song")]
     SubscriptionRequired,
+    #[error("no enabled custom source can play this song")]
+    CustomSourceUnavailable,
     #[error("not signed in")]
     SignedOut,
     /// The platform has no such capability in the original either.
@@ -474,11 +476,25 @@ impl Omni {
         store: folia_store::Store,
         data_dir: PathBuf,
     ) -> Result<lx::SourceSettings, lx::SourceError> {
-        self.sources.restore(store, data_dir, self.http.clone())
+        let result = self.sources.restore(store, data_dir, self.http.clone());
+        self.audio_cache.invalidate();
+        result
     }
 
     pub fn custom_sources(&self) -> lx::SourceSettings {
         self.sources.list()
+    }
+
+    /// Whether audio is restricted to the enabled custom sources.
+    pub fn custom_source_only(&self) -> bool {
+        self.sources.custom_only()
+    }
+
+    /// Persists custom-only playback and invalidates work prepared under the previous routing policy.
+    pub fn set_custom_source_only(&self, custom_only: bool) -> Result<lx::SourceSettings, lx::SourceError> {
+        let settings = self.sources.set_custom_only(custom_only)?;
+        self.audio_cache.invalidate();
+        Ok(settings)
     }
 
     pub fn import_source(&self, path: &Path) -> Result<lx::SourceSettings, lx::SourceError> {
@@ -558,8 +574,15 @@ impl Omni {
                 }
             }
         }
+        self.allow_native_audio()?;
         tracing::info!(provider = song.provider, "resolving audio through native platform");
-        provider.audio_source(song, resolve_quality(provider.audio_quality_levels(), preference)).await
+        let result = provider.audio_source(song, resolve_quality(provider.audio_quality_levels(), preference)).await;
+        self.allow_native_audio()?;
+        result
+    }
+
+    fn allow_native_audio(&self) -> Result<(), OmniError> {
+        if self.sources.custom_only() { Err(OmniError::CustomSourceUnavailable) } else { Ok(()) }
     }
 
     async fn custom_audio_source(

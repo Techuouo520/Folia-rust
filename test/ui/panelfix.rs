@@ -111,6 +111,7 @@ pub(super) fn panel_view<'a>(i18n: &'a I18n, theme: &'a Theme, queue: &'a [folia
         art: None::<&Handle>,
         pill_hover: false,
         platform: None,
+        account_controls: true,
         account: None,
         account_avatar: None,
         syncing: false,

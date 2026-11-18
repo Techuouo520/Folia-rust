@@ -25,6 +25,7 @@ pub enum Message {
     Enable(String, bool),
     Move(String, usize),
     Delete(String),
+    CustomOnly(bool),
     Finished(SourceSettings, Option<&'static str>, Vec<(String, UpdateAlert)>),
     OpenUpdate(String),
     DismissUpdates,
@@ -41,6 +42,10 @@ pub struct Sources {
 }
 
 impl Sources {
+    pub fn custom_only(&self) -> bool {
+        self.settings.custom_only
+    }
+
     pub fn restore(&mut self, omni: Option<Omni>, store: Store, data: PathBuf) -> Task<crate::Message> {
         let Some(omni) = omni else { return Task::none() };
         self.busy = true;
@@ -121,6 +126,7 @@ impl Sources {
             Message::Enable(id, enabled) => omni.enable_source(&id, enabled).map(|_| ()),
             Message::Move(id, index) => omni.move_source(&id, index).map(|_| ()),
             Message::Delete(id) => omni.remove_source(&id).map(|_| ()),
+            Message::CustomOnly(enabled) => omni.set_custom_source_only(enabled).map(|_| ()),
             _ => Ok(()),
         })
     }
@@ -139,7 +145,7 @@ impl Sources {
         group: Group<'a, crate::Message>,
         first: bool,
     ) -> Element<'a, crate::Message> {
-        let draggable = if !self.busy && self.alerts.is_empty() { 2..2 + self.settings.scripts.len() } else { 0..0 };
+        let draggable = if !self.busy && self.alerts.is_empty() { 3..3 + self.settings.scripts.len() } else { 0..0 };
         kit::group_with_rows(tokens, group, first, |rows| {
             crate::drag_to_reorder(
                 rows,
@@ -150,8 +156,8 @@ impl Sources {
                     crate::Message::Sources(
                         self.settings
                             .scripts
-                            .get(from.saturating_sub(2))
-                            .map_or(Message::Poll, |source| Message::Move(source.id.clone(), to.saturating_sub(2))),
+                            .get(from.saturating_sub(3))
+                            .map_or(Message::Poll, |source| Message::Move(source.id.clone(), to.saturating_sub(3))),
                     )
                 },
                 |y| {
@@ -234,6 +240,21 @@ impl Sources {
                 selection: tokens.fill2,
             });
         let mut rows = vec![
+            Row {
+                label: i18n.t("options.sourceCustomOnly").into(),
+                hint: Some(i18n.t("options.sourceCustomOnlyHint").into()),
+                sub: false,
+                below: None,
+                control: if self.busy {
+                    kit::toggle_fixed(tokens, f32::from(self.settings.custom_only))
+                } else {
+                    kit::toggle(
+                        tokens,
+                        f32::from(self.settings.custom_only),
+                        crate::Message::Sources(Message::CustomOnly(!self.settings.custom_only)),
+                    )
+                },
+            },
             Row {
                 label: i18n.t("options.sourceImportUrl").into(),
                 hint: Some(i18n.t(if self.busy { "options.sourceWorking" } else { "options.sourceUrlHint" }).into()),
@@ -329,6 +350,8 @@ impl Sources {
                 Some(
                     i18n.t(if self.settings.scripts.is_empty() {
                         "options.sourceEmpty"
+                    } else if self.settings.custom_only {
+                        "options.sourceCustomOnlyPriorityHint"
                     } else {
                         "options.sourcePriorityHint"
                     })
@@ -362,10 +385,11 @@ fn run(
     omni: Omni,
     work: impl FnOnce(&Omni) -> Result<(), folia_omni::lx::SourceError> + Send + 'static,
 ) -> Task<crate::Message> {
+    let previous = omni.custom_sources();
     Task::perform(crate::background::blocking(move || finished(&omni, work(&omni))), |result| {
-        crate::Message::Sources(result.unwrap_or_else(|| {
-            Message::Finished(SourceSettings::default(), Some("options.sourceErrorScript"), Vec::new())
-        }))
+        crate::Message::Sources(
+            result.unwrap_or_else(|| Message::Finished(previous, Some("options.sourceErrorScript"), Vec::new())),
+        )
     })
 }
 
