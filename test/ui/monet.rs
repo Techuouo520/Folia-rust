@@ -27,7 +27,6 @@ fn scene<'a>(lyrics: &'a Lyrics, theme: &'a Theme) -> Scene<'a> {
         artist: "folia".into(),
         album: String::new(),
         portrait: None,
-        smart_beat: folia_core::SmartBeat::default(),
         render_quality: folia_core::LyricRenderQuality::default(),
         static_mode: false,
         typography: folia_visualizer::Typography::default(),

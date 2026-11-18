@@ -11,7 +11,7 @@ cargo test --manifest-path test/Cargo.toml --workspace
 
 ## GitHub CI
 
-CI 在 `main` 推送和 PR 更新时运行。CI 使用下列明确的特性组合，硬件 GPU 回归会标记为跳过。
+CI 在 `main`、`test-*` 分支推送和 PR 更新时运行。改动先在测试分支通过全部检查，再合入 `main`。CI 使用下列明确的特性组合，硬件 GPU 回归会标记为跳过。
 
 ```powershell
 cargo test --manifest-path test/Cargo.toml --workspace --features test-ui/ci,test-render/ci,test-visualizer/ci,test-visual-lumiere/ci,test-visual-monet/ci

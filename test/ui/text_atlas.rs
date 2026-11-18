@@ -112,7 +112,6 @@ fn draw(
         artist: "昆仑 / 在与东".into(),
         album: String::new(),
         portrait: None,
-        smart_beat: folia_core::SmartBeat::default(),
         render_quality: folia_core::LyricRenderQuality::default(),
         static_mode: false,
         typography: folia_visualizer::Typography::default(),

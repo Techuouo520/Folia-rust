@@ -49,7 +49,7 @@ pub fn custom_source_view<'a, M: 'a>(
 ) -> Element<'a, M> {
     let color = Color { a: opacity, ..Color::from_rgb8(0xef, 0x44, 0x44) };
     plate(
-        crate::icons::icon(lucide_static_svg::Icon::Plug, 20.0, color).into(),
+        crate::icons::icon(lucide_static_svg::Icon::Plug, 20.0, color),
         i18n.t("status.customSourceUnavailable").to_owned(),
         daylight,
         width,

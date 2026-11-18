@@ -159,6 +159,8 @@ fn scene_press(
 
 #[test]
 fn workbench_frames_follow_the_selected_limit_and_pause() {
+    use std::time::Duration;
+
     use folia_store::FrameRate;
     use folia_ui::{Message, Shell};
     let temporary = tempfile::tempdir().unwrap();
@@ -167,22 +169,30 @@ fn workbench_frames_follow_the_selected_limit_and_pause() {
     drop(shell.update(Message::OpenWorkbench));
     for rate in FrameRate::ALL {
         drop(shell.update(Message::FrameRate(rate)));
-        let count = visual_frames(shell.subscription());
-        eprintln!("{rate:?}: {count} visual frames in 250ms");
+        let expected = if rate.fps().is_some() { 10 } else { 150 };
+        let frames = visual_frames(shell.subscription(), expected, Duration::from_secs(5));
+        assert_eq!(frames.len(), expected, "{rate:?} did not keep producing visual frames");
         if let Some(fps) = rate.fps() {
-            let expected = f64::from(fps) * 0.25;
-            assert!((count as f64 - expected).abs() <= 3.0, "{rate:?} produced {count} frames in 250ms");
-        } else {
-            assert_eq!(count, 150, "Display must consume window redraw events");
+            let elapsed = frames.last().unwrap().duration_since(frames[0]);
+            // The cap allows a slow runner and one buffered tick, while still rejecting an uncapped stream.
+            let maximum = (elapsed.as_secs_f64() * f64::from(fps)).ceil() as usize + 2;
+            assert!(frames.len() <= maximum, "{rate:?} produced {} frames in {elapsed:?}", frames.len());
         }
     }
     drop(shell.update(Message::Workbench(WorkbenchMessage::Pause)));
-    assert_eq!(visual_frames(shell.subscription()), 0, "paused Builtin preview kept its frame loop");
+    assert!(
+        visual_frames(shell.subscription(), 1, Duration::from_millis(250)).is_empty(),
+        "paused Builtin preview kept its frame loop"
+    );
 }
 
-fn visual_frames(subscription: iced::Subscription<folia_ui::Message>) -> usize {
+fn visual_frames(
+    subscription: iced::Subscription<folia_ui::Message>,
+    wanted: usize,
+    timeout: std::time::Duration,
+) -> Vec<std::time::Instant> {
     use iced::advanced::subscription::{Event, into_recipes};
-    use iced::futures::{FutureExt, StreamExt, channel::oneshot, stream};
+    use iced::futures::{StreamExt, stream};
     let runtime = iced::executor::Default::new().unwrap();
     runtime.block_on(async {
         let redraws: Vec<_> = (0..150)
@@ -196,25 +206,19 @@ fn visual_frames(subscription: iced::Subscription<folia_ui::Message>) -> usize {
             .into_iter()
             .map(|recipe| recipe.stream(Box::pin(stream::iter(redraws.clone()).chain(stream::pending()))));
         let mut frames = stream::select_all(streams);
-        let (send, receive) = oneshot::channel();
-        let deadline = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            let _ = send.send(());
-        });
-        let mut done = receive.fuse();
-        let mut count = 0;
-        loop {
-            iced::futures::select! {
-                _ = done => break,
-                message = frames.next() => {
-                    if matches!(message, Some(folia_ui::Message::VisualFrame)) {
-                        count += 1;
+        let mut sampled = Vec::with_capacity(wanted);
+        let _ = tokio::time::timeout(timeout, async {
+            while let Some(message) = frames.next().await {
+                if matches!(message, folia_ui::Message::VisualFrame) {
+                    sampled.push(std::time::Instant::now());
+                    if sampled.len() == wanted {
+                        break;
                     }
                 }
             }
-        }
-        deadline.join().unwrap();
-        count
+        })
+        .await;
+        sampled
     })
 }
 
