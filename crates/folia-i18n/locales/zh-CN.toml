@@ -791,6 +791,7 @@ queueClearConfirm = "再点一次清空"
 queueDragHandle = "拖动排序"
 
 [home]
+connectFromAvatar = "请在左上角头像选择平台进行连接"
 switchOnlineProvider = "切换在线音乐平台"
 confirmOnlineProviderSwitch = "切换到 {{provider}}？当前在线播放与队列将被清空。"
 loading = "加载中..."
@@ -1075,3 +1076,8 @@ counts = "{{songs}} 首 · {{albums}} 专辑"
 importJsonTitle = "2. 粘贴并导入 JSON"
 copyPromptTitle = "1. 复制 AI 提示词"
 copyPrompt = "复制提示词"
+
+[sponsorship]
+thanks = "感谢 {{name}}"
+contribution = "赞助 {{amount}} 元，支持 Folia 开发"
+support = "支持 Folia 持续开发"

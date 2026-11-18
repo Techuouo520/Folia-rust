@@ -791,6 +791,7 @@ queueClearConfirm = "Klik sekali lagi untuk mengosongkan"
 queueDragHandle = "Seret untuk mengurutkan"
 
 [home]
+connectFromAvatar = "Ketuk avatar di sudut kiri atas, lalu pilih platform untuk terhubung."
 switchOnlineProvider = "Ganti penyedia musik online"
 confirmOnlineProviderSwitch = "Ganti ke {{provider}}? Pemutaran online dan antrean saat ini akan dihapus."
 loading = "Memuat..."
@@ -1076,3 +1077,8 @@ counts = "{{songs}} lagu · {{albums}} album"
 importJsonTitle = "2. Tempel Hasil JSON"
 copyPromptTitle = "1. Salin Prompt AI"
 copyPrompt = "Salin prompt"
+
+[sponsorship]
+thanks = "Terima kasih, {{name}}"
+contribution = "Menyumbang CNY {{amount}} untuk mendukung pengembangan Folia"
+support = "Dukung pengembangan Folia yang berkelanjutan"

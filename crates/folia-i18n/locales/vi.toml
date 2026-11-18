@@ -790,6 +790,7 @@ queueClearConfirm = "Nhấn lần nữa để xóa hàng đợi"
 queueDragHandle = "Kéo để sắp xếp lại"
 
 [home]
+connectFromAvatar = "Chạm vào ảnh đại diện ở góc trên bên trái và chọn một nền tảng để kết nối."
 switchOnlineProvider = "Đổi nền tảng nhạc trực tuyến"
 confirmOnlineProviderSwitch = "Chuyển sang {{provider}}? Danh sách phát và bài đang phát trực tuyến sẽ bị xóa."
 loading = "Đang tải..."
@@ -1075,3 +1076,8 @@ counts = "{{songs}} bài hát · {{albums}} album"
 importJsonTitle = "2. Dán kết quả JSON"
 copyPromptTitle = "1. Sao chép prompt AI"
 copyPrompt = "Sao chép prompt"
+
+[sponsorship]
+thanks = "Cảm ơn {{name}}"
+contribution = "Ủng hộ {{amount}} CNY cho việc phát triển Folia"
+support = "Hỗ trợ Folia tiếp tục phát triển"

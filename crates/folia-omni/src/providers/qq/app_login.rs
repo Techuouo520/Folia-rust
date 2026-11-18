@@ -8,6 +8,7 @@ use rumqttc::v5::mqttbytes::v5::{
     SubscribeProperties, SubscribeReasonCode,
 };
 use rumqttc::v5::mqttbytes::{Error as PacketError, QoS};
+use rustls_platform_verifier::BuilderVerifierExt;
 use serde_json::Value;
 use tokio_tungstenite::tungstenite::{
     Error as SocketError, Message, client::IntoClientRequest, error::TlsError, protocol::WebSocketConfig,
@@ -246,26 +247,12 @@ fn socket_error(error: SocketError) -> OmniError {
 }
 
 fn tls_config() -> Result<std::sync::Arc<rustls::ClientConfig>, OmniError> {
-    let certificates = rustls_native_certs::load_native_certs();
-    for error in certificates.errors {
-        tracing::warn!(
-            error = &error as &dyn std::error::Error,
-            "QQ sign-in certificate store entry could not be loaded"
-        );
-    }
-    let mut roots = rustls::RootCertStore::empty();
-    let (accepted, rejected) = roots.add_parsable_certificates(certificates.certs);
-    if rejected > 0 {
-        tracing::warn!(rejected, "QQ sign-in certificate store contained invalid entries");
-    }
-    if accepted == 0 {
-        return Err(OmniError::Response("QQ sign-in certificate store is empty".into()));
-    }
     let config =
         rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
             .map_err(|error| socket_error(SocketError::Tls(TlsError::Rustls(Box::new(error)))))?
-            .with_root_certificates(roots)
+            .with_platform_verifier()
+            .map_err(|error| socket_error(SocketError::Tls(TlsError::Rustls(Box::new(error)))))?
             .with_no_client_auth();
     Ok(std::sync::Arc::new(config))
 }

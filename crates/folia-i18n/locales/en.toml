@@ -791,6 +791,7 @@ queueClearConfirm = "Click again to clear the queue"
 queueDragHandle = "Drag to reorder"
 
 [home]
+connectFromAvatar = "Tap the avatar in the top-left corner and choose a platform to connect."
 switchOnlineProvider = "Switch online music provider"
 confirmOnlineProviderSwitch = "Switch to {{provider}}? Current online playback and queue will be cleared."
 loading = "Loading..."
@@ -1076,3 +1077,8 @@ counts = "{{songs}} songs · {{albums}} albums"
 importJsonTitle = "2. Paste JSON Result"
 copyPromptTitle = "1. Copy AI Prompt"
 copyPrompt = "Copy prompt"
+
+[sponsorship]
+thanks = "Thank you, {{name}}"
+contribution = "Contributed CNY {{amount}} to support Folia development"
+support = "Support Folia's continued development"

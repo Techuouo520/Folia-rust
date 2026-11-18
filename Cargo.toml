@@ -15,7 +15,7 @@ bytes = "1.12.1"
 futures-util = { version = "0.3.34", features = ["sink"] }
 rumqttc = { version = "=0.25.1", default-features = false }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-native-certs = "0.8.5"
+rustls-platform-verifier = "=0.7.1"
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 unicode-script = "0.5.8"
 unicode-vo = "0.1.0"

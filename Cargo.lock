@@ -1659,7 +1659,7 @@ dependencies = [
  "rsa",
  "rumqttc",
  "rustls 0.23.46",
- "rustls-native-certs 0.8.5",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
