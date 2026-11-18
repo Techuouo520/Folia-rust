@@ -1,6 +1,6 @@
 // Synthetic LX protocol tests; all HTTP traffic stays on a local std TCP listener.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -239,13 +239,26 @@ async fn concurrent_tiles_share_one_cover_download() {
     listener.set_nonblocking(true).unwrap();
     let received = Arc::new(AtomicUsize::new(0));
     let count = received.clone();
+    let (shutdown, stopped) = std::sync::mpsc::channel::<()>();
     let server = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while Instant::now() < deadline {
+        while matches!(stopped.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)) {
             match listener.accept() {
                 Ok((mut socket, _)) => {
-                    let mut request = [0u8; 2048];
-                    socket.read(&mut request).unwrap();
+                    socket.set_nonblocking(false).unwrap();
+                    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    socket.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut reader = std::io::BufReader::new(&mut socket);
+                    let mut request = String::new();
+                    loop {
+                        let read = reader.read_line(&mut request).unwrap();
+                        if read == 0 || request.ends_with("\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    if !request.ends_with("\r\n\r\n") {
+                        continue;
+                    }
+                    assert!(request.starts_with("GET /cover?px=512 HTTP/1.1\r\n"), "{request}");
                     count.fetch_add(1, Ordering::Relaxed);
                     std::thread::sleep(Duration::from_millis(80));
                     socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nRGBA").unwrap();
@@ -264,16 +277,21 @@ async fn concurrent_tiles_share_one_cover_download() {
         vec![Box::new(Native { calls: Arc::new(AtomicUsize::new(0)), url })],
     )
     .unwrap();
-    let (a, b, c) = tokio::join!(
-        omni.fetch_cover("https://cover.fixture/same", 512),
-        omni.fetch_cover("https://cover.fixture/same", 512),
-        omni.fetch_cover("https://cover.fixture/same", 512)
-    );
+    let responses = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            omni.fetch_cover("https://cover.fixture/same", 512),
+            omni.fetch_cover("https://cover.fixture/same", 512),
+            omni.fetch_cover("https://cover.fixture/same", 512)
+        )
+    })
+    .await;
+    drop(shutdown);
+    server.join().unwrap();
+    let (a, b, c) = responses.expect("concurrent cover downloads did not finish");
     let a = a.unwrap();
     assert_eq!(a, b.unwrap());
     assert_eq!(a, c.unwrap());
     assert_eq!(std::fs::read(a).unwrap(), b"RGBA");
-    server.join().unwrap();
     assert_eq!(received.load(Ordering::Relaxed), 1, "identical cover URLs downloaded more than once");
 }
 
