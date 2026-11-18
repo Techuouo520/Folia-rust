@@ -153,15 +153,20 @@ fn fs_plate_blur(input: VsOut) -> @location(0) vec4<f32> {
 
     let window = max(u.window, vec2<f32>(1.0));
     let uv = (u.widget + px) / window;
-    var blurred = textureSample(blur_tex, blur_samp, uv).rgb;
+    let backdrop = textureSample(blur_tex, blur_samp, uv);
+    let backdrop_alpha = clamp(backdrop.a, 0.0, 1.0);
+    // Blur preserves premultiplied coverage, including transparent native-window regions.
+    var blurred = backdrop.rgb / max(backdrop_alpha, 0.0001);
     // The backdrop is linear in an sRGB target. CSS runs the filter and the translucent fill in sRGB:
     // saturate the backdrop first, then paint the element's own background over it.
     if (u.encode > 0.5) {
         blurred = to_srgb(blurred);
     }
     blurred = sat(blurred, u.saturate);
-    let tinted = mix(blurred, u.fill.rgb, u.fill.a);
-    let glass_a = inside * u.fade;
+    let tinted_alpha = u.fill.a + backdrop_alpha * (1.0 - u.fill.a);
+    let tinted = (blurred * backdrop_alpha * (1.0 - u.fill.a) + u.fill.rgb * u.fill.a)
+        / max(tinted_alpha, 0.0001);
+    let glass_a = tinted_alpha * inside * u.fade;
 
     var rgb = u.shadow.rgb;
     var a = shadow_a;

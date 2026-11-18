@@ -237,7 +237,7 @@ impl Uniform {
 
     fn write(&self, queue: &wgpu::Queue, values: [f32; 4]) {
         let mut bytes = [0; 16];
-        for (slot, value) in bytes.chunks_exact_mut(4).zip(values) {
+        for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(values) {
             slot.copy_from_slice(&value.to_le_bytes());
         }
         queue.write_buffer(&self.buffer, 0, &bytes);
