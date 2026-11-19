@@ -1656,7 +1656,7 @@ fn item_row<'a>(
             space().into()
         }
     };
-    let hint = match item {
+    let mut hint = match item {
         Item::Button { path_key: Some(path), .. } => values
             .path(path)
             .and_then(|path| std::path::Path::new(path).file_name())
@@ -1667,6 +1667,11 @@ fn item_row<'a>(
         | Item::Picture { hint_key: Some(hint), .. } => Some(i18n.t(manifest.label(values, hint)).to_owned()),
         _ => None,
     };
+    if matches!(item, Item::Select { .. })
+        && let Some(description) = hint.take()
+    {
+        below = Some(crate::typeface::HINT.text(description).color(tokens.t2).width(Length::Fill).into());
+    }
     let label = manifest
         .labels_when
         .iter()

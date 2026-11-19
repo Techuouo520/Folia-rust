@@ -158,7 +158,7 @@ fn paint<M>(root: Element<'_, M>, size: Size, clear: Color) -> Vec<u8> {
     )
 }
 
-// Native copy follows AI service routing, system blur and WGPU/analysis behavior, in en/zh-CN/in/vi order.
+// Native service wording and concise workbench hints, in en/zh-CN/in/vi order.
 const NATIVE_LOCALE_COPY: &[(&str, [&str; 4])] = &[
     (
         "options.configureAiApiKey",
@@ -220,6 +220,15 @@ const NATIVE_LOCALE_COPY: &[(&str, [&str; 4])] = &[
             "各歌词动画中的动感效果可独立开关和调节强度。Beat This! 识别节拍，HTDemucs 分离鼓声与人声。画面上有效果需要时才在后台分析，完整结果会保存供以后复用。",
             "Gerakkan setiap efek aktif dengan analisis musik. Beat This! mencari ketukan, dan HTDemucs memisahkan drum serta vokal. Model berjalan di latar saat efek yang terlihat membutuhkannya. Hasil lengkap disimpan.",
             "Điều khiển từng hiệu ứng đang bật bằng phân tích âm nhạc. Beat This! nhận diện nhịp, HTDemucs tách trống và giọng hát. Mô hình chạy nền khi hiệu ứng đang hiển thị cần dùng, và lưu kết quả hoàn chỉnh.",
+        ],
+    ),
+    (
+        "options.beatEffect_nebbiaDrizzleRideDesc",
+        [
+            "Raindrops follow vocals and the bus moves with the beat. Adjust their intensity separately.",
+            "雨滴随人声变化，车身随鼓点起伏，可分别调节强度。",
+            "Tetes hujan mengikuti vokal dan bus bergerak mengikuti irama. Atur intensitasnya secara terpisah.",
+            "Giọt mưa theo giọng hát, xe chuyển động theo nhịp trống. Có thể chỉnh cường độ riêng.",
         ],
     ),
 ];
