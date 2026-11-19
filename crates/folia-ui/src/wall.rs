@@ -335,6 +335,9 @@ struct Shade {
     /// An album mosaic's lighter foot, so the pieces read as one cover.
     mosaic: Handle,
     ground: Handle,
+    expanded_up: Handle,
+    expanded_side: Handle,
+    focus_glow: Handle,
     /// The shade's colour for what stays a filled shape: the grown card's bands, the mosaic copy's shadow.
     tint: Color,
 }
@@ -347,9 +350,33 @@ impl Shade {
             fade: shade_column(channel, &[(0.0, 0.05), (0.34, 0.05), (0.56, 0.24), (1.0, 0.92)]),
             mosaic: shade_column(channel, &[(0.0, 0.0), (0.55, 0.0), (0.74, 0.12), (1.0, 0.40)]),
             ground: Handle::from_rgba(1, 1, vec![channel, channel, channel, 255]),
+            expanded_up: shade_strip(channel, &focus_card::EXPANDED_SHADE, false, true),
+            expanded_side: shade_strip(channel, &focus_card::EXPANDED_SIDE, true, false),
+            focus_glow: shade_strip(255, &[(0.0, 0.1), (0.6, 0.0)], false, false),
             tint: Color::from_rgb8(channel, channel, channel),
         }
     }
+}
+
+/// Samples the same smooth interpolation as iced's canvas gradients, extending the final stop.
+fn shade_strip(channel: u8, stops: &[(f32, f32)], horizontal: bool, reversed: bool) -> Handle {
+    const SIDE: u32 = 1024;
+    let pixels = (0..SIDE)
+        .flat_map(|index| {
+            let t = (index as f32 + 0.5) / SIDE as f32;
+            let t = if reversed { 1.0 - t } else { t };
+            let alpha = stops.windows(2).find(|pair| t <= pair[1].0).map_or_else(
+                || stops.last().map_or(0.0, |(_, alpha)| *alpha),
+                |pair| {
+                    let ((start, a), (end, b)) = (pair[0], pair[1]);
+                    let p = ((t - start) / (end - start)).clamp(0.0, 1.0);
+                    a + (b - a) * p * p * (3.0 - 2.0 * p)
+                },
+            );
+            [channel, channel, channel, (alpha * 255.0).round() as u8]
+        })
+        .collect::<Vec<u8>>();
+    Handle::from_rgba(if horizontal { SIDE } else { 1 }, if horizontal { 1 } else { SIDE }, pixels)
 }
 
 /// A one-pixel-wide image whose alpha runs through `stops` (position, alpha) from top to bottom.
@@ -2740,27 +2767,17 @@ impl Wall {
 
 /// `.is-expanded .lattice-poster-shade`: a band up from the bottom and one in from the left, over the card's own shade.
 fn draw_grown_shade(frame: &mut Frame, rect: Rectangle, palette: &Palette) {
-    let Rectangle { x, y, width, height } = rect;
-    let mut up = gradient::Linear::new(Point::new(x, y + height), Point::new(x, y));
-    for (at, alpha) in focus_card::EXPANDED_SHADE {
-        up = up.add_stop(at, palette.tint(alpha));
-    }
-    frame.fill(&Path::rectangle(rect.position(), rect.size()), up);
-    let mut across = gradient::Linear::new(Point::new(x, y), Point::new(x + width, y));
-    for (at, alpha) in focus_card::EXPANDED_SIDE {
-        across = across.add_stop(at, palette.tint(alpha));
-    }
-    frame.fill(&Path::rectangle(rect.position(), rect.size()), across);
+    // Sample the masks once, then scale them with the cover instead of rebuilding gradient
+    // meshes throughout reflow. These tiny strips are shared by all wall tiles.
+    frame.draw_image(rect, canvas::Image::new(palette.shade.expanded_up.clone()));
+    frame.draw_image(rect, canvas::Image::new(palette.shade.expanded_side.clone()));
 }
 
 /// Keyboard focus: the top highlight (`::after`, white 10% to nothing at 60%) and, on a tile without the playing
 /// stroke, the ring of hairline, ink and hairline outside it.
 fn draw_focus(frame: &mut Frame, rect: Rectangle, current: bool, daylight: bool, palette: &Palette) {
-    let Rectangle { x, y, height, .. } = rect;
-    let glow = gradient::Linear::new(Point::new(x, y), Point::new(x, y + height))
-        .add_stop(0.0, Color::from_rgba(1.0, 1.0, 1.0, 0.1))
-        .add_stop(0.6, Color::TRANSPARENT);
-    frame.fill(&Path::rectangle(rect.position(), rect.size()), glow);
+    let Rectangle { x, y, .. } = rect;
+    frame.draw_image(rect, canvas::Image::new(palette.shade.focus_glow.clone()));
     if current {
         return;
     }

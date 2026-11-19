@@ -21,6 +21,7 @@ mod scene;
 mod scroll_timeline;
 mod seam_title;
 mod session;
+mod settings_layout;
 #[cfg(all(feature = "stress", not(feature = "ci")))]
 mod text_atlas;
 mod transparent;

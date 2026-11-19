@@ -20,3 +20,4 @@ mod glyphs;
 #[cfg(windows)]
 mod native_frame;
 mod scene;
+mod surface_alpha;

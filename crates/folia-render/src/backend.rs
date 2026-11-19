@@ -18,6 +18,27 @@ pub fn configured() -> Vec<Backends> {
     candidates(cfg!(windows), std::env::var("WGPU_BACKEND").ok().as_deref())
 }
 
+/// Prefer an eight-bit alpha surface for transparent windows. RGB10A2 offers only four
+/// alpha levels, which cannot preserve premultiplied text edges, fades or glass shadows.
+pub fn surface_format(formats: &[wgpu::TextureFormat], gamma_correction: bool) -> Option<wgpu::TextureFormat> {
+    use wgpu::TextureFormat;
+    let preferred = if gamma_correction {
+        [TextureFormat::Bgra8UnormSrgb, TextureFormat::Rgba8UnormSrgb]
+    } else {
+        [TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm]
+    };
+    preferred
+        .into_iter()
+        .find(|format| formats.contains(format))
+        .or_else(|| {
+            formats
+                .iter()
+                .copied()
+                .find(|format| format.required_features().is_empty() && format.is_srgb() == gamma_correction)
+        })
+        .or_else(|| formats.first().copied())
+}
+
 static POWER: Mutex<wgpu::PowerPreference> = Mutex::new(wgpu::PowerPreference::HighPerformance);
 static ADAPTER_NAME: Mutex<Option<String>> = Mutex::new(None);
 

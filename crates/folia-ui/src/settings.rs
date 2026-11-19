@@ -234,6 +234,8 @@ pub struct Settings {
     query: String,
     tab: Option<&'static str>,
     opened: Instant,
+    /// One animation sample per update; layout/scroll feedback must not advance the same frame.
+    frame_time: Instant,
     closing: Option<Instant>,
     page_at: Instant,
     motions: Vec<Motion>,
@@ -254,6 +256,7 @@ impl Settings {
             query: String::new(),
             tab: None,
             opened: now,
+            frame_time: now,
             closing: None,
             page_at: now,
             motions: Vec::new(),
@@ -268,7 +271,10 @@ impl Settings {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        let now = Instant::now();
+        if !matches!(message, Message::Scrolled(_) | Message::Measured(..)) || !self.animating() {
+            self.frame_time = Instant::now();
+        }
+        let now = self.frame_time;
         match message {
             Message::AskNativeBlur => {
                 self.asking_native_blur = true;
@@ -355,7 +361,8 @@ impl Settings {
 
     /// Glides the marks of whatever the change moved.
     pub fn changed(&mut self, before: &AppearanceSettings, after: &AppearanceSettings) {
-        let now = Instant::now();
+        self.frame_time = Instant::now();
+        let now = self.frame_time;
         let theme_index = |settings: &AppearanceSettings| {
             let mode = (!settings.follow_system_theme).then_some(settings.theme);
             THEMES.iter().position(|m| *m == mode).unwrap_or(0) as f32
@@ -374,6 +381,7 @@ impl Settings {
     }
 
     pub fn graphics_changed(&mut self, before: &folia_store::GraphicsSettings, after: &folia_store::GraphicsSettings) {
+        self.frame_time = Instant::now();
         let controls = |settings: &folia_store::GraphicsSettings| {
             [
                 ("options.enableStaticMode", settings.static_mode),
@@ -388,25 +396,25 @@ impl Settings {
         };
         for ((key, from), (_, to)) in controls(before).into_iter().zip(controls(after)) {
             if from != to {
-                self.start(Control::Graphics(key), f32::from(from), f32::from(to), Instant::now());
+                self.start(Control::Graphics(key), f32::from(from), f32::from(to), self.frame_time);
             }
         }
     }
 
     /// The window has faded out and can be dropped.
     pub fn finished(&self) -> bool {
-        self.closing.is_some_and(|at| seconds(at, Instant::now()) >= SHELL)
+        self.closing.is_some_and(|at| seconds(at, self.frame_time) >= SHELL)
     }
 
-    /// Something is moving, so the shell must keep sending frames.
+    /// Keep requesting frames until the sampled view reaches the end, even after a late redraw.
     pub fn animating(&self) -> bool {
-        let now = Instant::now();
+        let now = self.frame_time;
         seconds(self.opened, now) < SHELL
             || self.closing.is_some()
             || seconds(self.page_at, now) < MOVE
             || self.motions.iter().any(|motion| seconds(motion.at, now) < MOVE)
             || self.body.animating(now)
-            || self.landing.is_some_and(|(_, at)| seconds(at, now) < 2.2)
+            || self.landing.is_some_and(|(_, at)| now.saturating_duration_since(at).as_secs_f64() < 2.2)
     }
 
     /// The developer page is on screen, so its log panel needs refreshing while it sits still.
@@ -426,7 +434,7 @@ impl Settings {
         self.pending_group = group.filter(|_| groups[..before].iter().any(|g| self.measured_height(g).is_none()));
         let y: f32 = groups[..before].iter().enumerate().map(|(index, g)| self.group_height(g, index == 0)).sum();
         let margin = if before == 0 { kit::FIRST_GROUP_GAP } else { kit::GROUP_GAP };
-        self.body.scroll_to(if group.is_some() { (y + margin - 12.0).max(0.0) } else { 0.0 }, Instant::now());
+        self.body.scroll_to(if group.is_some() { (y + margin - 12.0).max(0.0) } else { 0.0 }, self.frame_time);
         if crate::motion::reduced(folia_store::MotionSurface::SettingsScroll) {
             self.body.finish();
         }
@@ -455,7 +463,7 @@ impl Settings {
 
     /// Moves the tab line to the group whose card the page has scrolled to.
     fn follow_scroll(&mut self, offset: f32, now: Instant) {
-        if self.picked_group.is_some_and(|(_, at)| seconds(at, now) < 0.8) {
+        if self.picked_group.is_some_and(|(_, at)| now.saturating_duration_since(at).as_secs_f64() < 0.8) {
             return;
         }
         let groups = groups_of(self.section);
@@ -483,7 +491,7 @@ impl Settings {
 
     fn landing_highlight(&self, id: &str, now: Instant) -> f32 {
         let Some((_, at)) = self.landing.filter(|(target, _)| *target == id) else { return 0.0 };
-        let progress = (seconds(at, now) / 2.2).clamp(0.0, 1.0);
+        let progress = (now.saturating_duration_since(at).as_secs_f64() / 2.2).clamp(0.0, 1.0);
         if crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion) {
             return if progress < 1.0 { 1.0 } else { 0.0 };
         }
@@ -528,7 +536,7 @@ impl Settings {
         window: Size,
         values: Values<'a>,
     ) -> Element<'a, crate::Message> {
-        let now = Instant::now();
+        let now = self.frame_time;
         let shown = self.shown(now);
         let tokens = Tokens::new(theme, daylight).faded(shown);
         let wide = window.width >= WIDE_WIDTH;
@@ -712,7 +720,7 @@ impl Settings {
             return column![top, kit::hairline(tokens)].into();
         }
         let chosen = groups.iter().position(|g| Some(g.id) == self.tab).unwrap_or(0);
-        let mark = self.at(Control::Tab, chosen as f32, Instant::now());
+        let mark = self.at(Control::Tab, chosen as f32, self.frame_time);
         let entries =
             groups.iter().map(|g| (i18n.t(g.title).to_owned(), crate::Message::Settings(Message::Tab(g.id)))).collect();
         column![top, kit::tabs(tokens, entries, Some(chosen), Some(mark), gutter.under_title + 4.0, gutter.side)].into()
