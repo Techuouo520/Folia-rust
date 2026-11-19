@@ -78,7 +78,7 @@ fn main() -> anyhow::Result<()> {
     });
     let system_locale = sys_locale::get_locale();
     let i18n = I18n::new(general.language.resolve(system_locale.as_deref()))?;
-    tracing::info!(config = %store.dir().display(), language = i18n.language().code(), "starting");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), config = %store.dir().display(), language = i18n.language().code(), "starting");
     folia_ui::install_fonts();
     let graphics_failure = i18n.t("status.graphicsInitializationFailed").to_owned();
     let graphics: folia_store::GraphicsSettings = store.load_or_default();
