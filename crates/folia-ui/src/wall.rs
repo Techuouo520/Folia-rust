@@ -19,6 +19,9 @@ use crate::lots::{self, LOT_COLS, LOT_ROWS, Lot};
 use crate::wall_pan::{self, Gesture, Glide, Inertia, Pointer, Release, WheelSource};
 use crate::wall_shift::{Kind, Pose, Shift};
 
+#[path = "radio_draw.rs"]
+pub(crate) mod radio_draw;
+
 const CELL: f32 = 128.0;
 const GAP: f32 = 8.0;
 const PITCH: f32 = CELL + GAP;
@@ -271,6 +274,7 @@ pub struct CoverLayers<'a> {
 }
 
 pub struct Wall {
+    radio_departure: Option<Box<radio_draw::Departure>>,
     hover: crate::wall_hover::Hover,
     pub(crate) linked: Option<usize>,
     pub(crate) appearance: folia_store::WallAppearance,
@@ -383,6 +387,13 @@ struct Ghost {
     stack: bool,
 }
 
+pub(crate) struct Handoff {
+    pub viewport: Size,
+    ghosts: Vec<Ghost>,
+    origin: Point,
+    radio: Option<Box<radio_draw::Departure>>,
+}
+
 impl Default for Wall {
     fn default() -> Self {
         Self::new()
@@ -390,6 +401,26 @@ impl Default for Wall {
 }
 
 impl Wall {
+    pub(crate) fn take_handoff(&mut self, tiles: &[Tile]) -> Handoff {
+        self.next_shift = None;
+        self.shift = None;
+        self.capture(tiles);
+        Handoff {
+            viewport: self.viewport,
+            ghosts: std::mem::take(&mut self.ghosts),
+            origin: Point::new(self.viewport.width / 2.0, self.viewport.height / 2.0),
+            radio: None,
+        }
+    }
+
+    pub(crate) fn accept_handoff(&mut self, handoff: Handoff, tiles: &[Tile]) {
+        self.radio_departure = handoff.radio;
+        self.ghosts = handoff.ghosts;
+        self.shift = None;
+        self.next_shift = Some(Kind::Flip(handoff.origin));
+        self.start_shift(tiles);
+    }
+
     pub(crate) fn begin_visit(&mut self, randomize: bool) {
         self.set_order_seed(randomize.then(|| RandomState::new().hash_one(())));
     }
@@ -413,6 +444,7 @@ impl Wall {
 
     pub fn new() -> Self {
         Self {
+            radio_departure: None,
             hover: Default::default(),
             linked: None,
             appearance: Default::default(),
@@ -651,51 +683,6 @@ impl Wall {
         task
     }
 
-    pub(crate) fn radio(
-        &mut self,
-        selected: usize,
-        range: std::ops::Range<usize>,
-        tiles: &[Tile],
-        omni: Option<&Omni>,
-    ) -> Task<Message> {
-        let view = self.viewport;
-        let scale = wall_scale(view.width).max(0.01);
-        let compact = view.width < 640.0;
-        let center = if compact {
-            (view.width - 48.0).min(view.height * 0.62)
-        } else {
-            (view.height * 0.56).min(view.width * 0.46).min(760.0)
-        }
-        .max(160.0);
-        let side = (center * if compact { 0.4 } else { 0.58 }).max(88.0);
-        let gap = if compact { 12.0 } else { (center * 0.06).clamp(16.0, 36.0) };
-        let radius = (view.width * if compact { 1.6 } else { 1.5 }).max(900.0);
-        let mut places = Vec::new();
-        for track in range {
-            let steps = track.abs_diff(selected);
-            let mut size = if steps == 0 { center } else { 0.0 };
-            let mut along = 0.0;
-            for step in 0..steps {
-                let next = (side * 0.9_f32.powi(step as i32)).max(56.0);
-                along += size / 2.0 + gap + next / 2.0;
-                size = next;
-            }
-            let angle = along / radius;
-            let x = (if track < selected { -1.0 } else { 1.0 })
-                * if steps == 0 { 0.0 } else { center / 2.0 + radius * angle.sin() };
-            let y = view.height * 0.05 + if steps == 0 { 0.0 } else { radius * (1.0 - angle.cos()) + center * 0.12 };
-            let rect = Rectangle::new(
-                Point::new((x - size / 2.0) / scale, (y - size / 2.0) / scale),
-                Size::new(size / scale, size / scale),
-            );
-            places.push(Placement { rect, track, slot: SlotId { column: track as i64, row: 0, index: 0, lot: false } });
-        }
-        self.layout = Layout::Finite(places);
-        self.pan = Vector::ZERO;
-        self.refresh();
-        self.show_visible(tiles, omni)
-    }
-
     /// The next relayout sends the whole wall away and back (a home tab switch) instead of turning it from the seam.
     pub fn wave_next(&mut self) {
         self.next_shift = Some(Kind::Wave);
@@ -718,7 +705,7 @@ impl Wall {
         let mut ghosts = std::mem::take(&mut self.ghosts);
         ghosts.clear();
         for placement in &self.shown {
-            let rect = self.screen(placement.rect);
+            let rect = self.drawn(placement, now);
             if !rect.intersects(&screen) || running.is_some_and(|shift| shift.arriving(rect, now).is_none()) {
                 continue;
             }
@@ -929,6 +916,11 @@ impl Wall {
     pub fn show_visible(&mut self, tiles: &[Tile], omni: Option<&Omni>) -> Task<Message> {
         self.fit_visible(tiles);
         self.load_visible(tiles, omni)
+    }
+
+    pub(crate) fn relabel(&mut self, tiles: &[Tile]) {
+        self.labels.clear();
+        self.fit_visible(tiles);
     }
 
     /// Typesets the labels of tiles on screen that have none yet; measuring text is too slow to do every frame.
@@ -1154,6 +1146,13 @@ impl Wall {
         self.viewport
     }
 
+    pub(crate) fn home_camera(&mut self) {
+        let scale = wall_scale(self.viewport.width);
+        self.pan = Vector::new((self.viewport.width / 2.0 - 34.0) / scale, (self.viewport.height / 2.0 - 80.0) / scale);
+        self.focus.stop_camera();
+        self.refresh();
+    }
+
     /// The seam on screen. A viewport that has not been measured yet reports a closed seam.
     pub fn seam(&self) -> Seam {
         let view = self.viewport;
@@ -1212,6 +1211,9 @@ impl Wall {
 
     /// Whether the camera or the tiles move on their own: inertia, a wheel glide or a shift.
     pub fn coasting(&self) -> bool {
+        if self.radio_departure.as_ref().is_some_and(|d| d.running(Instant::now())) {
+            return true;
+        }
         self.hover.running(Instant::now())
             || self.lights.running(Instant::now())
             || self.tint.running(Instant::now())
@@ -1223,6 +1225,9 @@ impl Wall {
 
     /// Steps the inertia, the wheel glide and the shift for this frame.
     pub fn tick_coast(&mut self, now: Instant, tiles: &[Tile], omni: Option<&Omni>) -> Task<Message> {
+        if self.radio_departure.as_ref().is_some_and(|d| !d.running(now)) {
+            self.radio_departure = None;
+        }
         self.cover_fades.retain(|_, fade| cover_progress(fade.started, now) < 1.0);
         if let Some(inertia) = self.inertia {
             let (pan, moving) = inertia.at(now);
@@ -1357,6 +1362,10 @@ impl Wall {
         }
     }
 
+    pub(crate) fn poster_ready(&self, rect: Rectangle, id: i64, now: Instant) -> bool {
+        self.arrival(rect, id, now).is_some_and(|pose| pose.alpha >= 0.99 && pose.squeeze >= 0.99)
+    }
+
     pub fn view<'a>(
         &'a self,
         tracks: &'a [Tile],
@@ -1478,6 +1487,14 @@ pub struct WallProgram<'a> {
     playing: Option<i64>,
     /// The poster's ground, drawn into the tilted seam with the walls while the layer turns.
     band: Option<crate::poster::Band<'a>>,
+}
+
+impl crate::wall_canvas::Layered<Message> for WallProgram<'_> {
+    fn draw_after(&self, renderer: &mut Renderer, now: Instant) {
+        if let Some(departure) = &self.wall.radio_departure {
+            departure.project(renderer, now);
+        }
+    }
 }
 
 impl canvas::Program<Message> for WallProgram<'_> {
@@ -1638,7 +1655,11 @@ impl canvas::Program<Message> for WallProgram<'_> {
                     cover_opacity: layers.opacity,
                     fallback: shows_fallback(item, loaded),
                     art,
-                    label: if grown { None } else { label },
+                    label,
+                    expanded: grown,
+                    badge: !self.wall.appearance.badge_current_only
+                        || item.badge.is_some()
+                        || self.playing == Some(item.id),
                     current: self.playing == Some(item.id),
                     heading: item.heading,
                     hue: item.hue,
@@ -1701,6 +1722,9 @@ impl canvas::Program<Message> for WallProgram<'_> {
                 lights.into_geometry(),
             ]);
         }
+        if let Some(departure) = &self.wall.radio_departure {
+            geometries.extend(departure.draw(renderer, self.theme, self.daylight, bounds.size(), now));
+        }
         geometries
     }
 }
@@ -1728,6 +1752,8 @@ impl WallProgram<'_> {
                 fallback: ghost.fallback,
                 art: Art::None,
                 label: ghost.label.as_ref(),
+                expanded: false,
+                badge: !self.wall.appearance.badge_current_only || ghost.stack || self.playing == Some(ghost.id),
                 current: self.playing == Some(ghost.id),
                 heading: ghost.heading,
                 hue: ghost.hue,
@@ -1856,6 +1882,8 @@ struct Drawn<'a> {
     fallback: bool,
     art: Art<'a>,
     label: Option<&'a Label>,
+    expanded: bool,
+    badge: bool,
     current: bool,
     heading: bool,
     hue: f32,
@@ -2036,7 +2064,12 @@ fn draw_dots(frame: &mut Frame, rect: Rectangle, place: Place, dots: canvas::Ima
 
 /// The corner tag and the copy; a mosaic's copy stands on a shadow 1px below.
 fn draw_marks(frame: &mut Frame, tile: &Drawn, place: Place, typeset: &Typeset, palette: &Palette) {
-    draw_badge(frame, tile, place, typeset, palette);
+    if tile.badge {
+        draw_badge(frame, tile, place, typeset, palette);
+    }
+    if tile.expanded {
+        return;
+    }
     let Some(label) = tile.label else { return };
     let alpha = place.pose.alpha;
     if matches!(tile.art, Art::Mosaic { .. }) {
@@ -2351,6 +2384,34 @@ impl Wall {
         self.refresh();
     }
 
+    /// Lattice centres its expanded poster; the library keeps its own minimal reveal rule.
+    pub(crate) fn expand_centered(&mut self, slot: SlotId, tile: usize, instant: bool) {
+        self.expand(slot, tile, 0.0);
+        if let Some(rect) = self.focus.target(slot) {
+            let target = Vector::new(rect.center_x(), rect.center_y());
+            if instant {
+                self.pan = target;
+                self.focus.finish();
+            } else {
+                self.focus.tween_to(self.pan, target, Instant::now());
+            }
+            self.refresh();
+        }
+    }
+
+    pub(crate) fn restore_poster(&mut self, slot: SlotId, tile: usize, screen: Rectangle) {
+        self.expand(slot, tile, 0.0);
+        if let Some(rect) = self.focus.target(slot) {
+            let scale = wall_scale(self.viewport.width);
+            let offset = screen.center() - Point::new(self.viewport.width / 2.0, self.viewport.height / 2.0);
+            if screen.intersects(&Rectangle::with_size(self.viewport)) {
+                self.pan = Vector::new(rect.center_x(), rect.center_y()) - offset * (1.0 / scale);
+            }
+            self.focus.finish();
+            self.refresh();
+        }
+    }
+
     /// `collapse`.
     pub fn collapse(&mut self) {
         let Some((slot, _)) = self.focus.expanded() else { return };
@@ -2408,6 +2469,9 @@ impl Wall {
 
     /// One frame of the focus card: the camera tween moves the wall; finished folds are dropped.
     pub fn tick_focus(&mut self, now: Instant) -> bool {
+        if self.radio_departure.as_ref().is_some_and(|d| !d.running(now)) {
+            self.radio_departure = None;
+        }
         let moved = self.focus.camera(now);
         if let Some(pan) = moved {
             self.pan = pan;

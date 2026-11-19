@@ -16,9 +16,7 @@ pub struct Glyph {
     pub end: usize,
     pub x: f32,
     pub width: f32,
-    font: fontdb::ID,
-    id: u16,
-    weight: fontdb::Weight,
+    pub(super) render: folia_render::glyphs::ShapedGlyph,
 }
 
 /// A line shaped without wrapping.
@@ -75,9 +73,15 @@ pub fn shape(text: &str, px: f32, font: Font) -> Shaped {
                 end: base + glyph.end,
                 x: glyph.x,
                 width: glyph.w,
-                font: glyph.font_id,
-                id: glyph.glyph_id,
-                weight: glyph.font_weight,
+                render: folia_render::glyphs::ShapedGlyph {
+                    font: glyph.font_id,
+                    id: glyph.glyph_id,
+                    weight: glyph.font_weight.0,
+                    flags: glyph.cache_key_flags,
+                    cluster: base + glyph.start,
+                    x: glyph.x + glyph.font_size * glyph.x_offset,
+                    y: glyph.y - glyph.font_size * glyph.y_offset,
+                },
             });
         }
         if run.line_i == 0 {
@@ -98,11 +102,11 @@ pub fn ink(shaped: &Shaped) -> Vec<(f32, f32)> {
         .iter()
         .map(|glyph| {
             let (key, _, _) = ct::CacheKey::new(
-                glyph.font,
-                glyph.id,
+                glyph.render.font,
+                glyph.render.id,
                 shaped.px,
                 (0.0, 0.0),
-                glyph.weight,
+                fontdb::Weight(glyph.render.weight),
                 ct::CacheKeyFlags::empty(),
             );
             let Some(commands) = swash.get_outline_commands_uncached(system, key) else { return (0.0, 0.0) };

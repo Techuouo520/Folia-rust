@@ -2,6 +2,9 @@
 name = "Folia"
 
 [options]
+latticeAutoFocusOnSongChange = "Focus on song change"
+latticeVignette = "Edge vignette"
+latticeBadgeCurrentOnly = "Number only the playing song"
 bravaisSeamClear = "See-through info strip"
 libraryWallWindows = "Windows per block"
 bravaisBackdropLyrics = "Lyrics behind the wall"
@@ -824,6 +827,8 @@ queueClearConfirm = "Click again to clear the queue"
 queueDragHandle = "Drag to reorder"
 
 [home]
+latticeBadgeNow = "NOW PLAYING"
+latticeOpenPlayer = "OPEN PLAYER"
 latticeHelpCommands = "Open the command palette"
 latticeEmptyTitle = "QUEUE IS EMPTY"
 latticeEmptyText = "Play anything and the queue will spread out here."
@@ -831,6 +836,8 @@ latticeHelpPoster = "Press Enter to expand the selected song, then Enter again t
 latticeHelpMove = "Use the arrow keys to move the selection"
 latticeHelpOpen = "Exit Lattice"
 latticeRadioHidden = "Coming up, not revealed yet"
+latticeRadioBackdropWord = "PERSONAL FM"
+latticeRadioBackdropQueueWord = "QUEUE"
 latticeRadioHelpCard = "Click a card to bring it to the middle, double-click the card in the middle to play it (within Personal FM, it stays on the radio)"
 latticeRadioHelpMove = "← →, drag or scroll to browse the cards, Enter plays the card in the middle"
 connectFromAvatar = "Tap the avatar in the top-left corner and choose a platform to connect."

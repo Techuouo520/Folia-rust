@@ -31,11 +31,14 @@ pub(super) fn view<'a>(host: &Host<'a>, query: &'a str) -> Element<'a, Message> 
         ]);
     } else {
         choices.push(("options.latticeWallForm", "", (!host.fm).then_some(Message::Radio(!wall.radio))));
+        choices.push(("options.latticeAutoFocusOnSongChange", "", Some(Message::AutoFocus(!wall.auto_focus))));
+        choices.push(("options.latticeVignette", "", Some(Message::Vignette(!wall.vignette))));
     }
     choices.extend([
         ("options.wallRandomizeOnEntry", "", Some(Message::RandomizeOnEntry)),
         ("options.latticePosterTint", "", Some(Message::Tint(!wall.tint))),
         ("home.latticeLights", "", Some(Message::Lights(!wall.lights_on))),
+        ("options.latticeBadgeCurrentOnly", "", Some(Message::BadgeCurrentOnly(!wall.badge_current_only))),
     ]);
     let tokens = host.tokens;
     let mut rows = column![].spacing(3);

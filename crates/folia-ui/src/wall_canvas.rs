@@ -3,25 +3,25 @@
 use iced::advanced::graphics::geometry::Renderer as _;
 use iced::advanced::widget::{Operation, Tree};
 use iced::advanced::{Clipboard, Layout, Renderer as _, Shell, Widget, layout};
-use iced::widget::canvas::Program as _;
 use iced::{Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, mouse};
 
-use crate::wall::{Message, WallProgram};
-use crate::wall_pan::Pointer;
-
-pub(super) struct WallCanvas<'a> {
+pub(super) struct WallCanvas<'a, Message, P> {
     content: Element<'a, Message>,
-    program: WallProgram<'a>,
+    program: P,
 }
 
-impl<'a> WallCanvas<'a> {
-    pub fn new(program: WallProgram<'a>) -> Self {
+pub(super) trait Layered<Message>: iced::widget::canvas::Program<Message> {
+    fn draw_after(&self, _renderer: &mut Renderer, _now: std::time::Instant) {}
+}
+
+impl<'a, Message: 'a, P: Layered<Message> + Copy + 'a> WallCanvas<'a, Message, P> {
+    pub fn new(program: P) -> Self {
         let content = iced::widget::canvas(program).width(Length::Fill).height(Length::Fill).into();
         Self { content, program }
     }
 }
 
-impl Widget<Message, Theme, Renderer> for WallCanvas<'_> {
+impl<Message, P: Layered<Message>> Widget<Message, Theme, Renderer> for WallCanvas<'_, Message, P> {
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.content)]
     }
@@ -77,13 +77,14 @@ impl Widget<Message, Theme, Renderer> for WallCanvas<'_> {
     ) {
         let bounds = layout.bounds();
         let Some(clip) = bounds.intersection(viewport) else { return };
-        let pointer = tree.children[0].state.downcast_ref::<Pointer>();
+        let pointer = tree.children[0].state.downcast_ref::<P::State>();
         let passes = self.program.draw(pointer, renderer, theme, bounds, cursor);
         for pass in passes {
             renderer.with_layer(clip, |renderer| {
                 renderer.with_translation(Vector::new(bounds.x, bounds.y), |renderer| renderer.draw_geometry(pass));
             });
         }
+        renderer.with_layer(clip, |renderer| self.program.draw_after(renderer, std::time::Instant::now()));
     }
 
     fn mouse_interaction(

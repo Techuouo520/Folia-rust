@@ -177,8 +177,13 @@ pub enum Message {
     Shuffle,
     GenerateTheme,
     Destination,
+    ToggleLattice,
+    PosterDetails,
     WallLook(folia_store::WallLook),
     Radio(bool),
+    AutoFocus(bool),
+    Vignette(bool),
+    BadgeCurrentOnly(bool),
     HideUpcoming(bool),
     LocatePlaying,
     Windows(u8),
@@ -590,6 +595,8 @@ impl HomeChrome {
             Message::Settings
             | Message::Catalog(_)
             | Message::Destination
+            | Message::ToggleLattice
+            | Message::PosterDetails
             | Message::Player
             | Message::Search
             | Message::Import
@@ -642,6 +649,9 @@ impl HomeChrome {
             | Message::CommitAppearance
             | Message::LocatePlaying
             | Message::Radio(_)
+            | Message::AutoFocus(_)
+            | Message::Vignette(_)
+            | Message::BadgeCurrentOnly(_)
             | Message::HideUpcoming(_)
             | Message::Shuffle
             | Message::GenerateTheme

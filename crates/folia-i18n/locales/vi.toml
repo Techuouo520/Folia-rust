@@ -2,6 +2,9 @@
 name = "Folia"
 
 [options]
+latticeAutoFocusOnSongChange = "Tập trung khi đổi bài"
+latticeVignette = "Viền tối cạnh"
+latticeBadgeCurrentOnly = "Chỉ đánh số bài đang phát"
 bravaisSeamClear = "Thanh thông tin trong suốt"
 libraryWallWindows = "Cửa sổ mỗi khối"
 bravaisBackdropLyrics = "Lời bài hát sau nền thư viện"
@@ -823,6 +826,8 @@ queueClearConfirm = "Nhấn lần nữa để xóa hàng đợi"
 queueDragHandle = "Kéo để sắp xếp lại"
 
 [home]
+latticeBadgeNow = "ĐANG PHÁT"
+latticeOpenPlayer = "MỞ TRÌNH PHÁT"
 latticeHelpCommands = "Mở bảng lệnh"
 latticeEmptyTitle = "HÀNG ĐỢI TRỐNG"
 latticeEmptyText = "Phát một bài hát bất kỳ và hàng đợi sẽ hiển thị tại đây."
@@ -830,6 +835,8 @@ latticeHelpPoster = "Nhấn Enter để mở rộng bài hát đã chọn, nhấ
 latticeHelpMove = "Dùng phím mũi tên để di chuyển vùng chọn"
 latticeHelpOpen = "Thoát Lattice"
 latticeRadioHidden = "Bài tiếp theo, chưa lộ diện"
+latticeRadioBackdropWord = "FM CÁ NHÂN"
+latticeRadioBackdropQueueWord = "HÀNG ĐỢI"
 latticeRadioHelpCard = "Nhấp một thẻ để đưa nó vào giữa, nhấp đúp thẻ ở giữa để phát (trong FM cá nhân vẫn phát trên radio)"
 latticeRadioHelpMove = "← →, kéo hoặc cuộn để duyệt các thẻ, Enter để phát thẻ ở giữa"
 connectFromAvatar = "Chạm vào ảnh đại diện ở góc trên bên trái và chọn một nền tảng để kết nối."

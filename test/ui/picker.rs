@@ -8,6 +8,94 @@ use std::time::Duration;
 
 const WINDOW: Size = Size::new(1200.0, 800.0);
 
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU for settings landing")]
+fn settings_group_tabs_outline_the_destination_card() {
+    if run_gpu_child("picker::settings_group_tabs_outline_the_destination_card") {
+        return;
+    }
+    use folia_ui::{SettingsMessage, SettingsSection};
+    use iced::futures::StreamExt;
+    folia_ui::install_fonts();
+    let temp = tempfile::tempdir().unwrap();
+    let (mut shell, initial) = Shell::new(init(temp.path()));
+    complete(&mut shell, initial);
+    std::thread::sleep(Duration::from_millis(400));
+    drop(shell.update(Message::SplashFrame));
+    drop(shell.update(Message::Home(folia_ui::HomeMessage::Settings)));
+    let mut renderer =
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, iced::Pixels(16.0), None))
+            .unwrap();
+    let mut cache = Cache::default();
+    let actions = |task| {
+        pollster::block_on(async {
+            match iced_runtime::task::into_stream(task) {
+                Some(stream) => stream.collect::<Vec<_>>().await,
+                None => Vec::new(),
+            }
+        })
+    };
+    let mut pending = actions(shell.update(Message::Settings(SettingsMessage::Section(SettingsSection::Graphics))));
+    let mut frame = |shell: &mut Shell, click: bool| {
+        let mut ui = UserInterface::build(shell.view(), WINDOW, std::mem::take(&mut cache), &mut renderer);
+        for action in std::mem::take(&mut pending) {
+            if let iced_runtime::Action::Widget(mut operation) = action {
+                ui.operate(&renderer, operation.as_mut());
+            }
+        }
+        let mut labels = Labels::default();
+        ui.operate(&renderer, &mut labels);
+        let mut events = vec![Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now()))];
+        let cursor = if click {
+            let position = labels
+                .0
+                .iter()
+                .filter(|(label, _)| label == "降低动态效果")
+                .min_by(|a, b| a.1.y.total_cmp(&b.1.y))
+                .unwrap()
+                .1
+                .center();
+            events.extend([
+                Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)),
+                Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)),
+            ]);
+            iced::mouse::Cursor::Available(position)
+        } else {
+            iced::mouse::Cursor::Unavailable
+        };
+        let mut messages = Vec::new();
+        ui.update(&events, cursor, &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+        ui.draw(&mut renderer, &shell.theme(), &iced::advanced::renderer::Style { text_color: Color::BLACK }, cursor);
+        cache = ui.into_cache();
+        let pixels = renderer.screenshot(
+            &iced::advanced::graphics::Viewport::with_physical_size(Size::new(1200, 800), 1.0),
+            Color::WHITE,
+        );
+        for message in messages {
+            pending.extend(actions(shell.update(message)));
+        }
+        pending.extend(actions(shell.update(Message::Settings(SettingsMessage::Frame))));
+        pixels
+    };
+    for _ in 0..20 {
+        frame(&mut shell, false);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    frame(&mut shell, true);
+    let mut highlighted = Vec::new();
+    for _ in 0..20 {
+        highlighted = frame(&mut shell, false);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(2100));
+    let settled = frame(&mut shell, false);
+    let changed = (240..750)
+        .flat_map(|y| (320..1120).map(move |x| (y * 1200 + x) * 4))
+        .filter(|&i| (0..3).any(|c| highlighted[i + c].abs_diff(settled[i + c]) > 15))
+        .count();
+    assert!(changed > 300, "selecting a group never outlined its destination: {changed} changed body pixels");
+}
+
 #[derive(Default)]
 struct Labels(Vec<(String, Rectangle)>);
 impl iced::advanced::widget::Operation for Labels {

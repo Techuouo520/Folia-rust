@@ -282,6 +282,9 @@ impl WallLook {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WallAppearance {
+    pub auto_focus: bool,
+    pub vignette: bool,
+    pub badge_current_only: bool,
     pub look: WallLook,
     pub windows_per_block: u8,
     pub lights_on: bool,
@@ -299,6 +302,9 @@ pub struct WallAppearance {
 impl Default for WallAppearance {
     fn default() -> Self {
         Self {
+            auto_focus: true,
+            vignette: true,
+            badge_current_only: false,
             look: WallLook::Solid,
             windows_per_block: 3,
             lights_on: true,
@@ -393,14 +399,16 @@ impl AppearanceSettings {
     /// Preserves version 1 settings while adding native system-theme and common-cover preferences.
     pub fn load(store: &Store) -> Result<Self, StoreError> {
         match store.load::<Self>() {
-            Err(StoreError::SchemaVersion { found: version @ (1 | 2), .. }) => {
+            Err(StoreError::SchemaVersion { found: version @ (1..=3), .. }) => {
                 let previous = if version == 1 {
                     store.load::<PreviousAppearance<1>>()?.settings
-                } else {
+                } else if version == 2 {
                     store.load::<PreviousAppearance<2>>()?.settings
+                } else {
+                    store.load::<PreviousAppearance<3>>()?.settings
                 };
                 store.save(&previous)?;
-                tracing::info!("appearance settings migrated to schema 3");
+                tracing::info!("appearance settings migrated to schema 4");
                 Ok(previous)
             }
             result => result,
@@ -420,7 +428,7 @@ impl AppearanceSettings {
 
 impl Domain for AppearanceSettings {
     const FILE: &'static str = "appearance.toml";
-    const SCHEMA_VERSION: u32 = 3;
+    const SCHEMA_VERSION: u32 = 4;
 }
 
 #[derive(Default, Serialize, Deserialize)]

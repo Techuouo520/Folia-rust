@@ -273,13 +273,23 @@ pub struct Group<'a, M> {
 }
 
 pub fn group<'a, M: 'a>(tokens: Tokens, group: Group<'a, M>, first: bool) -> Element<'a, M> {
-    group_with_rows(tokens, group, first, |rows| column(rows).into())
+    group_with_rows(tokens, group, first, 0.0, |rows| column(rows).into())
+}
+
+pub(crate) fn landed_group<'a, M: 'a>(
+    tokens: Tokens,
+    group: Group<'a, M>,
+    first: bool,
+    highlight: f32,
+) -> Element<'a, M> {
+    group_with_rows(tokens, group, first, highlight, |rows| column(rows).into())
 }
 
 pub(crate) fn group_with_rows<'a, M: 'a>(
     tokens: Tokens,
     group: Group<'a, M>,
     first: bool,
+    highlight: f32,
     list: impl FnOnce(Vec<Element<'a, M>>) -> Element<'a, M>,
 ) -> Element<'a, M> {
     let Group { title, bare, rows, foot } = group;
@@ -296,7 +306,11 @@ pub(crate) fn group_with_rows<'a, M: 'a>(
     }
     let card = container(list(entries)).width(Length::Fill).style(move |_| container::Style {
         background: Some(tokens.card.into()),
-        border: Border { color: tokens.line, width: 1.0, radius: 12.0.into() },
+        border: Border {
+            color: mix(tokens.line, tokens.accent, highlight),
+            width: 1.0 + highlight,
+            radius: 12.0.into(),
+        },
         ..container::Style::default()
     });
     let mut body = column![space().height(if first { FIRST_GROUP_GAP } else { GROUP_GAP })];

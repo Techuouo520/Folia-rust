@@ -126,6 +126,9 @@ const OPTIONS: &[(Section, GroupDef, &str)] = &[
     (Section::Appearance, WALL, "options.latticePosterTintColor"),
     (Section::Appearance, WALL, "options.latticePosterTintIntensity"),
     (Section::Appearance, WALL, "options.latticeWallForm"),
+    (Section::Appearance, WALL, "options.latticeAutoFocusOnSongChange"),
+    (Section::Appearance, WALL, "options.latticeVignette"),
+    (Section::Appearance, WALL, "options.latticeBadgeCurrentOnly"),
     (Section::Appearance, WALL, "options.latticeRadioHideUpcoming"),
     (Section::Appearance, WALL, "wallTools.preset"),
     (Section::Player, BAR, "options.playerBottomBarOffset"),
@@ -221,6 +224,9 @@ pub struct Settings {
     body: Scroll,
     group_sizes: Vec<(Section, &'static str, f32)>,
     pending_group: Option<&'static str>,
+    landing: Option<(&'static str, Instant)>,
+    picked_group: Option<(&'static str, Instant)>,
+    scroll_view: Option<(f32, f32)>,
     asking_native_blur: bool,
 }
 
@@ -238,6 +244,9 @@ impl Settings {
             body: Scroll::default(),
             group_sizes: Vec::new(),
             pending_group: None,
+            landing: None,
+            picked_group: None,
+            scroll_view: None,
             asking_native_blur: false,
         }
     }
@@ -264,6 +273,8 @@ impl Settings {
             Message::Hit(section, group) => {
                 self.query.clear();
                 self.show(section, group, now);
+                self.landing = group.map(|id| (id, now));
+                self.picked_group = self.landing;
                 self.scroll_to(group)
             }
             Message::Query(query) => {
@@ -272,16 +283,22 @@ impl Settings {
                 Task::none()
             }
             Message::Tab(id) => {
+                self.landing = Some((id, now));
+                self.picked_group = self.landing;
                 self.land(id, now);
                 self.scroll_to(Some(id))
             }
             Message::Scrolled(viewport) => {
                 let offset = viewport.absolute_offset().y;
-                self.body.scrolled(&viewport, now);
+                self.scroll_view = Some((viewport.content_bounds().height, viewport.bounds().height));
+                if self.body.scrolled(&viewport, now) {
+                    self.picked_group = None;
+                }
                 self.follow_scroll(offset, now);
                 Task::none()
             }
             Message::Wheel(delta) => {
+                self.picked_group = None;
                 self.pending_group = None;
                 self.body.wheel(delta, now);
                 if crate::motion::reduced(folia_store::MotionSurface::SettingsScroll) {
@@ -310,7 +327,9 @@ impl Settings {
                     self.body.finish();
                 }
                 self.motions.retain(|motion| seconds(motion.at, now) < MOVE);
-                match self.body.frame(now) {
+                let moved = self.body.frame(now);
+                self.follow_scroll(self.body.offset(), now);
+                match moved {
                     Some(_) => self.body.apply(Id::new(SCROLL)),
                     None => Task::none(),
                 }
@@ -371,6 +390,7 @@ impl Settings {
             || seconds(self.page_at, now) < MOVE
             || self.motions.iter().any(|motion| seconds(motion.at, now) < MOVE)
             || self.body.animating(now)
+            || self.landing.is_some_and(|(_, at)| seconds(at, now) < 2.2)
     }
 
     /// The developer page is on screen, so its log panel needs refreshing while it sits still.
@@ -382,14 +402,15 @@ impl Settings {
         self.asking_native_blur = false;
     }
 
-    /// Scrolls the page so `group`'s gap sits at the top, or to the top of the page.
+    /// Keeps the group's heading 12px below the viewport, matching the original anchor landing.
     fn scroll_to(&mut self, group: Option<&'static str>) -> Task<Message> {
         let groups = groups_of(self.section);
         let before = groups.iter().take_while(|g| Some(g.id) != group).count();
         let before = if group.is_some() && before < groups.len() { before } else { 0 };
         self.pending_group = group.filter(|_| groups[..before].iter().any(|g| self.measured_height(g).is_none()));
         let y: f32 = groups[..before].iter().enumerate().map(|(index, g)| self.group_height(g, index == 0)).sum();
-        self.body.scroll_to(y, Instant::now());
+        let margin = if before == 0 { kit::FIRST_GROUP_GAP } else { kit::GROUP_GAP };
+        self.body.scroll_to(if group.is_some() { (y + margin - 12.0).max(0.0) } else { 0.0 }, Instant::now());
         if crate::motion::reduced(folia_store::MotionSurface::SettingsScroll) {
             self.body.finish();
         }
@@ -397,6 +418,9 @@ impl Settings {
     }
 
     fn show(&mut self, section: Section, group: Option<&'static str>, now: Instant) {
+        self.landing = None;
+        self.picked_group = None;
+        self.scroll_view = None;
         if section != self.section || group.is_none() {
             self.page_at = now;
             self.motions.retain(|motion| motion.control != Control::Tab);
@@ -415,19 +439,39 @@ impl Settings {
 
     /// Moves the tab line to the group whose card the page has scrolled to.
     fn follow_scroll(&mut self, offset: f32, now: Instant) {
+        if self.picked_group.is_some_and(|(_, at)| seconds(at, now) < 0.8) {
+            return;
+        }
         let groups = groups_of(self.section);
+        let (content, height) = self.scroll_view.unwrap_or((f32::INFINITY, 0.0));
+        let bottom = offset > 0.0 && content - offset - height <= 2.0;
         let mut top = 0.0;
         let mut current = groups.first().map(|g| g.id);
         for (index, group) in groups.iter().enumerate() {
-            if top > offset + 1.0 {
-                break;
+            let anchor = top + if index == 0 { kit::FIRST_GROUP_GAP } else { kit::GROUP_GAP };
+            let end = top + self.group_height(group, index == 0);
+            if bottom {
+                current = Some(group.id);
+                if self.picked_group.is_some_and(|(id, _)| id == group.id) && end > offset && anchor < offset + height {
+                    break;
+                }
+            } else if anchor <= offset + height * 0.1 {
+                current = Some(group.id);
             }
-            current = Some(group.id);
-            top += self.group_height(group, index == 0);
+            top = end;
         }
         if let Some(id) = current.filter(|id| Some(*id) != self.tab.or(groups.first().map(|g| g.id))) {
             self.land(id, now);
         }
+    }
+
+    fn landing_highlight(&self, id: &str, now: Instant) -> f32 {
+        let Some((_, at)) = self.landing.filter(|(target, _)| *target == id) else { return 0.0 };
+        let progress = (seconds(at, now) / 2.2).clamp(0.0, 1.0);
+        if crate::motion::reduced(folia_store::MotionSurface::UiMicroMotion) {
+            return if progress < 1.0 { 1.0 } else { 0.0 };
+        }
+        (1.0 - ((Ease::OUT.at(progress) - 0.7) / 0.3).clamp(0.0, 1.0)) as f32
     }
 
     fn start(&mut self, control: Control, from: f32, to: f32, now: Instant) {
@@ -672,10 +716,11 @@ impl Settings {
             let groups = self.page(i18n, tokens, values, now);
             let definitions = groups_of(self.section);
             column(groups.into_iter().enumerate().map(|(index, group)| {
+                let highlight = self.landing_highlight(definitions[index].id, now);
                 let content = if self.section == Section::Sources {
-                    values.sources.group(tokens, group, index == 0)
+                    values.sources.group(tokens, group, index == 0, highlight)
                 } else if self.section == Section::Appearance && index == 0 {
-                    kit::group_with_rows(tokens, group, true, |rows| {
+                    kit::group_with_rows(tokens, group, true, highlight, |rows| {
                         column(rows.into_iter().zip([crate::Message::OpenWorkbench, crate::Message::OpenScene]).map(
                             |(row, message)| {
                                 mouse_area(row).on_press(message).interaction(mouse::Interaction::Pointer).into()
@@ -684,7 +729,7 @@ impl Settings {
                         .into()
                     })
                 } else {
-                    kit::group(tokens, group, index == 0)
+                    kit::landed_group(tokens, group, index == 0, highlight)
                 };
                 let definition = definitions[index];
                 let section = self.section;
@@ -1165,6 +1210,13 @@ fn wall_group<'a>(wall: folia_store::WallAppearance, i18n: &'a I18n, tokens: Tok
         |radio| Home(Change::Radio(radio)),
     );
     rows.push(row("options.latticeWallForm", form));
+    rows.push(toggle("options.latticeAutoFocusOnSongChange", wall.auto_focus, Change::AutoFocus(!wall.auto_focus)));
+    rows.push(toggle("options.latticeVignette", wall.vignette, Change::Vignette(!wall.vignette)));
+    rows.push(toggle(
+        "options.latticeBadgeCurrentOnly",
+        wall.badge_current_only,
+        Change::BadgeCurrentOnly(!wall.badge_current_only),
+    ));
     rows.push(toggle(
         "options.latticeRadioHideUpcoming",
         wall.hide_upcoming,

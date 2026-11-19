@@ -646,6 +646,12 @@ impl OffscreenDevice {
 pub struct Offscreen(Arc<Mutex<Frame>>);
 
 impl Offscreen {
+    /// Waits for this renderer's referenced images before a composed face replaces direct drawing.
+    pub fn set_images(&self, images: &[Handle]) {
+        let mut frame = self.0.lock();
+        frame.images.handles.clear();
+        frame.images.handles.extend(images.iter().cloned());
+    }
     pub fn revision(&self) -> u64 {
         self.0.lock().stamp
     }

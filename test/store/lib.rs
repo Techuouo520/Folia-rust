@@ -181,7 +181,7 @@ fn an_older_appearance_file_reads_with_the_new_defaults() {
     assert!(!appearance.follow_system_theme);
     assert!(!appearance.use_cover_color_bg);
     assert_eq!(appearance.cover_background_opacity, 0.75);
-    assert!(fs::read_to_string(dir.path().join("appearance.toml")).unwrap().starts_with("schema_version = 3\n"));
+    assert!(fs::read_to_string(dir.path().join("appearance.toml")).unwrap().starts_with("schema_version = 4\n"));
     assert_eq!(appearance.lyrics_font_scale, 1.1);
     assert_eq!(appearance.visualizer, "monet");
     assert_eq!(appearance.stored_background_mode(), None);
@@ -193,6 +193,15 @@ fn an_older_appearance_file_reads_with_the_new_defaults() {
     let migrated = AppearanceSettings::load(&store).unwrap();
     assert_eq!(migrated.wall, folia_store::WallAppearance::default());
     assert_eq!(migrated.lyrics_font_scale, 1.4);
+    fs::write(
+        dir.path().join("appearance.toml"),
+        "schema_version = 3\ntheme = \"light\"\n[wall]\nradio = true\nintensity = 0.7\nlights_on = false\n",
+    )
+    .unwrap();
+    let migrated = AppearanceSettings::load(&store).unwrap();
+    assert!(migrated.wall.radio && migrated.wall.auto_focus && migrated.wall.vignette);
+    assert!(!migrated.wall.lights_on && !migrated.wall.badge_current_only);
+    assert_eq!(migrated.wall.intensity, 0.7);
 }
 
 #[test]

@@ -1,5 +1,6 @@
 // Monet (莫奈): a poster with the lyric rail on the left and a portrait on the right.
 
+mod card;
 mod ink;
 mod layout;
 mod motion;
@@ -9,6 +10,7 @@ mod spectrum;
 mod text;
 mod tuning;
 
+pub use card::view as lyric_card;
 pub use layout::{Layout, layout};
 pub use poster::{Cache, interaction, update};
 pub use spectrum::{

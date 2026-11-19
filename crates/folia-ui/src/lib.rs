@@ -22,6 +22,7 @@ mod harmony;
 mod home;
 mod icons;
 mod lattice;
+mod lattice_controls;
 mod library;
 mod login;
 mod lots;
@@ -48,6 +49,9 @@ mod preview_art;
 mod preview_stage;
 mod quality_select;
 mod queue_island;
+pub mod radio;
+mod radio_art;
+mod radio_backdrop;
 mod reorder;
 mod scene_settings;
 mod scene_sound;
@@ -81,6 +85,7 @@ pub use focus_card::{Direction as CardDirection, Key as CardKey};
 pub use home::title::seam_title_activates;
 pub use home::{HELP_LIST, HelpRow, WallKey, default_level_is_spine, seam_safe_bottom, wall_key_of};
 pub use home::{HomeChrome, Host as HomeHost, Message as HomeMessage, overlay as home_overlay};
+pub use lattice::{Lattice, Message as LatticeMessage};
 pub use library::Message as LibraryMessage;
 pub use login::{Login, Look as LoginLook, Message as LoginMessage};
 pub use online::Message as OnlineMessage;
@@ -239,6 +244,7 @@ pub enum Message {
     Back,
     Playback(playback::Message),
     VisualFrame,
+    UiFrame,
     OpenFiles(Vec<Track>),
     Chrome(chrome::Message),
     /// The pointer moved in a window, or left it (`None`).
@@ -443,7 +449,97 @@ pub struct Shell {
     system_fonts: Vec<String>,
 }
 
+struct UiFrames {
+    settings: bool,
+    login: bool,
+    timeline: bool,
+    splash: bool,
+    notice: bool,
+    online: bool,
+    bar: bool,
+    chrome: bool,
+    home: bool,
+    library: bool,
+    panel: bool,
+    status: bool,
+    catalog: bool,
+    search: bool,
+}
+
+impl UiFrames {
+    fn active(&self) -> bool {
+        [
+            self.settings,
+            self.login,
+            self.timeline,
+            self.splash,
+            self.notice,
+            self.online,
+            self.bar,
+            self.chrome,
+            self.home,
+            self.library,
+            self.panel,
+            self.status,
+            self.catalog,
+            self.search,
+        ]
+        .into_iter()
+        .any(|active| active)
+    }
+}
+
 impl Shell {
+    fn ui_frames(&self, now: std::time::Instant) -> UiFrames {
+        UiFrames {
+            settings: self.settings.as_ref().is_some_and(settings::Settings::animating),
+            login: self.login.animating(now),
+            timeline: self.timeline.is_open() && self.timeline.animating(now),
+            splash: self.splash.showing(now),
+            notice: self.playback.notice_animating(now),
+            online: self.library.online.sync_notice_animating(now),
+            bar: self.page != Page::Search
+                && (self.bar.animating(now) || self.subtitle_presence.running(self.now_ms())),
+            chrome: self.page_fade.as_ref().is_some_and(|fade| fade.running(now)) || self.titlebar.animating(now),
+            home: self.page == Page::Lattice && self.home.animating(now)
+                || matches!(self.page, Page::Library | Page::Lattice)
+                    && (self.home.scrolling(now) || self.home.tools_open() && self.song_themes.generating),
+            library: self.page == Page::Library
+                && (self.home.animating(now)
+                    || self.library.coasting()
+                    || self.library.hint_busy(now)
+                    || self.seam_flip.is_some()),
+            panel: self.page == Page::NowPlaying && self.panel.controls_animating(now),
+            status: self.status.is_some(),
+            catalog: self.page == Page::Catalog && self.catalog.as_ref().is_some_and(|page| page.animating(now)),
+            search: self.page == Page::Search && (self.search.animating(now) || self.search.spinning()),
+        }
+    }
+
+    fn advance_ui_frames(&mut self) -> Task<Message> {
+        let frames = self.ui_frames(std::time::Instant::now());
+        if !frames.active() {
+            return Task::none();
+        }
+        let mut run = |active, message| if active { self.handle(message) } else { Task::none() };
+        Task::batch([
+            run(frames.settings, Message::Settings(settings::Message::Frame)),
+            run(frames.login, Message::Login(login::Message::Frame)),
+            run(frames.timeline, Message::Timeline(timeline::Message::Frame)),
+            run(frames.splash, Message::SplashFrame),
+            run(frames.notice, Message::Playback(playback::Message::NoticeFrame)),
+            run(frames.online, Message::Library(library::Message::Online(online::Message::SyncFrame))),
+            run(frames.bar, Message::Bar(player_bar::Message::Frame)),
+            run(frames.chrome, Message::Chrome(chrome::Message::Frame)),
+            run(frames.home, Message::Home(home::Message::Frame)),
+            run(frames.library, Message::Library(library::Message::Frame)),
+            run(frames.panel, Message::Panel(panel::Message::Frame)),
+            run(frames.status, Message::StatusFrame),
+            run(frames.catalog, Message::Catalog(catalog::Message::Frame)),
+            run(frames.search, Message::Search(search::Message::Frame)),
+        ])
+    }
+
     pub fn new(init: Init) -> (Self, Task<Message>) {
         typeface::language(init.i18n.language());
         motion::configure(&init.graphics.motion, init.system_reduced_motion);
@@ -882,13 +978,23 @@ impl Shell {
         let task = Task::batch([task, entered_wall]);
         let wall = self.library.wall_appearance(self.appearance.wall, &self.i18n).map(Message::Library);
         let lattice_task = if self.page == Page::Lattice {
+            let handoff = (before == Page::Library).then(|| self.library.take_handoff());
             let generation = self.lattice_generation;
             let lattice = self.lattice.get_or_insert_with(Default::default);
+            if let Some(handoff) = handoff {
+                lattice.enter(handoff);
+            }
             lattice.set_randomize_on_entry(self.general.wall_randomize_on_entry);
             lattice
-                .sync(&self.playback.queue, self.playback.is_fm(), self.appearance.wall, &self.i18n, self.omni.as_ref())
+                .sync(&self.playback, self.appearance.wall, &self.i18n, self.omni.as_ref())
                 .map(move |message| Message::Lattice(generation, message))
         } else {
+            if before == Page::Lattice
+                && self.page == Page::Library
+                && let Some(lattice) = &mut self.lattice
+            {
+                self.library.accept_handoff(lattice.leave());
+            }
             if self.lattice.take().is_some() {
                 self.lattice_generation = self.lattice_generation.wrapping_add(1);
             }
@@ -1010,7 +1116,9 @@ impl Shell {
         self.panel.sync_like(liked, now);
         self.library.set_tab_chrome(&mut self.home, now);
         self.library.sync_hint(&self.i18n, now);
-        self.bar.set_forced(self.positioning.is_some());
+        let radio_capsule =
+            self.lattice.as_ref().filter(|_| self.page == Page::Lattice).and_then(lattice::Lattice::radio_capsule);
+        self.bar.set_forced(self.positioning.is_some() || radio_capsule == Some(true));
         self.bar.sync(&self.playback, self.window_size.width, now);
         self.timeline.sync(
             timeline::Sync {
@@ -1026,7 +1134,7 @@ impl Shell {
         self.bar.set_modal(self.modal_open());
         self.panel.set_modal(self.modal_open());
         if !self.modal_open() {
-            self.bar.set_shown(self.chrome_visible(), now);
+            self.bar.set_shown(self.chrome_visible() && radio_capsule != Some(false), now);
             let presence = if self.chrome_visible() { 1.0 } else { 0.0 };
             self.subtitle_presence = self.subtitle_presence.retarget(self.now_ms(), presence);
         }
@@ -1050,11 +1158,18 @@ impl Shell {
         };
         self.library.playing_id = self.playback.current().map(|track| track.id);
         let reads_audio = self.page == Page::NowPlaying
+            || radio_capsule.is_some()
             || self.wall_backdrop_visible()
             || self.workbench.is_some()
             || self.theme_park.is_some();
         if reads_audio && self.visualizer_hold.is_none() && (frame_tick || !self.playback.is_playing()) {
             self.audio = self.playback.audio_frame(wall_ms());
+        }
+        if self.page == Page::Lattice
+            && frame_tick
+            && let Some(lattice) = &mut self.lattice
+        {
+            lattice.sample_audio(&self.audio, now);
         }
         self.sync_native_blur();
         let analysis = self.sync_smart_beat(frame_tick);
@@ -1366,8 +1481,22 @@ impl Shell {
 
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::UiFrame => {
+                let playback = if self.playback.is_playing() {
+                    self.handle(Message::Playback(playback::Message::Tick))
+                } else {
+                    Task::none()
+                };
+                Task::batch([playback, self.advance_ui_frames()])
+            }
             Message::VisualFrame => {
                 let playback = self.handle(Message::Playback(playback::Message::Tick));
+                let ui = self.advance_ui_frames();
+                let lattice = if self.page == Page::Lattice {
+                    self.handle(Message::Lattice(self.lattice_generation, lattice::Message::Frame))
+                } else {
+                    Task::none()
+                };
                 let preview = if self.workbench.as_ref().is_some_and(workbench::Workbench::ticking)
                     || self.theme_park.as_ref().is_some_and(|park| park.preview.ticking())
                 {
@@ -1380,10 +1509,10 @@ impl Shell {
                 } else {
                     Task::none()
                 };
-                if preview.units() == 0 && panel.units() == 0 {
+                if preview.units() == 0 && panel.units() == 0 && lattice.units() == 0 && ui.units() == 0 {
                     playback
                 } else {
-                    Task::batch([playback, preview, panel])
+                    Task::batch([playback, preview, panel, lattice, ui])
                 }
             }
             Message::SceneSound(message) => self.scene_sound.update(message, &mut self.playback),
@@ -1793,7 +1922,16 @@ impl Shell {
                 if self.page == Page::NowPlaying {
                     self.reveal_chrome();
                 }
-                if held { Task::none() } else { self.finish_slider() }
+                if held {
+                    Task::none()
+                } else {
+                    let radio = self.lattice.as_mut().map_or_else(Task::none, |lattice| {
+                        lattice
+                            .release_radio(self.clock.pointer.map(|(x, y)| iced::Point::new(x, y)), self.omni.as_ref())
+                    });
+                    let generation = self.lattice_generation;
+                    Task::batch([self.finish_slider(), radio.map(move |message| Message::Lattice(generation, message))])
+                }
             }
             Message::WindowUnfocused => {
                 self.pointer_held = false;
@@ -2535,7 +2673,7 @@ impl Shell {
                 self.lattice.as_ref().map_or_else(
                     || iced::widget::space().into(),
                     |page| {
-                        page.view(&self.i18n, &self.theme, daylight, &self.playback, self.window_size)
+                        page.view(&self.i18n, &self.theme, &self.appearance, &self.playback, self.window_size)
                             .map(move |message| Message::Lattice(generation, message))
                     },
                 )
@@ -3099,7 +3237,11 @@ impl Shell {
             );
         }
         if self.playback.current().is_some() && !self.blocks_space() {
-            parts.push(iced::event::listen_with(space_key));
+            parts.push(iced::event::listen_with(if self.page == Page::Lattice {
+                lattice_space_key
+            } else {
+                space_key
+            }));
         }
         if self.page == Page::NowPlaying && self.clock.until_ms.is_some() {
             parts.push(iced::time::every(std::time::Duration::from_millis(200)).map(|_| Message::ChromeTick));
@@ -3116,13 +3258,12 @@ impl Shell {
             parts.push(iced::event::listen_with(player_key));
             parts.push(iced::event::listen_with(player_ime));
         }
-        if let Some(window) = &self.settings {
-            if self.workbench.is_none() && self.theme_park.is_none() && self.scene_window.is_none() {
-                parts.push(iced::event::listen_with(settings_key));
-            }
-            if window.animating() {
-                parts.push(iced::window::frames().map(|_| Message::Settings(settings::Message::Frame)));
-            }
+        if self.settings.is_some()
+            && self.workbench.is_none()
+            && self.theme_park.is_none()
+            && self.scene_window.is_none()
+        {
+            parts.push(iced::event::listen_with(settings_key));
         }
         if self.workbench.is_some() {
             parts.push(iced::event::listen_with(workbench_key));
@@ -3166,89 +3307,25 @@ impl Shell {
         if self.login.is_open() {
             parts.push(iced::event::listen_with(login_key));
         }
-        if self.login.animating(std::time::Instant::now()) {
-            parts.push(iced::window::frames().map(|_| Message::Login(login::Message::Frame)));
-        }
         if self.timeline.is_open() {
             parts.push(iced::event::listen_with(timeline_key));
-            if self.timeline.animating(std::time::Instant::now()) {
-                parts.push(iced::window::frames().map(|_| Message::Timeline(timeline::Message::Frame)));
-            }
-        }
-        if self.splash.showing(std::time::Instant::now()) {
-            parts.push(iced::window::frames().map(|_| Message::SplashFrame));
         }
         let now = std::time::Instant::now();
-        if self.playback.notice_animating(now) {
-            parts.push(iced::window::frames().map(|_| Message::Playback(playback::Message::NoticeFrame)));
-        }
         let loading_motion = self.playback.loading.active()
             || (self.playback.is_playing() && self.playback.is_buffering())
             || self.playback.loading_notice(now).is_some();
-        if self.library.online.sync_notice_animating(now) {
-            parts.push(
-                iced::window::frames().map(|_| Message::Library(library::Message::Online(online::Message::SyncFrame))),
-            );
-        }
-        if self.page != Page::Search && (self.bar.animating(now) || self.subtitle_presence.running(self.now_ms())) {
-            parts.push(iced::window::frames().map(|_| Message::Bar(player_bar::Message::Frame)));
-        }
-        if self.page_fade.as_ref().is_some_and(|fade| fade.running(now)) {
-            parts.push(iced::window::frames().map(|_| Message::Chrome(chrome::Message::Frame)));
-        }
-        if self.titlebar.animating(now) {
-            parts.push(iced::window::frames().map(|_| Message::Chrome(chrome::Message::Frame)));
-        }
-        if self.page == Page::Lattice {
-            if self.lattice.as_ref().is_some_and(|page| page.animating(now)) {
-                let generation = self.lattice_generation;
-                parts.push(
-                    iced::window::frames()
-                        .with(generation)
-                        .map(|(generation, _)| Message::Lattice(generation, lattice::Message::Frame)),
-                );
-            }
-            if self.home.animating(now) {
-                parts.push(iced::window::frames().map(|_| Message::Home(home::Message::Frame)));
-            }
-        }
-        if self.page == Page::Library
-            && (self.home.animating(now)
-                || self.library.coasting()
-                || self.library.hint_busy(now)
-                || self.seam_flip.is_some())
-        {
-            parts.push(iced::window::frames().map(|_| Message::Library(library::Message::Frame)));
-        }
-        if matches!(self.page, Page::Library | Page::Lattice)
-            && (self.home.scrolling(now) || self.home.tools_open() && self.song_themes.generating)
-        {
-            parts.push(iced::window::frames().map(|_| Message::Home(home::Message::Frame)));
-        }
-        if self.page == Page::NowPlaying && self.panel.controls_animating(now) {
-            parts.push(iced::window::frames().map(|_| Message::Panel(panel::Message::Frame)));
-        }
-        if self.status.is_some() {
-            parts.push(iced::window::frames().map(|_| Message::StatusFrame));
-        }
+        let lattice_motion = self.page == Page::Lattice
+            && self.lattice.as_ref().is_some_and(|page| {
+                page.animating(now) || self.playback.is_playing() && page.lyrics_visible(&self.playback)
+            });
         if matches!(self.page, Page::Library | Page::Lattice) && self.home_menu_open() {
             parts.push(iced::event::listen_with(home_dismiss));
         }
-        if self.page == Page::Catalog {
-            if self.catalog.as_ref().is_some_and(|page| page.animating(now)) {
-                parts.push(iced::window::frames().map(|_| Message::Catalog(catalog::Message::Frame)));
-            }
-            if sheets {
-                parts.push(iced::event::listen_with(catalog_key));
-            }
+        if self.page == Page::Catalog && sheets {
+            parts.push(iced::event::listen_with(catalog_key));
         }
-        if self.page == Page::Search {
-            if self.settings.is_none() {
-                parts.push(iced::event::listen_with(search_key));
-            }
-            if self.search.animating(now) || self.search.spinning() {
-                parts.push(iced::window::frames().map(|_| Message::Search(search::Message::Frame)));
-            }
+        if self.page == Page::Search && self.settings.is_none() {
+            parts.push(iced::event::listen_with(search_key));
         }
         let preview = self
             .workbench
@@ -3257,13 +3334,21 @@ impl Shell {
             || self.theme_park.as_ref().is_some_and(|park| {
                 park.preview.ticking() || (park.preview.live_running() && self.playback.is_playing())
             });
+        let ui_motion = self.ui_frames(now).active();
         let visual = self.scene_active()
+            || lattice_motion
             || preview
             || loading_motion
             || (self.wall_backdrop_visible() && self.playback.is_playing())
             || (self.page == Page::NowPlaying && (self.playback.is_playing() || self.panel.visualizing()));
-        if visual {
-            let cap = if self.scene_active() || preview || self.panel.visualizing() || loading_motion {
+        if visual || ui_motion {
+            let cap = if ui_motion
+                || self.scene_active()
+                || preview
+                || self.panel.visualizing()
+                || loading_motion
+                || lattice_motion
+            {
                 None
             } else {
                 self.style().max_fps()
@@ -3272,10 +3357,11 @@ impl Shell {
                 (Some(setting), Some(cap)) => Some(setting.min(cap)),
                 (setting, cap) => setting.or(cap),
             };
-            parts.push(match fps {
-                Some(fps) => folia_render::frames_at(fps).map(|_| Message::VisualFrame),
-                None => iced::window::frames().map(|_| Message::VisualFrame),
-            });
+            let frames = match fps {
+                Some(fps) => folia_render::frames_at(fps),
+                None => iced::window::frames(),
+            };
+            parts.push(if visual { frames.map(|_| Message::VisualFrame) } else { frames.map(|_| Message::UiFrame) });
         } else if self.playback.is_playing() {
             parts.push(
                 iced::time::every(std::time::Duration::from_millis(250))
@@ -4566,7 +4652,8 @@ impl Shell {
                 };
                 Task::batch([task.map(|message| Message::Home(home::Message::ToolsQueue(message))), effect])
             }
-            home::Message::Destination => {
+            home::Message::ToggleLattice if self.page == Page::Lattice => self.navigate_back(),
+            home::Message::Destination | home::Message::ToggleLattice => {
                 self.play_navigation.cancel();
                 if self.page == Page::Lattice {
                     self.return_home();
@@ -4576,6 +4663,22 @@ impl Shell {
                     self.page = Page::Lattice;
                     Task::none()
                 }
+            }
+            home::Message::Back if self.page == Page::Lattice => self.navigate_back(),
+            home::Message::PosterDetails => {
+                self.handle(Message::Lattice(self.lattice_generation, lattice::Message::Details))
+            }
+            home::Message::AutoFocus(on) => {
+                self.appearance.wall.auto_focus = on;
+                save(&self.store, &self.appearance)
+            }
+            home::Message::Vignette(on) => {
+                self.appearance.wall.vignette = on;
+                save(&self.store, &self.appearance)
+            }
+            home::Message::BadgeCurrentOnly(on) => {
+                self.appearance.wall.badge_current_only = on;
+                save(&self.store, &self.appearance)
             }
             home::Message::LocatePlaying if self.page == Page::Lattice => {
                 self.handle(Message::Lattice(self.lattice_generation, lattice::Message::Locate))
@@ -4951,7 +5054,11 @@ fn open_folder(folder: std::path::PathBuf) -> Task<Message> {
     )
 }
 
-/// Space toggles play. Subscribed only when a track is loaded and no sheet is open.
+/// Lattice consumes the same uncaptured Space event for its focused poster's controls.
+fn lattice_space_key(event: iced::Event, status: iced::event::Status, id: iced::window::Id) -> Option<Message> {
+    space_key(event, status, id).map(|_| Message::Home(home::Message::PosterDetails))
+}
+
 fn space_key(event: iced::Event, status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
     space_toggle(event, status)
 }
@@ -5141,7 +5248,7 @@ fn wall_key(event: iced::Event, status: iced::event::Status, _id: iced::window::
     };
     Some(match home::wall_key_of(&key, modifiers, repeat)? {
         home::WallKey::Focus { backwards } => Message::Home(home::Message::TitleFocus { backwards }),
-        home::WallKey::Destination => Message::Home(home::Message::Destination),
+        home::WallKey::Destination => Message::Home(home::Message::ToggleLattice),
         home::WallKey::Chord => Message::Home(home::Message::Chord),
         home::WallKey::Commands => Message::Home(home::Message::Commands),
         home::WallKey::LatticeCommands => Message::Home(home::Message::LatticeCommands),

@@ -258,7 +258,7 @@ pub fn back<'a>(host: &Host<'a>, shown: f32, hover: f32) -> Element<'a, Message>
 }
 
 pub(super) fn lattice_back<'a>(host: &Host<'a>) -> Element<'a, Message> {
-    let back = round_button(Icon::ChevronLeft, 20.0, 40.0, host.tokens.fill, host.text, Some(Message::Destination));
+    let back = round_button(Icon::ChevronLeft, 20.0, 40.0, host.tokens.fill, host.text, Some(Message::Back));
     container(back).padding(20).into()
 }
 

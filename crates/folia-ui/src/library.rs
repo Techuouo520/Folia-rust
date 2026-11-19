@@ -1193,6 +1193,14 @@ impl LibraryPage {
         self.wall.pointer(at, &self.tiles, now);
     }
 
+    pub(crate) fn take_handoff(&mut self) -> wall::Handoff {
+        self.wall.take_handoff(&self.tiles)
+    }
+
+    pub(crate) fn accept_handoff(&mut self, handoff: wall::Handoff) {
+        self.wall.accept_handoff(handoff, &self.tiles);
+    }
+
     pub(crate) fn suspend_wall(&mut self, suspended: bool) -> Task<Message> {
         self.wall.set_suspended(suspended, &self.tiles, self.online.omni()).map(Message::Wall)
     }
@@ -1610,6 +1618,7 @@ impl LibraryPage {
         if let (Some((tile, rect, scale)), Some(_)) =
             (self.wall.expanded_screen(Instant::now()), self.wall.focus.expanded())
             && let Some(track) = self.track_of(tile)
+            && self.wall.poster_ready(rect, track.id, Instant::now())
         {
             let card = crate::focus_card::Card {
                 track,
@@ -1644,7 +1653,7 @@ impl LibraryPage {
             ));
         }
         if opaque {
-            layers = layers.push(veil(daylight));
+            layers = layers.push(veil(daylight, self.wall.appearance.vignette));
         }
         if let (true, Some(error)) = (local_error, &self.error) {
             layers = layers.push(container(text(error).color(muted)).center(Length::Fill));
@@ -1815,8 +1824,17 @@ pub(crate) fn ground<'a, M: 'a>(theme: &Theme, seam: [f32; 3]) -> Element<'a, M>
 }
 
 /// The wall's edge vignette (52% black at the corners, 16% by day) and its grain, over the tiles.
-fn veil<'a, M: 'a>(daylight: bool) -> Element<'a, M> {
-    let veil = if daylight { Veil { vignette: 0.16, grain: 0.019 } } else { Veil { vignette: 0.52, grain: 0.035 } };
+pub(crate) fn veil<'a, M: 'a>(daylight: bool, vignette: bool) -> Element<'a, M> {
+    let veil = Veil {
+        vignette: if !vignette {
+            0.0
+        } else if daylight {
+            0.16
+        } else {
+            0.52
+        },
+        grain: if daylight { 0.019 } else { 0.035 },
+    };
     shader(veil).width(Length::Fill).height(Length::Fill).into()
 }
 

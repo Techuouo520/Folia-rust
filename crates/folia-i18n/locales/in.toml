@@ -2,6 +2,9 @@
 name = "Folia"
 
 [options]
+latticeAutoFocusOnSongChange = "Fokus saat lagu berubah"
+latticeVignette = "Vignette tepi"
+latticeBadgeCurrentOnly = "Hanya beri nomor lagu yang diputar"
 bravaisSeamClear = "Strip info tembus pandang"
 libraryWallWindows = "Jendela per blok"
 bravaisBackdropLyrics = "Lirik di balik dinding"
@@ -824,6 +827,8 @@ queueClearConfirm = "Klik sekali lagi untuk mengosongkan"
 queueDragHandle = "Seret untuk mengurutkan"
 
 [home]
+latticeBadgeNow = "SEDANG DIPUTAR"
+latticeOpenPlayer = "BUKA PEMUTAR"
 latticeHelpCommands = "Buka panel perintah"
 latticeEmptyTitle = "ANTREAN KOSONG"
 latticeEmptyText = "Putar lagu apa saja, antrean akan terbentang di sini."
@@ -831,6 +836,8 @@ latticeHelpPoster = "Tekan Enter untuk membuka lagu terpilih, lalu Enter lagi un
 latticeHelpMove = "Gunakan tombol panah untuk memindahkan pilihan"
 latticeHelpOpen = "Keluar dari Lattice"
 latticeRadioHidden = "Lagu berikutnya, belum terungkap"
+latticeRadioBackdropWord = "FM PRIBADI"
+latticeRadioBackdropQueueWord = "ANTREAN"
 latticeRadioHelpCard = "Klik kartu untuk membawanya ke tengah, klik dua kali kartu di tengah untuk memutarnya (di FM Pribadi tetap di radio)"
 latticeRadioHelpMove = "← →, seret, atau gulir untuk menelusuri kartu, Enter memutar kartu di tengah"
 connectFromAvatar = "Ketuk avatar di sudut kiri atas, lalu pilih platform untuk terhubung."

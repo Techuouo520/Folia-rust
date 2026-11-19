@@ -2,6 +2,9 @@
 name = "Folia"
 
 [options]
+latticeAutoFocusOnSongChange = "切歌时自动聚焦"
+latticeVignette = "边缘暗角"
+latticeBadgeCurrentOnly = "只显示正在播放的序号"
 bravaisSeamClear = "信息条始终透明"
 libraryWallWindows = "每块窗数"
 bravaisBackdropLyrics = "墙后画面显示歌词"
@@ -824,6 +827,8 @@ queueClearConfirm = "再点一次清空"
 queueDragHandle = "拖动排序"
 
 [home]
+latticeBadgeNow = "正在播放"
+latticeOpenPlayer = "打开播放器"
 latticeHelpCommands = "打开命令面板以进行操作"
 latticeEmptyTitle = "队列是空的"
 latticeEmptyText = "开始播放任意歌曲后，队列会在这里铺开。"
@@ -831,6 +836,8 @@ latticeHelpPoster = "Enter 展开选中歌曲，再次 Enter 播放"
 latticeHelpMove = "方向键移动选中"
 latticeHelpOpen = "退出 Lattice"
 latticeRadioHidden = "接下来的歌，还没揭晓"
+latticeRadioBackdropWord = "私人 FM"
+latticeRadioBackdropQueueWord = "播放队列"
 latticeRadioHelpCard = "单击一张卡把它带到正中，双击正中那张播放（私人 FM 下仍在电台里播放）"
 latticeRadioHelpMove = "← →、拖动或滚轮浏览卡片，Enter 播放正中那张"
 connectFromAvatar = "请在左上角头像选择平台进行连接"

@@ -116,6 +116,7 @@ struct Scroll {
 /// The rail's measurements and wheel state, kept across frames by the canvas.
 #[derive(Default)]
 pub struct Rail {
+    card_font: Option<(iced::Size, u64, f32)>,
     measured: Vec<(u64, Rc<Measured>)>,
     events: (usize, usize, Vec<f64>),
     scroll: Scroll,
@@ -124,6 +125,7 @@ pub struct Rail {
 }
 
 struct Ctx<'a> {
+    card: bool,
     theme: &'a folia_core::Theme,
     keywords: bool,
     typography: crate::Typography,
@@ -138,6 +140,7 @@ struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     fn new(scene: &'a Scene<'_>, layout: &Layout) -> Self {
         Ctx {
+            card: false,
             theme: scene.theme,
             keywords: scene.tuning.flag(super::tuning::manifest(), "keywordColoringEnabled"),
             typography: scene.typography,
@@ -292,11 +295,17 @@ fn measure(line: &Line, active: bool, ctx: &Ctx<'_>) -> Measured {
     }
     let tokens = tokens(line);
     let rows = wrap_tokens(&line.text, &shaped, &tokens, px, ctx.width, ctx.typography.font(SEMIBOLD));
-    let limit = if active { ACTIVE_ROWS } else { INACTIVE_ROWS };
+    let limit = if active && ctx.card {
+        usize::MAX
+    } else if active {
+        ACTIVE_ROWS
+    } else {
+        INACTIVE_ROWS
+    };
     let visible = rows.len().min(limit);
     let line_height = px * 1.18;
-    let pad_top = (px * 0.16).max(8.0);
-    let pad_bottom = (px * 0.34).max(14.0);
+    let pad_top = if ctx.card { 0.0 } else { (px * 0.16).max(8.0) };
+    let pad_bottom = if ctx.card { 0.0 } else { (px * 0.34).max(14.0) };
     let text_height = visible as f32 * line_height + pad_top + pad_bottom;
     let track = ctx
         .typography
@@ -315,9 +324,9 @@ fn measure(line: &Line, active: bool, ctx: &Ctx<'_>) -> Measured {
             .map(|row| Span { start: row.start, end: row.end })
             .collect();
             let shown = rows.len().clamp(1, TRACK_ROWS);
-            let line_height = px * 1.28;
-            let pad_top = (px * 0.45).max(7.0);
-            let height = shown as f32 * line_height + pad_top + (px * 0.18).max(5.0);
+            let line_height = px * if ctx.card { 1.35 } else { 1.28 };
+            let pad_top = if ctx.card { ctx.lyric_px * 0.3 } else { (px * 0.45).max(7.0) };
+            let height = shown as f32 * line_height + pad_top + if ctx.card { 0.0 } else { (px * 0.18).max(5.0) };
             Track {
                 text: translation.to_owned(),
                 clipped: rows.len() > shown,
@@ -355,6 +364,7 @@ impl Rail {
         let line = &ctx.lines[index];
         let mut hasher = DefaultHasher::new();
         ctx.typography.fingerprint().hash(&mut hasher);
+        ctx.card.hash(&mut hasher);
         (&ctx.theme.word_colors, ctx.keywords).hash(&mut hasher);
         (index, line.start.to_bits(), line.end.to_bits(), &line.text, &line.translation, active).hash(&mut hasher);
         (ctx.lyric_px.to_bits(), ctx.translation_px.to_bits(), ctx.width.to_bits()).hash(&mut hasher);
@@ -377,6 +387,7 @@ impl Rail {
             .map(|entry| {
                 let (opacity, scale, blur, base, z) = tone(*entry, ctx.inactive_scale);
                 let height = self.measured(ctx, entry.index, entry.status == Status::Active).height * scale;
+                let height = if ctx.card { height.min(ctx.height - (ctx.lyric_px * 0.6).ceil() * 2.0) } else { height };
                 let visual = Visual {
                     index: entry.index,
                     offset: entry.offset,
@@ -403,6 +414,9 @@ impl Rail {
         };
         let anchor = visuals.iter().position(|(visual, _)| visual.offset == 0).unwrap_or(0);
         visuals[anchor].0.y = ctx.height * 0.46 - visuals[anchor].1 / 2.0;
+        if ctx.card {
+            visuals[anchor].0.y = visuals[anchor].0.y.max((ctx.lyric_px * 0.6).ceil());
+        }
         for index in anchor + 1..visuals.len() {
             let (previous, height) = visuals[index - 1];
             visuals[index].0.y = previous.y + height + gap(previous.status, visuals[index].0.status);
@@ -436,25 +450,28 @@ impl Rail {
 
     /// Lines at `time` following the playing position, each mid-way through its spring from the previous window.
     fn visuals(&mut self, ctx: &Ctx<'_>, time: f64, depth: u32) -> Vec<Visual> {
-        let entries = auto_entries(ctx.lines, time);
+        let mut entries = auto_entries(ctx.lines, time);
+        if ctx.card {
+            entries.retain(|entry| entry.offset.abs() <= 1);
+        }
         let target = self.targets(ctx, &entries);
         if depth == 0 {
             return target;
         }
         let Some(change) = self.last_change(ctx.lines, time) else { return target };
         let before = self.visuals(ctx, change - 1.0e-4, depth - 1);
-        blend(&before, &target, time - change)
+        blend(&before, &target, time - change, ctx.card.then_some(ctx.height))
     }
 }
 
 /// `MONET_SCROLL_TRANSITION` from the previous window into `target`, plus the enter and exit motions.
-fn blend(before: &[Visual], target: &[Visual], elapsed: f64) -> Vec<Visual> {
+fn blend(before: &[Visual], target: &[Visual], elapsed: f64, card_height: Option<f32>) -> Vec<Visual> {
     let mut out: Vec<Visual> = target
         .iter()
         .map(|to| {
             let from = before.iter().find(|from| from.index == to.index).copied().unwrap_or(Visual {
-                y: to.y + if to.offset >= 0 { 34.0 } else { -34.0 },
-                scale: to.scale * 0.98,
+                y: card_height.map_or(to.y, |height| height * 0.46) + if to.offset >= 0 { 34.0 } else { -34.0 },
+                scale: if card_height.is_some() { 0.7 } else { to.scale * 0.98 },
                 opacity: 0.0,
                 blur: 5.0,
                 ..*to
@@ -613,7 +630,17 @@ pub fn draw(frame: &mut Frame, place: Place, scene: &Scene<'_>, layout: &Layout,
             (1.0 - at) / 0.12
         }
     };
-    let paint = Paint { place, scene, layout, ctx: &ctx, rail: box_, fade: &fade, alpha, manual: manual.is_some() };
+    let paint = Paint {
+        place,
+        scene,
+        glow: layout.glow,
+        mirrored: layout.mirrored,
+        ctx: &ctx,
+        rail: box_,
+        fade: &fade,
+        alpha,
+        manual: manual.is_some(),
+    };
     rail.hits.clear();
     for visual in &visuals {
         let measured = rail.measured(&ctx, visual.index, visual.status == Status::Active);
@@ -624,8 +651,113 @@ pub fn draw(frame: &mut Frame, place: Place, scene: &Scene<'_>, layout: &Layout,
         if hit.height > 0.0 {
             rail.hits.push((visual.index, hit));
         }
-        paint.line(frame, visual, &measured);
+        paint.line(frame, visual, &measured, None);
     }
+}
+
+/// Lattice keeps three lines and fits a fixed lyric budget independently of the current sentence.
+pub(super) fn draw_card(
+    frame: &mut Frame,
+    place: Place,
+    scene: &Scene<'_>,
+    rail: &mut Rail,
+    size: iced::Size,
+    glows: &mut Vec<folia_render::glyphs::Sprite>,
+) {
+    let fingerprint = scene.typography.fingerprint();
+    let px = match rail.card_font {
+        Some((old_size, old_font, px)) if old_size == size && old_font == fingerprint => px,
+        _ => {
+            let px = card_font(scene.typography, size);
+            rail.card_font = Some((size, fingerprint, px));
+            px
+        }
+    };
+    let padding = (px * 0.6).ceil();
+    let ctx = Ctx {
+        card: true,
+        theme: scene.theme,
+        keywords: scene.tuning.flag(super::tuning::manifest(), "keywordColoringEnabled"),
+        typography: scene.typography,
+        lines: &scene.lyrics.lines,
+        lyric_px: px,
+        translation_px: px * 0.5,
+        inactive_scale: 0.72,
+        width: (size.width - padding * 2.0).max(1.0),
+        height: size.height,
+    };
+    let mut visuals = rail.visuals(&ctx, scene.time, if scene.static_mode { 0 } else { 3 });
+    visuals.sort_by_key(|visual| visual.z);
+    let fade = |y: f32| {
+        let edge = (y / size.height.max(1.0)).min(1.0 - y / size.height.max(1.0));
+        let t = (edge / 0.09).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    for mut visual in visuals {
+        let measured = rail.measured(&ctx, visual.index, visual.status == Status::Active);
+        if visual.status == Status::Active {
+            visual.y -= card_scroll(&measured, scene.time, size.height - padding * 2.0);
+        }
+        if scene.static_mode {
+            visual.blur = 0.0;
+        }
+        let paint = Paint {
+            place,
+            scene,
+            glow: padding,
+            mirrored: false,
+            ctx: &ctx,
+            rail: Rectangle::with_size(size),
+            fade: &fade,
+            alpha: 1.0,
+            manual: false,
+        };
+        paint.line(frame, &visual, &measured, Some(glows));
+    }
+}
+
+fn card_font(typography: crate::Typography, size: iced::Size) -> f32 {
+    let mut chosen = 24.0;
+    let (mut low, mut high) = (24, 64);
+    while low <= high {
+        let px = (low + high) / 2;
+        let font = px as f32;
+        let main = text::shape("国Agyp", font, typography.font(SEMIBOLD));
+        let main_height = text::ink(&main).iter().fold((0.0_f32, 0.0_f32), |(lo, hi), &(a, b)| (lo.min(a), hi.max(b)));
+        let line = (font * 1.18).max(main_height.1 - main_height.0 + 2.0);
+        let translated = !typography.hide_subtitle && typography.subtitle_mode != folia_core::SubtitleContentMode::None;
+        let budget = line * (3.0 + 2.0 * 0.72)
+            + font * 0.49 * 2.0
+            + font * 1.2
+            + if translated { font * 0.5 * 1.35 * 2.0 + font * 0.3 } else { 0.0 };
+        if budget <= size.height && main.width * 3.0 <= size.width - font * 1.2 {
+            chosen = font;
+            low = px + 1;
+        } else {
+            high = px - 1;
+        }
+    }
+    chosen
+}
+
+fn card_scroll(measured: &Measured, time: f64, room: f32) -> f32 {
+    if measured.height <= room {
+        return 0.0;
+    }
+    let token = measured.tokens.iter().rfind(|token| token.timing.is_some_and(|(start, _)| start <= time));
+    let front = token.map_or(0.0, |token| {
+        let progress =
+            token.timing.map_or(0.0, |(start, end)| ((time - start) / (end - start).max(0.001)).clamp(0.0, 1.0) as f32);
+        measured.shaped.x_at(token.start) + measured.shaped.span(token.start, token.end) * progress
+    });
+    let row = measured
+        .rows
+        .iter()
+        .position(|row| measured.shaped.x_at(row.end) >= front)
+        .unwrap_or_else(|| measured.rows.len().saturating_sub(1));
+    (row as f32 * measured.line_height - room * 0.46 + measured.line_height / 2.0)
+        .max(0.0)
+        .min((measured.height - room).max(0.0))
 }
 
 /// Springs the lines shared with `from` from their old place; new lines appear in place (`disableEntryMotion`).
@@ -683,7 +815,8 @@ struct Placed<'a> {
 struct Paint<'a> {
     place: Place,
     scene: &'a Scene<'a>,
-    layout: &'a Layout,
+    glow: f32,
+    mirrored: bool,
     ctx: &'a Ctx<'a>,
     rail: Rectangle,
     fade: Mask<'a>,
@@ -692,21 +825,27 @@ struct Paint<'a> {
 }
 
 impl Paint<'_> {
-    fn line(&self, frame: &mut Frame, visual: &Visual, measured: &Measured) {
+    fn line(
+        &self,
+        frame: &mut Frame,
+        visual: &Visual,
+        measured: &Measured,
+        mut glows: Option<&mut Vec<folia_render::glyphs::Sprite>>,
+    ) {
         let Some(line) = self.ctx.lines.get(visual.index) else { return };
         let scale = snap_scale(self.ctx.lyric_px, visual.scale);
         let opacity = visual.opacity * self.alpha;
         if opacity <= 0.002 {
             return;
         }
-        let glow = self.layout.glow;
+        let glow = self.glow;
         let width = (self.rail.width - glow * 2.0) * scale;
-        let x = if self.layout.mirrored { self.rail.x + self.rail.width - glow - width } else { self.rail.x + glow };
+        let x = if self.mirrored { self.rail.x + self.rail.width - glow - width } else { self.rail.x + glow };
         let origin = Point::new(x, self.rail.y + visual.y);
         let theme = self.scene.theme;
         let active = visual.status == Status::Active;
         let placed = Placed { line, visual, origin, scale, opacity };
-        if line.is_chorus {
+        if line.is_chorus && !self.ctx.card {
             self.chorus(frame, &placed, width, measured.height * scale);
         }
         let mut word = color(theme.primary, 0.98);
@@ -737,7 +876,7 @@ impl Paint<'_> {
         for (row_index, row) in measured.rows.iter().take(measured.visible).enumerate() {
             let content = line.text.get(row.start..row.end).unwrap_or_default();
             let row_width = measured.shaped.x_at(row.end) - measured.shaped.x_at(row.start);
-            let x = if self.layout.mirrored { origin.x + width - row_width * scale } else { origin.x };
+            let x = if self.mirrored { origin.x + width - row_width * scale } else { origin.x };
             let at = Point::new(x, origin.y + (measured.pad_top + row_index as f32 * measured.line_height) * scale);
             let pen = ink::Line { content, at, px, line_height, font: self.scene.typography.font(SEMIBOLD) };
             let band = clip_to(
@@ -747,13 +886,17 @@ impl Paint<'_> {
             let row_x = measured.shaped.x_at(row.start);
             let to_x = |byte: usize| at.x + (measured.shaped.x_at(byte) - row_x) * scale;
             let ink_row = RowInk { pen, measured, span: *row, to_x: &to_x, band, base, word, opacity };
-            if active {
+            if active && !self.ctx.card {
                 let shadow = ink::blur_offsets(17.0 * scale, (0.0, 14.0 * scale));
                 let tint = color(theme.background, ink::split_alpha(0.22 * opacity, shadow.len()));
                 ink::masked_copies(frame, self.place, pen, tint, band, &mask, &shadow);
             }
             if !still && visual.status != Status::Waiting {
-                self.glow(frame, &ink_row, line.is_chorus, render_end);
+                if let Some(glows) = glows.as_deref_mut() {
+                    self.glyph_glow(glows, &ink_row, line.is_chorus, render_end);
+                } else {
+                    self.glow(frame, &ink_row, line.is_chorus, render_end);
+                }
             }
             let segments = self.segments(&ink_row, visual.status, still);
             let offsets = if visual.blur * scale >= 0.6 {
@@ -802,6 +945,63 @@ impl Paint<'_> {
             last.1 = band.x + band.width;
         }
         runs
+    }
+
+    fn glyph_glow(
+        &self,
+        sprites: &mut Vec<folia_render::glyphs::Sprite>,
+        ink_row: &RowInk<'_>,
+        chorus: bool,
+        render_end: f64,
+    ) {
+        use folia_render::glyphs::{Mark, Sprite};
+        let RowInk { pen, measured, span: row, to_x, word, opacity, band, .. } = *ink_row;
+        if band.height <= 0.0 {
+            return;
+        }
+        let scale = pen.px / self.ctx.lyric_px.max(1.0);
+        let baseline = pen.at.y + pen.line_height / 2.0 + measured.shaped.baseline * scale;
+        let axes = scale * self.place.scale;
+        for token in measured.tokens.iter().filter(|token| token.end > row.start && token.start < row.end) {
+            let Some((start, end)) = token.timing else { continue };
+            let lit = motion::glow(self.scene.time, start, end, render_end);
+            let tint = ink::mix(color(self.scene.theme.primary, 1.0), keyword_ink(measured, token, word), lit);
+            let strength = ((tint.r.max(tint.g).max(tint.b) * 255.0 - 110.0) / 50.0).clamp(0.0, 1.0);
+            let alpha = lit * opacity * if chorus { 1.0 } else { 0.88 } * strength * strength * (3.0 - 2.0 * strength);
+            if alpha < 0.002 {
+                continue;
+            }
+            for (glyph, ink) in measured
+                .shaped
+                .glyphs
+                .iter()
+                .zip(&measured.ink)
+                .filter(|(g, _)| g.start >= token.start.max(row.start) && g.start < token.end.min(row.end))
+            {
+                if ink.0 >= ink.1 {
+                    continue;
+                }
+                let alpha = alpha * (self.fade)(baseline + (ink.0 + ink.1) * 0.5 * scale);
+                for reach in if chorus { [0.45, 0.9] } else { [0.28, 0.65] } {
+                    sprites.push(Sprite {
+                        mark: Mark::BlurredGlyph {
+                            glyph: glyph.render,
+                            size: self.ctx.lyric_px,
+                            outline: 0.0,
+                            max_scale: 2.0,
+                            sigma: (self.ctx.lyric_px * reach).round(),
+                        },
+                        anchor: [
+                            to_x(glyph.start) * self.place.scale + self.place.offset.x,
+                            baseline * self.place.scale + self.place.offset.y,
+                        ],
+                        pen: [glyph.render.x - measured.shaped.x_at(glyph.start), glyph.render.y],
+                        axes: [axes, 0.0, 0.0, axes],
+                        color: [tint.r, tint.g, tint.b, alpha],
+                    });
+                }
+            }
+        }
     }
 
     /// The glow halo under sung words (`resolveMonetGlow`, two text-shadows of 0.28/0.65 em, 0.45/0.9 on a chorus).
@@ -911,11 +1111,11 @@ impl Paint<'_> {
     fn track(&self, frame: &mut Frame, placed: &Placed<'_>, track: &Track, top: f32) {
         let Placed { line, origin, scale, opacity, .. } = *placed;
         let since = self.scene.time - line.start;
-        let enter = tween(0.0, 1.0, since, 0.28, SWAP) as f32;
+        let enter = if self.ctx.card { 1.0 } else { tween(0.0, 1.0, since, 0.28, SWAP) as f32 };
         let rise = 8.0 * (1.0 - enter) * scale;
         let theme = self.scene.theme;
         let tint = color(theme.primary, 0.68 * opacity * enter);
-        let glow = self.layout.glow * scale;
+        let glow = self.glow * scale;
         let box_top = origin.y + top + rise;
         let bottom = box_top + track.height * scale;
         let fade_px = (track.px * 0.65).max(10.0) * scale;
@@ -929,7 +1129,7 @@ impl Paint<'_> {
             Rectangle {
                 x: origin.x - glow,
                 y: box_top,
-                width: (self.rail.width - self.layout.glow * 2.0) * scale + glow * 2.0,
+                width: (self.rail.width - self.glow * 2.0) * scale + glow * 2.0,
                 height: track.height * scale,
             },
             self.rail,
@@ -937,8 +1137,8 @@ impl Paint<'_> {
         for (index, row) in track.rows.iter().enumerate() {
             let content = track.text.get(row.start..row.end).unwrap_or_default();
             let font = self.scene.typography.subtitle.unwrap_or_else(|| self.scene.typography.font(MEDIUM));
-            let x = if self.layout.mirrored {
-                self.rail.x + self.rail.width - self.layout.glow - text::shape(content, track.px, font).width * scale
+            let x = if self.mirrored {
+                self.rail.x + self.rail.width - self.glow - text::shape(content, track.px, font).width * scale
             } else {
                 origin.x
             };

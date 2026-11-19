@@ -144,9 +144,10 @@ impl Sources {
         tokens: Tokens,
         group: Group<'a, crate::Message>,
         first: bool,
+        highlight: f32,
     ) -> Element<'a, crate::Message> {
         let draggable = if !self.busy && self.alerts.is_empty() { 3..3 + self.settings.scripts.len() } else { 0..0 };
-        kit::group_with_rows(tokens, group, first, |rows| {
+        kit::group_with_rows(tokens, group, first, highlight, |rows| {
             crate::drag_to_reorder(
                 rows,
                 draggable,

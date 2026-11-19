@@ -296,11 +296,29 @@ impl Focus {
         self.camera = None;
     }
 
+    /// Opens a wall already settled on its initial poster, without replaying the expansion.
+    pub fn finish(&mut self) {
+        let now = Instant::now();
+        for motion in &mut self.motions {
+            motion.at = now.checked_sub(std::time::Duration::from_secs(10)).unwrap_or(now);
+        }
+        self.camera = None;
+        self.pop_at = None;
+        self.expanded_at = None;
+        self.settle(now);
+    }
+
     pub fn animating(&self, now: Instant) -> bool {
         self.camera.is_some()
             || self.motions.iter().any(|motion| motion.running(now))
             || self.pop_at.is_some_and(|at| ease_at(at, now, POP_MS, EASE_OUT) < 1.0)
             || self.expanded_at.is_some_and(|at| self.actions_reveal(now).0 < 1.0 && now >= at)
+    }
+
+    pub fn expansion_settled(&self, now: Instant) -> bool {
+        self.expanded.is_some_and(|(slot, _)| {
+            self.motions.iter().filter(|motion| motion.block == slot.block()).all(|motion| !motion.running(now))
+        })
     }
 
     /// Drops the finished folds back to rest so a block at rest has no motion left.

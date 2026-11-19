@@ -9,6 +9,7 @@ mod pipeline;
 mod plate;
 mod prepared;
 pub mod quality;
+pub mod radio;
 mod scene;
 pub mod text_run;
 pub mod typeface;
