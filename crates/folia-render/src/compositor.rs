@@ -44,13 +44,8 @@ impl Compositor {
             })
             .await?;
         let capabilities = surface.get_capabilities(&adapter);
-        let format = capabilities
-            .formats
-            .iter()
-            .copied()
-            .find(|format| format.required_features().is_empty() && format.is_srgb() == color::GAMMA_CORRECTION)
-            .or_else(|| capabilities.formats.first().copied())
-            .ok_or(Error::Format)?;
+        let format =
+            crate::backend::surface_format(&capabilities.formats, color::GAMMA_CORRECTION).ok_or(Error::Format)?;
         let alpha = [
             wgpu::CompositeAlphaMode::PreMultiplied,
             wgpu::CompositeAlphaMode::PostMultiplied,

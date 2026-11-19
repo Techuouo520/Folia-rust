@@ -69,14 +69,17 @@ fn scene_settings_persist_and_room_replies_follow_the_live_page() {
         error: folia_visualizer::cinema::CinemaError::Asset("late initialization failure"),
     })));
     reply(&mut shell, 9, true);
-    drop(shell.update(Message::WindowClosing));
-    reply(&mut shell, 9, false);
     let task = shell.update(Message::SceneSettings(Change::Reset));
     super::player_fixture::complete(&mut shell, task);
     let reset: folia_store::SceneSettings = store.load().unwrap();
     assert_eq!(reset.scene_options.cinema, Default::default());
     assert!(reset.scene_room_sound);
     assert_eq!(reset.scene_room_output, RoomOutput::Speakers);
+    drop(shell.update(Message::WindowClosing));
+    reply(&mut shell, 9, false);
+    let task = shell.update(Message::SceneSettings(Change::Quality(SceneQuality::High)));
+    super::player_fixture::complete(&mut shell, task);
+    assert_eq!(store.load::<folia_store::SceneSettings>().unwrap().scene_options.cinema, reset.scene_options.cinema);
 }
 
 #[test]

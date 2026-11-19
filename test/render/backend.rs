@@ -90,3 +90,13 @@ fn fullscreen_host_covers_every_pixel_at_fractional_dpi() {
         }
     }
 }
+
+#[test]
+fn transparent_surface_prefers_eight_bit_alpha_over_rgb10a2() {
+    use wgpu::TextureFormat::*;
+    assert_eq!(backend::surface_format(&[Rgb10a2Unorm, Rgba8Unorm, Bgra8Unorm], false), Some(Bgra8Unorm));
+    assert_eq!(backend::surface_format(&[Rgb10a2Unorm, Rgba8Unorm], false), Some(Rgba8Unorm));
+    assert_eq!(backend::surface_format(&[Rgb10a2Unorm, Rgba8UnormSrgb, Bgra8UnormSrgb], true), Some(Bgra8UnormSrgb));
+    assert_eq!(backend::surface_format(&[Rgb10a2Unorm], false), Some(Rgb10a2Unorm));
+    assert_eq!(backend::surface_format(&[], false), None);
+}

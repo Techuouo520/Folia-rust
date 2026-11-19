@@ -14,18 +14,26 @@ fn settings_group_tabs_outline_the_destination_card() {
     if run_gpu_child("picker::settings_group_tabs_outline_the_destination_card") {
         return;
     }
+    folia_ui::install_fonts();
+    let mut renderer =
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, iced::Pixels(16.0), None))
+            .unwrap();
+    for reduced in [false, true] {
+        settings_landing(reduced, &mut renderer);
+    }
+}
+
+fn settings_landing(reduced: bool, renderer: &mut iced::Renderer) {
     use folia_ui::{SettingsMessage, SettingsSection};
     use iced::futures::StreamExt;
-    folia_ui::install_fonts();
     let temp = tempfile::tempdir().unwrap();
-    let (mut shell, initial) = Shell::new(init(temp.path()));
+    let mut options = init(temp.path());
+    options.graphics.motion.ui_micro_motion = reduced;
+    let (mut shell, initial) = Shell::new(options);
     complete(&mut shell, initial);
     std::thread::sleep(Duration::from_millis(400));
     drop(shell.update(Message::SplashFrame));
     drop(shell.update(Message::Home(folia_ui::HomeMessage::Settings)));
-    let mut renderer =
-        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, iced::Pixels(16.0), None))
-            .unwrap();
     let mut cache = Cache::default();
     let actions = |task| {
         pollster::block_on(async {
@@ -37,14 +45,15 @@ fn settings_group_tabs_outline_the_destination_card() {
     };
     let mut pending = actions(shell.update(Message::Settings(SettingsMessage::Section(SettingsSection::Graphics))));
     let mut frame = |shell: &mut Shell, click: bool| {
-        let mut ui = UserInterface::build(shell.view(), WINDOW, std::mem::take(&mut cache), &mut renderer);
+        pending.extend(actions(shell.update(Message::UiFrame)));
+        let mut ui = UserInterface::build(shell.view(), WINDOW, std::mem::take(&mut cache), renderer);
         for action in std::mem::take(&mut pending) {
             if let iced_runtime::Action::Widget(mut operation) = action {
-                ui.operate(&renderer, operation.as_mut());
+                ui.operate(renderer, operation.as_mut());
             }
         }
         let mut labels = Labels::default();
-        ui.operate(&renderer, &mut labels);
+        ui.operate(renderer, &mut labels);
         let mut events = vec![Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now()))];
         let cursor = if click {
             let position = labels
@@ -64,8 +73,8 @@ fn settings_group_tabs_outline_the_destination_card() {
             iced::mouse::Cursor::Unavailable
         };
         let mut messages = Vec::new();
-        ui.update(&events, cursor, &mut renderer, &mut iced::advanced::clipboard::Null, &mut messages);
-        ui.draw(&mut renderer, &shell.theme(), &iced::advanced::renderer::Style { text_color: Color::BLACK }, cursor);
+        ui.update(&events, cursor, renderer, &mut iced::advanced::clipboard::Null, &mut messages);
+        ui.draw(renderer, &shell.theme(), &iced::advanced::renderer::Style { text_color: Color::BLACK }, cursor);
         cache = ui.into_cache();
         let pixels = renderer.screenshot(
             &iced::advanced::graphics::Viewport::with_physical_size(Size::new(1200, 800), 1.0),
@@ -74,7 +83,6 @@ fn settings_group_tabs_outline_the_destination_card() {
         for message in messages {
             pending.extend(actions(shell.update(message)));
         }
-        pending.extend(actions(shell.update(Message::Settings(SettingsMessage::Frame))));
         pixels
     };
     for _ in 0..20 {
@@ -93,7 +101,7 @@ fn settings_group_tabs_outline_the_destination_card() {
         .flat_map(|y| (320..1120).map(move |x| (y * 1200 + x) * 4))
         .filter(|&i| (0..3).any(|c| highlighted[i + c].abs_diff(settled[i + c]) > 15))
         .count();
-    assert!(changed > 300, "selecting a group never outlined its destination: {changed} changed body pixels");
+    assert!(changed > 300, "landing outline did not expire: reduced={reduced}, {changed} changed body pixels");
 }
 
 #[derive(Default)]
