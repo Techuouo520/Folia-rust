@@ -23,6 +23,44 @@ fn missing_file_gives_defaults() {
 }
 
 #[test]
+fn playback_sessions_round_trip_and_normalize_invalid_times() {
+    use folia_core::{OnlineId, QueueSnapshot, Track};
+    use folia_store::{Domain, FmSession, PlaybackSession};
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path());
+    let local =
+        Track {
+            id: 1, title: "本地歌曲".into(), path: "music/song.wav".into(), duration: 120.0, ..Default::default()
+        };
+    let online = Track {
+        id: -2,
+        title: "Online song".into(),
+        duration: 180.0,
+        online: Some(OnlineId { provider: "netease".into(), id: "2".into() }),
+        ..Default::default()
+    };
+    let mut session = PlaybackSession {
+        queue: QueueSnapshot { items: vec![local, online.clone(), online], current: Some(2), ..Default::default() },
+        position: 42.75,
+        fm: Some(FmSession { provider: "netease".into(), id: "fm".into(), name: "FM".into() }),
+    };
+    store.save(&session).unwrap();
+    assert_eq!(store.load::<PlaybackSession>().unwrap(), session);
+    session.queue.items[1].path = "cache/unfinished.part".into();
+    assert!(session.clone().normalized().queue.items[1].path.as_os_str().is_empty());
+    assert!(fs::read_to_string(dir.path().join(PlaybackSession::FILE)).unwrap().starts_with("schema_version = 1\n"));
+    session.queue.current = Some(99);
+    session.queue.detached = Some(session.queue.items[0].clone());
+    session.queue.detached.as_mut().unwrap().duration = f64::INFINITY;
+    session.position = f64::NAN;
+    let normalized = session.normalized();
+    assert_eq!(normalized.position, 0.0);
+    assert_eq!(normalized.queue.current, None);
+    assert_eq!(normalized.queue.detached.unwrap().duration, 0.0);
+    assert!(normalized.fm.is_none());
+}
+
+#[test]
 fn graphics_preferences_round_trip_and_system_motion_is_opt_in() {
     use folia_store::{GpuPreference, GraphicsSettings, MotionSurface};
     let dir = tempfile::tempdir().unwrap();

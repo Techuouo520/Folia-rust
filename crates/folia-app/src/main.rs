@@ -27,6 +27,7 @@ fn window_settings() -> anyhow::Result<iced::window::Settings> {
     folia_render::backend::prepare_taskbar_icon(icon.clone())?;
     Ok(iced::window::Settings {
         icon: Some(icon),
+        exit_on_close_request: false,
         ..folia_render::backend::window_settings(folia_ui::INITIAL_WINDOW, folia_ui::MIN_WINDOW_SIZE)
     })
 }

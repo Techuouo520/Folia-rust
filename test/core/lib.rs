@@ -119,6 +119,28 @@ fn queue_origin_lasts_until_the_queue_is_replaced() {
 }
 
 #[test]
+fn queue_snapshots_keep_order_selection_and_detached_items() {
+    let mut queue = Queue::default();
+    queue.replace_from(vec!['a', 'b', 'a'], 2, Origin { name: "Source".into() });
+    let mut restored = Queue::default();
+    restored.repeat = Repeat::All;
+    restored.restore(queue.snapshot());
+    assert_eq!(restored.snapshot(), queue.snapshot());
+    assert_eq!(restored.repeat, Repeat::All);
+    queue.clear_list();
+    restored.restore(queue.snapshot());
+    assert_eq!(restored.current(), Some(&'a'));
+    assert!(restored.items().is_empty());
+    let mut invalid = queue.snapshot();
+    invalid.items = vec!['b'];
+    invalid.current = Some(99);
+    restored.restore(invalid);
+    assert_eq!(restored.current_index(), None);
+    assert_eq!(restored.current(), Some(&'a'));
+    assert_eq!(restored.advance(false), Some(&'b'));
+}
+
+#[test]
 fn clearing_the_queue_keeps_the_current_item_playing() {
     let mut queue = Queue::default();
     queue.replace_from(vec!['a', 'b', 'c', 'd'], 2, Origin { name: "全部歌曲".to_owned() });

@@ -163,9 +163,15 @@ impl Player {
     }
 
     pub fn load_input(&self, input: folia_core::AudioInput) {
-        let load = self.prepare_input(Some(input), 0.0);
+        self.load_input_at(input, 0.0);
+    }
+
+    /// Starts decoding at the saved media time without emitting the beginning of the track first.
+    pub fn load_input_at(&self, input: folia_core::AudioInput, position: f64) {
+        let position = if position.is_finite() { position.max(0.0) } else { 0.0 };
+        let load = self.prepare_input(Some(input), position);
         self.shared.duration.store(0.0);
-        self.shared.request_flush(0.0);
+        self.shared.request_flush(position);
         // Mark the new track as playing now, so a status read before the decoder starts never sees the old end.
         self.shared.decoder_done.store(false, std::sync::atomic::Ordering::Release);
         self.shared.set_state(PlayerState::Playing);

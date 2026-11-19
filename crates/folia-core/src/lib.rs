@@ -29,7 +29,7 @@ pub use audio_quality::{AUDIO_QUALITY_LEVELS, AudioQuality, UNLISTED_AUDIO_QUALI
 pub use language::{Language, LanguagePreference};
 pub use lyric_render::{LYRIC_RENDER_SCALES, LyricAntialias, LyricRenderOverride, LyricRenderQuality};
 pub use lyrics::{BackgroundVocal, ChorusRange, INTERLUDE_TEXT, Line, Lyrics, SubtitleContentMode, Word};
-pub use queue::{Origin, Queue, Repeat};
+pub use queue::{Origin, Queue, QueueSnapshot, Repeat};
 pub use scene::{CinemaOptions, SceneId, SceneQuality};
 pub use theme::{AnimationIntensity, Rgb, Theme};
 pub use track::{ArtistRef, OnlineId, OnlineTrackInfo, ReplayGain, Track};

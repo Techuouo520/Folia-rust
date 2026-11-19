@@ -12,9 +12,25 @@ pub enum Repeat {
 }
 
 /// Where the queue was started, for as long as every item is still one of those songs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Origin {
     pub name: String,
+}
+
+/// Durable queue contents, including a playing item detached from the editable list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, bound(deserialize = "T: Deserialize<'de>"))]
+pub struct QueueSnapshot<T> {
+    pub items: Vec<T>,
+    pub current: Option<usize>,
+    pub detached: Option<T>,
+    pub origin: Option<Origin>,
+}
+
+impl<T> Default for QueueSnapshot<T> {
+    fn default() -> Self {
+        Self { items: Vec::new(), current: None, detached: None, origin: None }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +60,27 @@ impl<T> Default for Queue<T> {
 }
 
 impl<T> Queue<T> {
+    pub fn snapshot(&self) -> QueueSnapshot<T>
+    where
+        T: Clone,
+    {
+        QueueSnapshot {
+            items: self.items.clone(),
+            current: self.current,
+            detached: self.detached.clone(),
+            origin: self.origin.clone(),
+        }
+    }
+
+    /// Restores contents without starting playback or changing the current repeat preference.
+    pub fn restore(&mut self, snapshot: QueueSnapshot<T>) {
+        self.current = snapshot.current.filter(|&index| index < snapshot.items.len());
+        self.detached = if self.current.is_none() { snapshot.detached } else { None };
+        self.origin = snapshot.origin.filter(|_| !snapshot.items.is_empty());
+        self.items = snapshot.items;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     /// Replaces the queue and makes `start` current. A replacement is not the previous source's queue.
     pub fn replace(&mut self, items: Vec<T>, start: usize) {
         self.detached = None;

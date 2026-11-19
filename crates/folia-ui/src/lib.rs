@@ -40,6 +40,7 @@ mod platform_icon;
 mod platform_rows;
 mod playback;
 mod playback_navigation;
+mod playback_session;
 mod player_bar;
 mod playlist_dialog;
 mod positioner;
@@ -243,6 +244,7 @@ pub enum Message {
     Catalog(catalog::Message),
     Back,
     Playback(playback::Message),
+    Session(playback_session::Message),
     VisualFrame,
     UiFrame,
     OpenFiles(Vec<Track>),
@@ -376,6 +378,7 @@ pub struct Shell {
     pending_playback_source: Option<(u64, NavigationEntry)>,
     omni: Option<Omni>,
     playback: Playback,
+    playback_session: playback_session::Session,
     play_navigation: PlaybackNavigation,
     /// The local playlists as last read or written, the liked-songs list first.
     playlists: Vec<folia_library::Playlist>,
@@ -576,6 +579,8 @@ impl Shell {
             memory_monitor.start(init.developer.interval_ms());
             developer.refresh_memory(memory_monitor.history());
         }
+        let playback = Playback::new(init.playback, omni.clone());
+        let playback_session = playback_session::Session::new(&playback, init.open_files.is_empty());
         let mut shell = Self {
             store: init.store,
             general: init.general,
@@ -621,7 +626,8 @@ impl Shell {
             history: Vec::new(),
             playback_source: None,
             pending_playback_source: None,
-            playback: Playback::new(init.playback, omni.clone()),
+            playback,
+            playback_session,
             play_navigation: PlaybackNavigation::default(),
             playlists: Vec::new(),
             db_path: db_path.clone(),
@@ -692,6 +698,7 @@ impl Shell {
         });
         let sources = shell.sources.restore(shell.omni.clone(), shell.store.clone(), shell.data_dir.clone());
         let motion = if shell.graphics.motion.follow_system { graphics::poll() } else { Task::none() };
+        let restore = playback_session::load(shell.store.clone());
         (
             shell,
             Task::batch([
@@ -707,6 +714,7 @@ impl Shell {
                 theme_load,
                 iced::system::theme().map(Message::SystemTheme),
                 scene_sound_task,
+                restore,
             ]),
         )
     }
@@ -947,6 +955,13 @@ impl Shell {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        if self.closing {
+            return match message {
+                Message::Session(message) => self.playback_session.update(message, &mut self.playback, &self.store),
+                _ => Task::none(),
+            };
+        }
+        let seek_finished = matches!(message, Message::Playback(playback::Message::SeekDone));
         motion::configure(&self.graphics.motion, self.system_reduced_motion);
         if self.graphics.background_throttling && folia_render::backend::window_hidden() {
             self.visualizer_hold.get_or_insert_with(|| self.playback.lyric_time());
@@ -969,6 +984,9 @@ impl Shell {
         );
         let lyrics_settled = matches!(&message, Message::Playback(playback::Message::LyricsLoaded(request, ..)) if *request == self.playback.request_id());
         let task = self.handle(message);
+        if self.closing {
+            return task;
+        }
         let entered_wall =
             if before != Page::Library && self.page == Page::Library && self.library.order_seed() == wall_seed {
                 self.library.enter_wall(&self.i18n).map(Message::Library)
@@ -1173,7 +1191,9 @@ impl Shell {
         }
         self.sync_native_blur();
         let analysis = self.sync_smart_beat(frame_tick);
-        if analysis.units() == 0 { task } else { Task::batch([task, analysis]) }
+        let session = self.playback_session.observe(&self.playback, &self.store, seek_finished);
+        let task = if analysis.units() == 0 { task } else { Task::batch([task, analysis]) };
+        if session.units() == 0 { task } else { Task::batch([task, session]) }
     }
 
     fn load_background(&self) -> Task<Message> {
@@ -1939,10 +1959,10 @@ impl Shell {
                 self.drag_from = None;
                 self.finish_slider()
             }
-            Message::WindowClosing => {
-                self.closing = true;
-                self.scene_generation = self.scene_generation.wrapping_add(1);
-                Task::none()
+            Message::WindowClosing => self.request_close(),
+            Message::Session(message) => {
+                let task = self.playback_session.update(message, &mut self.playback, &self.store);
+                Task::batch([task, self.ensure_art()])
             }
             Message::RevealChrome => {
                 if self.page == Page::NowPlaying {
@@ -2452,10 +2472,20 @@ impl Shell {
         iced::window::set_mode(id, mode)
     }
 
+    fn request_close(&mut self) -> Task<Message> {
+        if self.closing {
+            return Task::none();
+        }
+        let task = self.playback_session.close(&self.playback, &self.store);
+        self.closing = true;
+        self.scene_generation = self.scene_generation.wrapping_add(1);
+        self.playback.shutdown();
+        task
+    }
+
     fn chrome(&mut self, message: chrome::Message) -> Task<Message> {
         if matches!(message, chrome::Message::Close) {
-            self.closing = true;
-            self.scene_generation = self.scene_generation.wrapping_add(1);
+            return self.request_close();
         }
         let Some(id) = self.window else {
             return iced::window::oldest().map(Message::WindowReady);
@@ -2501,7 +2531,7 @@ impl Shell {
                 iced::window::toggle_maximize(id)
             }
             chrome::Message::ToggleFullscreen => self.toggle_fullscreen(),
-            chrome::Message::Close => iced::window::close(id),
+            chrome::Message::Close => self.request_close(),
             chrome::Message::Activity { x, y } => {
                 self.clock = self.clock.pointer(self.now_ms(), x, y);
                 let height = self.window_size.height;
