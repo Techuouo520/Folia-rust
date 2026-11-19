@@ -237,6 +237,7 @@ pub enum Message {
     /// The search field's input method opened or closed a composition.
     Composing(bool),
     Settings,
+    Scrobble,
     Player,
     Import,
     Reload,
@@ -643,6 +644,7 @@ impl HomeChrome {
             | Message::SubmitSearch
             | Message::FilterSubmit => {}
             Message::CycleTab(_)
+            | Message::Scrobble
             | Message::ExportAppearance
             | Message::ImportAppearance
             | Message::PastedAppearance(_)
@@ -1068,6 +1070,8 @@ pub fn seam_safe_bottom(offset: f32, presence: f32) -> f32 {
 }
 
 pub struct Host<'a> {
+    pub scrobble_enabled: bool,
+    pub scrobble_ready: bool,
     pub wall: folia_store::WallAppearance,
     pub lattice: bool,
     pub can_save: bool,

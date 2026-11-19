@@ -63,6 +63,7 @@ jobs:
           mkdir -p "$stage/assets/paper-shaders" && cp assets/paper-shaders/LICENSE assets/paper-shaders/NOTICE "$stage/assets/paper-shaders/"
           mkdir -p "$stage/assets/cinema" "$stage/assets/preview" && cp assets/cinema/NOTICE assets/cinema/THREE-LICENSE.txt "$stage/assets/cinema/" && cp assets/preview/NOTICE.txt "$stage/assets/preview/"
           cp -R target/runtime-assets/models target/runtime-assets/acoustics target/runtime-assets/analysis "$stage/assets/"
+          cp -R assets/netease-api "$stage/assets/"
           if [ "${{ runner.os }}" = "Windows" ]; then 7z a -tzip "$stage.zip" "$stage" > /dev/null; echo "file=$stage.zip" >> "$GITHUB_OUTPUT"; else tar -czf "$stage.tar.gz" "$stage"; echo "file=$stage.tar.gz" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/upload-artifact@v4
         with:

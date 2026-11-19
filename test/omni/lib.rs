@@ -7,6 +7,29 @@ use folia_omni::{LoginQr, Omni, OmniError, cover_cache_key};
 
 mod like_capabilities;
 
+#[tokio::test]
+async fn listening_reports_require_a_signed_in_supported_catalog_track() {
+    use folia_core::{OnlineId, Track};
+    use folia_omni::PlaybackReport;
+    let temp = tempfile::tempdir().unwrap();
+    let omni = Omni::new(temp.path().into(), "folia-report-test".into()).unwrap();
+    let report = PlaybackReport { played_seconds: 40.0, total_seconds: 180.0, quality: AudioQuality::High };
+    for (provider, id, eligible) in [
+        ("netease", "123", true),
+        ("netease", "cloud:123", false),
+        ("netease", "0", false),
+        ("netease", "invalid", false),
+        ("qq", "123", false),
+    ] {
+        let track = Track { online: Some(OnlineId { provider: provider.into(), id: id.into() }), ..Default::default() };
+        assert_eq!(omni.can_report_playback(&track), eligible);
+        assert!(!omni.playback_reporting_ready(provider));
+        assert!(matches!(omni.report_playback(&track, report).await, Err(OmniError::SignedOut)));
+    }
+    assert!(!omni.can_report_playback(&Track::default()));
+    assert!(omni.report_playback(&Track::default(), report).await.is_err());
+}
+
 #[test]
 fn catalog_references_use_ids_without_splitting_or_matching_credit_names() {
     use folia_core::{ArtistRef, OnlineId, OnlineTrackInfo, Track};

@@ -5,6 +5,8 @@ mod catalog;
 mod eapi;
 mod explore;
 mod library;
+mod ncbl;
+mod report;
 
 use folia_core::{AudioQuality, ChorusRange, OnlineId, Track};
 use folia_lyrics::Format;
@@ -116,6 +118,21 @@ impl Netease {
 }
 
 impl Provider for Netease {
+    fn playback_reporting_ready(&self) -> bool {
+        self.client.session().signed_in()
+    }
+
+    fn can_report_playback(&self, track: &Track) -> bool {
+        report::eligible(track)
+    }
+
+    fn report_playback<'a>(
+        &'a self,
+        track: &'a Track,
+        report: crate::PlaybackReport,
+    ) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(report::send(self, track, report))
+    }
     fn id(&self) -> &'static str {
         ID
     }

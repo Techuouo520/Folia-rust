@@ -2963,6 +2963,8 @@ impl Shell {
         }
         if let Some(window) = &self.settings {
             let values = settings::Values {
+                scrobble_enabled: self.playback.settings.netease_scrobble_enabled,
+                scrobble_ready: self.omni.as_ref().is_some_and(|omni| omni.playback_reporting_ready("netease")),
                 sources: &self.sources,
                 language: self.general.language,
                 resolved: self.i18n.language(),
@@ -3725,6 +3727,8 @@ impl Shell {
             None => self.home.search_query(),
         };
         let mut host = home::Host {
+            scrobble_enabled: self.playback.settings.netease_scrobble_enabled,
+            scrobble_ready: self.omni.as_ref().is_some_and(|omni| omni.playback_reporting_ready("netease")),
             wall: self.appearance.wall,
             lattice: self.page == Page::Lattice,
             can_save: self.home.island_shown(now) && self.playback.can_save_queue(),
@@ -4740,6 +4744,10 @@ impl Shell {
                 action.map_or_else(Task::none, |action| self.home(home::Message::RunCommand(Box::new(action))))
             }
             home::Message::RunCommand(action) => self.home(*action),
+            home::Message::Scrobble => self
+                .playback
+                .update(playback::Message::Scrobble(!self.playback.settings.netease_scrobble_enabled), &self.store)
+                .map(Message::Playback),
             home::Message::CommandQuery(_) => Task::none(),
             home::Message::CycleTab(backwards) => {
                 if self.page != Page::Library || self.library.layer.is_some() {

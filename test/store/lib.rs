@@ -146,6 +146,25 @@ fn playback_keeps_volume_when_quality_is_missing() {
     assert_eq!(settings.repeat, folia_core::Repeat::All);
     assert_eq!(settings.audio_quality, AudioQuality::High);
     assert!(!settings.muted);
+    assert!(!settings.netease_scrobble_enabled);
+}
+
+#[test]
+fn listening_report_preference_migrates_off_and_can_be_saved() {
+    for schema in [1, 2] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path());
+        fs::write(dir.path().join("playback.toml"), format!("schema_version = {schema}\nvolume = 0.4\nmuted = true\nrepeat = \"one\"\naudio_quality = \"lossless\"\n")).unwrap();
+        let mut settings = PlaybackSettings::load(&store).unwrap();
+        assert!(!settings.netease_scrobble_enabled);
+        assert_eq!(settings.volume, 0.4);
+        assert!(settings.muted);
+        assert_eq!(settings.repeat, folia_core::Repeat::One);
+        assert_eq!(settings.audio_quality, AudioQuality::Lossless);
+        settings.netease_scrobble_enabled = true;
+        store.save(&settings).unwrap();
+        assert_eq!(PlaybackSettings::load(&store).unwrap(), settings);
+    }
 }
 
 #[test]

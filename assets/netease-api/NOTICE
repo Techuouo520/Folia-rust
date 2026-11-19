@@ -1,0 +1,4 @@
+NCBL v3 framing and scrobble/v1 payloads are adapted from
+https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced
+module/scrobble_v1.js and util/ncbl.js, licensed under the MIT license.
+The upstream credits https://github.com/folltoshe/netease-report-listen-song.

@@ -27,6 +27,7 @@ folia-core.workspace = true
 folia-lyrics.workspace = true
 folia-store.workspace = true
 aes.workspace = true
+chacha20.workspace = true
 base64.workspace = true
 flate2.workspace = true
 image.workspace = true

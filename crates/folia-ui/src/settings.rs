@@ -36,6 +36,7 @@ pub enum Section {
     Appearance,
     Player,
     General,
+    Integration,
     Graphics,
     Developer,
     Sources,
@@ -48,6 +49,7 @@ impl Section {
             Section::Appearance => "options.settingsPageAppearance",
             Section::Player => "options.settingsPagePlayer",
             Section::General => "options.settingsPageGeneral",
+            Section::Integration => "options.settingsPageIntegration",
             Section::Graphics => "options.settingsPageGraphics",
             Section::Developer => "options.settingsPageDeveloper",
             Section::Sources => "options.customSources",
@@ -60,6 +62,7 @@ impl Section {
             Section::Appearance => Icon::Contrast,
             Section::Player => Icon::MonitorPlay,
             Section::General => Icon::SlidersHorizontal,
+            Section::Integration => Icon::Plug,
             Section::Graphics => Icon::Gauge,
             Section::Developer => Icon::Terminal,
             Section::Sources => Icon::ListMusic,
@@ -71,7 +74,10 @@ impl Section {
 /// The side list's groups, `SETTINGS_NAV_GROUP_SPECS` without the categories Folia-rust has nothing on yet.
 const NAV: [(&str, &[Section]); 3] = [
     ("options.settingsGroupInterface", &[Section::Appearance, Section::Player]),
-    ("options.settingsGroupApp", &[Section::General, Section::Graphics, Section::Sources, Section::Ai]),
+    (
+        "options.settingsGroupApp",
+        &[Section::General, Section::Graphics, Section::Sources, Section::Ai, Section::Integration],
+    ),
     ("options.settingsGroupAdvanced", &[Section::Developer]),
 ];
 
@@ -95,9 +101,11 @@ const SOURCES: GroupDef = GroupDef { id: "customSources", title: "options.custom
 const WALL: GroupDef = GroupDef { id: "libraryWallLook", title: "libraryBravais.toolsAppearance", bare: false };
 const SONG_THEME: GroupDef = GroupDef { id: "songTheme", title: "options.settingsHeadingSongTheme", bare: false };
 const AI: GroupDef = GroupDef { id: "electronSettings", title: "options.aiServiceProviders", bare: true };
+const SERVICES: GroupDef = GroupDef { id: "services", title: "options.settingsHeadingServices", bare: false };
 
 /// Every option the pages draw, in page order: what the search finds.
 const OPTIONS: &[(Section, GroupDef, &str)] = &[
+    (Section::Integration, SERVICES, "options.neteaseScrobble"),
     (Section::Ai, AI, "options.aiProvider"),
     (Section::Ai, AI, "options.aiApiUrl"),
     (Section::Ai, AI, "options.aiModel"),
@@ -190,6 +198,8 @@ struct Motion {
 
 /// What the pages show and change; the shell owns the values.
 pub struct Values<'a> {
+    pub scrobble_enabled: bool,
+    pub scrobble_ready: bool,
     pub sources: &'a crate::sources::Sources,
     pub language: LanguagePreference,
     pub resolved: Language,
@@ -894,6 +904,23 @@ impl Settings {
                         row("options.playerBottomBarReposition", unavailable, false, reposition),
                     ],
                 )]
+            }
+            Section::Integration => {
+                let enabled = values.scrobble_enabled;
+                let ready = values.scrobble_ready;
+                let control = if ready || enabled {
+                    kit::toggle(
+                        tokens,
+                        f32::from(enabled),
+                        crate::Message::Playback(crate::playback::Message::Scrobble(!enabled)),
+                    )
+                } else {
+                    kit::toggle_fixed(tokens, 0.0)
+                };
+                let hint = i18n
+                    .t(if ready { "options.neteaseScrobbleDesc" } else { "options.neteaseScrobbleSignInHint" })
+                    .to_owned();
+                vec![group(SERVICES, vec![row("options.neteaseScrobble", Some(hint), false, control)])]
             }
             Section::General => {
                 let languages: Vec<_> = std::iter::once(LanguagePreference::System)

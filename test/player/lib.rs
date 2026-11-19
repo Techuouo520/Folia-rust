@@ -14,6 +14,48 @@ mod progressive;
 mod room;
 
 #[test]
+fn listening_counts_audio_not_seeks_pauses_or_bookmarks() {
+    use folia_player::ListenTracker;
+    let start = Instant::now();
+    let mut tracker = ListenTracker::default();
+    for second in 0..=20 {
+        tracker.observe(180.0 + second as f64, start + Duration::from_secs(second), true);
+    }
+    tracker.discontinuity();
+    for second in 21..=40 {
+        tracker.observe(200.5, start + Duration::from_secs(second), false);
+    }
+    tracker.discontinuity();
+    tracker.observe(260.0, start + Duration::from_secs(41), true);
+    assert!(tracker.settle(300.0).is_none());
+    for second in 42..=73 {
+        tracker.observe(second as f64, start + Duration::from_secs(second), true);
+    }
+    assert_eq!(tracker.settle(300.0), Some(31.0));
+    assert!(tracker.settle(300.0).is_none());
+}
+
+#[test]
+fn listening_rejects_impossible_progress_but_allows_batched_output() {
+    use folia_player::ListenTracker;
+    let start = Instant::now();
+    for hz in [30, 60, 120, 1000] {
+        let mut tracker = ListenTracker::default();
+        for tick in 0..=hz * 40 {
+            let seconds = tick as f64 / hz as f64;
+            let output = (seconds * 50.0).floor() / 50.0;
+            tracker.observe(output, start + Duration::from_secs_f64(seconds), true);
+        }
+        assert_eq!(tracker.settle(300.0), Some(40.0));
+    }
+    let mut tracker = ListenTracker::default();
+    for tick in 0..=40 {
+        tracker.observe(tick as f64, start + Duration::from_millis(tick), true);
+    }
+    assert!(tracker.settle(300.0).is_none());
+}
+
+#[test]
 fn maps_channels() {
     let mut out = Vec::new();
     map_channels(&[0.1, 0.2], 1, 2, &mut out);

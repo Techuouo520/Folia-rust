@@ -10,6 +10,8 @@ mod paging;
 mod providers;
 mod qr;
 mod reads;
+mod reporting;
+pub use reporting::PlaybackReport;
 mod session;
 
 use std::future::Future;
@@ -56,6 +58,10 @@ pub enum OmniError {
     CustomSourceUnavailable,
     #[error("not signed in")]
     SignedOut,
+    #[error("listening report frequency exceeded")]
+    ReportThrottled,
+    #[error("listening report timed out")]
+    ReportTimeout,
     /// The platform has no such capability in the original either.
     #[error("{0} is not supported on this platform")]
     Unsupported(&'static str),
@@ -288,6 +294,19 @@ pub struct Capabilities {
 }
 
 pub trait Provider: Send + Sync {
+    fn playback_reporting_ready(&self) -> bool {
+        false
+    }
+    fn can_report_playback(&self, _track: &Track) -> bool {
+        false
+    }
+    fn report_playback<'a>(
+        &'a self,
+        _track: &'a Track,
+        _report: PlaybackReport,
+    ) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(async { Err(OmniError::Unsupported("listening reports")) })
+    }
     fn id(&self) -> &'static str;
     fn display_name(&self) -> &'static str;
     /// Only the provider interprets its identifiers and maps them to an LX platform.
@@ -438,6 +457,7 @@ pub struct Omni {
     cover_locks: Arc<CoverLocks>,
     sources: Arc<lx::Sources>,
     audio_cache: Arc<audio_cache::AudioCache>,
+    report_gate: Arc<reporting::ReportGate>,
 }
 
 impl Omni {
@@ -456,6 +476,7 @@ impl Omni {
             cover_locks: Arc::default(),
             sources: Arc::default(),
             audio_cache: Arc::default(),
+            report_gate: Arc::default(),
         })
     }
 

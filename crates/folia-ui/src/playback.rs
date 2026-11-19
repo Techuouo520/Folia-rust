@@ -5,13 +5,17 @@ use std::time::{Duration, Instant};
 use folia_core::{AudioFrame, AudioInput, AudioQuality, ChorusRange, Lyrics, Queue, Repeat, ReplayGain, Track};
 use folia_lyrics::{ChorusSource, chorus_ranges_of, resolve_chorus};
 use folia_omni::{Collection, CollectionKind, Omni};
-use folia_player::{Player, PlayerState, Status};
+use folia_player::{ListenTracker, Player, PlayerState, Status};
 use folia_store::{FmSession, PlaybackSession, PlaybackSettings, ReplayGainMode, Store};
 use iced::Task;
 
 use crate::background::{blocking, error_chain, save};
 
 pub struct Playback {
+    listen: ListenTracker,
+    listened_track: Option<(Track, AudioQuality)>,
+    report_task: Option<iced::task::Handle>,
+    report_serial: u64,
     player: Option<Player>,
     omni: Option<Omni>,
     pub queue: Queue<Track>,
@@ -69,6 +73,8 @@ enum Notice {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Scrobble(bool),
+    Reported(u64),
     Toggle,
     Next,
     Previous,
@@ -125,6 +131,10 @@ impl Playback {
         queue.repeat = settings.repeat;
         let status = Status { state: PlayerState::Idle, position: 0.0, duration: 0.0 };
         Self {
+            listen: ListenTracker::default(),
+            listened_track: None,
+            report_task: None,
+            report_serial: 0,
             player,
             omni,
             queue,
@@ -407,6 +417,9 @@ impl Playback {
 
     /// Empties the queue and stops, as signing out of the active platform does (`resetForProviderSwitch`).
     pub fn clear(&mut self) {
+        self.listen = ListenTracker::default();
+        self.listened_track = None;
+        self.report_task = None;
         self.restored = None;
         self.start_position = 0.0;
         self.lyrics_pending = false;
@@ -476,7 +489,26 @@ impl Playback {
             self.prefetch_dirty = true;
         }
         match message {
+            Message::Scrobble(enabled) => {
+                if enabled && !self.omni.as_ref().is_some_and(|omni| omni.playback_reporting_ready("netease")) {
+                    return Task::none();
+                }
+                self.settings.netease_scrobble_enabled = enabled;
+                self.listen = ListenTracker::default();
+                self.listened_track = None;
+                if !enabled {
+                    self.report_task = None;
+                }
+                save(store, &self.settings)
+            }
+            Message::Reported(serial) => {
+                if serial == self.report_serial {
+                    self.report_task = None;
+                }
+                Task::none()
+            }
             Message::Toggle => {
+                self.listen.discontinuity();
                 if self.loading.active() {
                     return Task::none();
                 }
@@ -512,6 +544,7 @@ impl Playback {
                 Task::none()
             }
             Message::SeekDone => {
+                self.listen.discontinuity();
                 if let Some((_, restored)) = self.restored.as_mut() {
                     if let Some(position) = self.seeking.take() {
                         *restored = if position.is_finite() { position.max(0.0) } else { 0.0 };
@@ -668,6 +701,7 @@ impl Playback {
 
     fn tick(&mut self) -> Task<Message> {
         self.refresh();
+        self.observe_listen();
         if self.status.state == PlayerState::Playing && !self.is_buffering() {
             self.start_position = 0.0;
         }
@@ -752,13 +786,14 @@ impl Playback {
     }
 
     fn stop_current(&mut self) -> Task<Message> {
+        let report = self.settle_listen();
         self.audio_task = None;
         self.end_loading();
         self.loading_toast = false;
         self.request = self.request.wrapping_add(1);
         self.with_player(Player::stop);
         self.refresh();
-        Task::none()
+        report
     }
 
     /// An explicit selection begins a new forward failure traversal.
@@ -769,9 +804,54 @@ impl Playback {
 
     /// Advances within a traversal while retaining its consecutive failure budget.
     fn start_current_in_direction(&mut self, forward: bool) -> Task<Message> {
+        let report = self.settle_listen();
         self.failure_forward = forward;
         self.failed_inputs.clear();
-        self.load_current_at(0.0)
+        Task::batch([report, self.load_current_at(0.0)])
+    }
+
+    fn observe_listen(&mut self) {
+        if !self.settings.netease_scrobble_enabled {
+            return;
+        }
+        let playing = self.is_playing() && !self.is_buffering() && self.restored.is_none();
+        if self.listened_track.is_none()
+            && playing
+            && let (Some(track), Some(omni)) = (self.current(), &self.omni)
+            && omni.can_report_playback(track)
+            && omni.playback_reporting_ready("netease")
+        {
+            self.listened_track = Some((track.clone(), self.settings.audio_quality));
+        }
+        if let Some((track, _)) = self.listened_track.as_mut() {
+            if self.status.duration > 0.0 {
+                track.duration = self.status.duration;
+            }
+            self.listen.observe(self.status.position, Instant::now(), playing);
+        }
+    }
+
+    fn settle_listen(&mut self) -> Task<Message> {
+        let Some((track, quality)) = self.listened_track.take() else { return Task::none() };
+        let seconds = self.listen.settle(track.duration);
+        let (Some(played_seconds), Some(omni)) = (seconds, self.omni.clone()) else { return Task::none() };
+        if !self.settings.netease_scrobble_enabled || self.report_task.is_some() {
+            return Task::none();
+        }
+        let report = folia_omni::PlaybackReport { played_seconds, total_seconds: track.duration, quality };
+        self.report_serial = self.report_serial.wrapping_add(1);
+        let serial = self.report_serial;
+        let (task, handle) = Task::perform(
+            async move {
+                if let Err(error) = omni.report_playback(&track, report).await {
+                    tracing::warn!(error = &error as &dyn std::error::Error, "listening report failed");
+                }
+            },
+            move |()| Message::Reported(serial),
+        )
+        .abortable();
+        self.report_task = Some(handle.abort_on_drop());
+        task
     }
 
     fn load_current_at(&mut self, position: f64) -> Task<Message> {

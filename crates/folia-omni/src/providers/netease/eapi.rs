@@ -51,6 +51,9 @@ pub struct Client {
 }
 
 impl Client {
+    pub(super) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
     pub fn new(http: reqwest::Client) -> Self {
         Self { http, session: Mutex::new(Session::guest()) }
     }

@@ -18,6 +18,8 @@ fn collapsed_seam_has_a_clickable_restore_tab() {
     let theme = folia_core::Theme::MIDNIGHT;
     for (horizontal, before, width) in [(false, true, 1200), (false, false, 1200), (true, true, 500)] {
         let host = folia_ui::HomeHost {
+            scrobble_enabled: false,
+            scrobble_ready: false,
             wall: Default::default(),
             lattice: false,
             can_save: false,

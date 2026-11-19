@@ -157,12 +157,85 @@ async fn http_method_headers_body_form_and_form_data_round_trip() {
     }
 }
 
+#[tokio::test]
+async fn listening_gate_does_not_retry_failures_or_send_short_listens() {
+    let temp = tempfile::tempdir().unwrap();
+    for outcome in ["ok", "failed", "signed-out"] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let omni = Omni::with_providers(
+            temp.path().into(),
+            "folia-report-test".into(),
+            vec![Box::new(Native { calls: calls.clone(), url: outcome.into() })],
+        )
+        .unwrap();
+        let track =
+            Track { online: Some(OnlineId { provider: "fixture".into(), id: "1".into() }), ..Default::default() };
+        let mut report =
+            folia_omni::PlaybackReport { played_seconds: 29.0, total_seconds: 180.0, quality: AudioQuality::High };
+        assert!(omni.report_playback(&track, report).await.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        report.played_seconds = 40.0;
+        let first = omni.report_playback(&track, report).await;
+        assert_eq!(first.is_ok(), outcome == "ok");
+        let again = omni.clone().report_playback(&track, report).await;
+        if outcome == "signed-out" {
+            assert!(matches!(again, Err(OmniError::SignedOut)));
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        } else {
+            assert!(matches!(again, Err(OmniError::ReportThrottled)));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelled_listening_report_releases_the_inflight_slot() {
+    let temp = tempfile::tempdir().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let omni = Omni::with_providers(
+        temp.path().into(),
+        "folia-report-test".into(),
+        vec![Box::new(Native { calls: calls.clone(), url: "pending".into() })],
+    )
+    .unwrap();
+    let track = Track { online: Some(OnlineId { provider: "fixture".into(), id: "1".into() }), ..Default::default() };
+    let report = folia_omni::PlaybackReport { played_seconds: 40.0, total_seconds: 180.0, quality: AudioQuality::High };
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), omni.report_playback(&track, report)).await.is_err()
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(5010)).await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), omni.report_playback(&track, report)).await.is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
 struct Native {
     calls: Arc<AtomicUsize>,
     url: String,
 }
 
 impl Provider for Native {
+    fn playback_reporting_ready(&self) -> bool {
+        self.url != "signed-out"
+    }
+    fn can_report_playback(&self, track: &Track) -> bool {
+        track.online.as_ref().is_some_and(|song| song.provider == "fixture")
+    }
+    fn report_playback<'a>(
+        &'a self,
+        _: &'a Track,
+        _: folia_omni::PlaybackReport,
+    ) -> BoxFuture<'a, Result<(), OmniError>> {
+        Box::pin(async {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            match self.url.as_str() {
+                "pending" => std::future::pending().await,
+                "failed" => Err(OmniError::Unavailable),
+                _ => Ok(()),
+            }
+        })
+    }
     fn login_code(&self) -> BoxFuture<'_, Result<folia_omni::LoginCode, OmniError>> {
         unsupported()
     }

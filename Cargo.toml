@@ -34,6 +34,7 @@ folia-render = { path = "crates/folia-render" }
 folia-analysis = { path = "crates/folia-analysis" }
 
 aes = "=0.8.4"
+chacha20 = "=0.10.2"
 anyhow = "1.0.104"
 base64 = "0.23.1"
 bytemuck = "1.25.2"
