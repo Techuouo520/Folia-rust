@@ -388,6 +388,86 @@ fn unsupported<T>() -> BoxFuture<'static, Result<T, OmniError>> {
     Box::pin(async { Err(OmniError::Unsupported("fixture")) })
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn cache_move_stops_detached_downloads_and_updates_all_clones() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let target = temp.path().join("target");
+    std::fs::create_dir_all(source.join("audio")).unwrap();
+    std::fs::write(source.join("audio/fixture-2-high.mp3"), b"ready after move").unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/audio", listener.local_addr().unwrap());
+    let (stop, stopped) = std::sync::mpsc::channel::<()>();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut request = std::io::BufReader::new(&mut stream);
+        loop {
+            let mut line = String::new();
+            request.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n").unwrap();
+        stream.write_all(&vec![5; 65536]).unwrap();
+        let _ = stopped.recv_timeout(Duration::from_secs(5));
+    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let omni =
+        Omni::with_providers(source.clone(), "unused".into(), vec![Box::new(Native { calls: calls.clone(), url })])
+            .unwrap();
+    let other = omni.clone();
+    let track = Track { online: Some(OnlineId { provider: "fixture".into(), id: "1".into() }), ..Default::default() };
+    let input = tokio::time::timeout(Duration::from_secs(3), omni.prepare_track_audio(&track, AudioQuality::High))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(input.download.as_ref().unwrap().progress().0 >= 65536);
+    let switch = tokio::time::timeout(Duration::from_secs(2), omni.suspend_cache()).await.unwrap();
+    assert!(input.download.as_ref().unwrap().progress().2.is_some());
+    let store = Store::at(temp.path().join("config"));
+    let moved =
+        folia_store::StorageSettings::migrate(&store, &source, Some(target.clone()), &source, |_, _| {}).unwrap();
+    let root = moved.settings.cache_path(&source).to_path_buf();
+    switch.resume(root.clone());
+    assert_eq!(other.cache_path(), root);
+    let cached = Track { online: Some(OnlineId { provider: "fixture".into(), id: "2".into() }), ..Default::default() };
+    let file = other.fetch_track_audio(&cached, AudioQuality::High).await.unwrap();
+    assert!(file.starts_with(&root));
+    assert_eq!(std::fs::read(file).unwrap(), b"ready after move");
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    stop.send(()).unwrap();
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn cache_move_waits_for_cover_decoding_and_cancelled_fences_resume_readers() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let target = temp.path().join("target");
+    let address = "https://example.invalid/cached.png";
+    let filename = folia_omni::cover_cache_key(address);
+    std::fs::create_dir_all(source.join("covers")).unwrap();
+    std::fs::write(source.join("covers").join(&filename), b"cover").unwrap();
+    let omni = Omni::with_providers(source.clone(), "unused".into(), vec![]).unwrap();
+    let held = omni.fetch_cover(address, 512).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_millis(20), omni.suspend_cache()).await.is_err());
+    let next = tokio::time::timeout(Duration::from_secs(1), omni.fetch_cover(address, 512)).await.unwrap().unwrap();
+    assert_eq!(std::fs::read(&next).unwrap(), b"cover");
+    drop((held, next));
+    let switch = tokio::time::timeout(Duration::from_secs(1), omni.suspend_cache()).await.unwrap();
+    let store = Store::at(temp.path().join("config"));
+    let moved =
+        folia_store::StorageSettings::migrate(&store, &source, Some(target.clone()), &source, |_, _| {}).unwrap();
+    let root = moved.settings.cache_path(&source).to_path_buf();
+    switch.resume(root.clone());
+    let cover = omni.fetch_cover(address, 512).await.unwrap();
+    assert!(cover.starts_with(root));
+    assert_eq!(std::fs::read(cover).unwrap(), b"cover");
+    assert!(!source.join("covers").join(filename).exists());
+}
+
 #[tokio::test]
 async fn imports_persist_selection_and_failed_scripts_fall_back_to_native_cache() {
     let temp = tempfile::tempdir().unwrap();

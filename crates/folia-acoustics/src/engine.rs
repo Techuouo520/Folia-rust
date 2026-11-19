@@ -19,6 +19,7 @@ pub fn library_path() -> Result<PathBuf, Error> {
 }
 
 enum Job {
+    CachePath(PathBuf, oneshot::Sender<()>),
     Probe(oneshot::Sender<Result<(), Error>>),
     Compute {
         request: RoomRequest,
@@ -33,12 +34,13 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(library: PathBuf, database: PathBuf) -> Result<Self, Error> {
+    pub fn new(library: PathBuf, mut database: PathBuf) -> Result<Self, Error> {
         let (sender, mut receiver) = mpsc::channel::<Job>(2);
         std::thread::Builder::new().name("folia-room-sound".into()).spawn(move || {
             let mut cache = None;
             while let Some(job) = receiver.blocking_recv() {
                 let cancelled = match &job {
+                    Job::CachePath(_, reply) => reply.is_closed(),
                     Job::Probe(reply) => reply.is_closed(),
                     Job::Compute { reply, .. } => reply.is_closed(),
                 };
@@ -46,6 +48,11 @@ impl Engine {
                     continue;
                 }
                 match job {
+                    Job::CachePath(path, reply) => {
+                        cache = None;
+                        database = path;
+                        let _ = reply.send(());
+                    }
                     Job::Probe(reply) => {
                         let _ = reply.send(Simulator::open(&library).map(drop));
                     }
@@ -71,6 +78,13 @@ impl Engine {
         let (sender, receiver) = oneshot::channel();
         self.sender.send(Job::Probe(sender)).await.map_err(|_| Error::Worker)?;
         receiver.await.map_err(|_| Error::Worker)?
+    }
+
+    /// Releases the SQLite connection before acknowledging a cache location change.
+    pub async fn set_cache_path(&self, path: PathBuf) -> Result<(), Error> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender.send(Job::CachePath(path, sender)).await.map_err(|_| Error::Worker)?;
+        receiver.await.map_err(|_| Error::Worker)
     }
 
     pub async fn render(&self, request: RoomRequest, reference: RoomListener) -> Result<RoomImpulseResponse, Error> {

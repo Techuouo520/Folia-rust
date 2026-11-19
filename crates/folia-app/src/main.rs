@@ -90,6 +90,13 @@ fn main() -> anyhow::Result<()> {
     folia_render::backend::configure_power_preference(folia_ui::graphics::power_preference(graphics.gpu_preference));
 
     let init = Init {
+        storage: folia_store::StorageSettings::load_and_resume(&store).unwrap_or_else(|error| {
+            tracing::warn!(
+                error = &error as &dyn std::error::Error,
+                "cache directory settings unreadable, using defaults"
+            );
+            Default::default()
+        }),
         appearance: AppearanceSettings::load(&store).unwrap_or_else(|err| {
             tracing::warn!(error = &err as &dyn std::error::Error, "appearance settings unreadable, using defaults");
             AppearanceSettings::default()

@@ -2,6 +2,20 @@
 name = "Folia"
 
 [options]
+cacheMigratingBeforeClose = "Keluar setelah cache dipindahkan"
+cacheMigrating = "Memindahkan cache"
+cacheMigrationFailed = "Migrasi gagal. Direktori lama tetap digunakan. Periksa ruang, izin, atau berkas yang bertentangan."
+cacheMigrationCleanup = "Direktori sudah diganti. Sisa cache lama akan dibersihkan saat aplikasi dimulai lagi."
+cacheDirectoryPending = "Direktori tertunda"
+cacheDirectoryRestart = "Setelah mulai ulang"
+cacheDirectoryKeepOld = "Cache lama tetap berada di direktori sebelumnya."
+cacheDirectoryFailed = "Direktori tidak dapat digunakan. Periksa izin tulis."
+settingsPageStorage = "Penyimpanan & cadangan"
+mediaCache = "Cache Media"
+cacheDirectory = "Direktori Cache"
+chooseCacheDirectory = "Pilih Folder"
+resetCacheDirectory = "Gunakan Folder Bawaan"
+
 latticeAutoFocusOnSongChange = "Fokus saat lagu berubah"
 latticeVignette = "Vignette tepi"
 latticeBadgeCurrentOnly = "Hanya beri nomor lagu yang diputar"

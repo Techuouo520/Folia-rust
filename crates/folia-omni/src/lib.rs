@@ -1,6 +1,8 @@
 // Online music: one facade (`Omni`) over every platform provider; only providers talk to platform APIs.
 
 mod audio_cache;
+mod cache_location;
+pub use cache_location::{CacheSwitch, CachedCover};
 mod audio_ranges;
 mod catalog;
 pub use catalog::{Artist, TrackCatalog};
@@ -62,6 +64,10 @@ pub enum OmniError {
     ReportThrottled,
     #[error("listening report timed out")]
     ReportTimeout,
+    #[error("cache relocation is in progress")]
+    CacheMoving,
+    #[error("cache access failed")]
+    Cache(#[source] folia_store::StoreError),
     /// The platform has no such capability in the original either.
     #[error("{0} is not supported on this platform")]
     Unsupported(&'static str),
@@ -451,7 +457,7 @@ type CoverLocks = parking_lot::Mutex<std::collections::HashMap<PathBuf, std::syn
 pub struct Omni {
     providers: Arc<Vec<Box<dyn Provider>>>,
     http: reqwest::Client,
-    cache_dir: PathBuf,
+    cache: Arc<cache_location::CacheLocation>,
     keyring_service: String,
     covers: Arc<tokio::sync::Semaphore>,
     cover_locks: Arc<CoverLocks>,
@@ -470,7 +476,7 @@ impl Omni {
         Ok(Self {
             providers: Arc::new(providers::all(&http)),
             http,
-            cache_dir,
+            cache: Arc::new(cache_location::CacheLocation::new(cache_dir)),
             keyring_service,
             covers,
             cover_locks: Arc::default(),
@@ -890,7 +896,19 @@ impl Omni {
 
     /// Downloads a cover once into `covers/` and returns the cached file. The platform's CDN is asked for a `px`
     /// square (`getSizedCoverUrl`); `http://` is read as `https://`; at most `COVER_DOWNLOADS` run at once.
-    pub async fn fetch_cover(&self, url: &str, px: u32) -> Result<PathBuf, OmniError> {
+    pub async fn fetch_cover(&self, url: &str, px: u32) -> Result<CachedCover, OmniError> {
+        loop {
+            let mut access = self.cache.read().await?;
+            let result = tokio::select! {
+                biased;
+                _ = access.changed.changed() => continue,
+                result = self.fetch_cover_at(url, px, &access.path) => result,
+            };
+            return result.map(|path| CachedCover { path, _access: access });
+        }
+    }
+
+    async fn fetch_cover_at(&self, url: &str, px: u32, cache: &Path) -> Result<PathBuf, OmniError> {
         let url = https(url);
         // A small preview can reuse a larger cached CDN representation without another download.
         if px <= 64 {
@@ -900,14 +918,14 @@ impl Omni {
                     .iter()
                     .find_map(|provider| provider.sized_cover(&url, size))
                     .unwrap_or_else(|| url.clone());
-                let cached = self.cache_dir.join("covers").join(cover_cache_key(&address));
+                let cached = cache.join("covers").join(cover_cache_key(&address));
                 if cached.is_file() {
                     return Ok(cached);
                 }
             }
         }
         let url = self.providers.iter().find_map(|provider| provider.sized_cover(&url, px)).unwrap_or(url);
-        let dir = self.cache_dir.join("covers");
+        let dir = cache.join("covers");
         let path = dir.join(cover_cache_key(&url));
         if path.is_file() {
             return Ok(path);

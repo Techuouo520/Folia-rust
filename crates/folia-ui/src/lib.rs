@@ -68,6 +68,8 @@ mod smooth_scroll;
 pub mod song_theme;
 mod sources;
 mod splash;
+mod storage;
+pub use storage::Message as StorageMessage;
 mod status_toast;
 mod subtitle_text;
 pub mod theme_park;
@@ -165,6 +167,7 @@ const STANDARD_ONLY: &[AudioQuality] = &[AudioQuality::Standard];
 /// Everything the app reads before the window opens.
 #[derive(Clone)]
 pub struct Init {
+    pub storage: folia_store::StorageSettings,
     pub store: Store,
     pub general: GeneralSettings,
     pub appearance: AppearanceSettings,
@@ -214,6 +217,7 @@ enum NavigationEntry {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Storage(storage::Message),
     #[cfg(target_os = "linux")]
     Media(folia_media::Command),
     BackgroundPainted(u64, Option<iced::widget::image::Handle>),
@@ -336,6 +340,7 @@ const ART_BYTES: usize = 4 * 1024 * 1024;
 const ART_PX: u32 = 360;
 
 pub struct Shell {
+    storage: storage::Storage,
     #[cfg(target_os = "linux")]
     media_session: media_session::Bridge,
     store: Store,
@@ -550,17 +555,18 @@ impl Shell {
     }
 
     pub fn new(init: Init) -> (Self, Task<Message>) {
+        let storage = storage::Storage::new(init.storage, init.cache_dir);
         #[cfg(target_os = "linux")]
-        let media_session = media_session::Bridge::new(init.cache_dir.clone());
+        let media_session = media_session::Bridge::new(storage.active.clone());
         typeface::language(init.i18n.language());
         motion::configure(&init.graphics.motion, init.system_reduced_motion);
         let smart_beat =
             smart_beat::State::new(&init.visualizer, init.analysis_models.clone(), init.data_dir.join("analysis.db"));
-        let (scene_sound, scene_sound_task) = scene_sound::SceneSound::new(init.cache_dir.clone());
+        let (scene_sound, scene_sound_task) = scene_sound::SceneSound::new(storage.active.clone());
         let theme = theme_for(&init.theme, init.appearance.theme, init.appearance.animation_intensity, None);
         let (song_themes, theme_load) =
             song_theme::SongThemes::new(init.store.clone(), init.data_dir.clone(), init.keyring_service.clone());
-        let omni = Omni::new(init.cache_dir, init.keyring_service)
+        let omni = Omni::new(storage.active.clone(), init.keyring_service)
             .inspect_err(|err| tracing::error!(error = err as &dyn std::error::Error, "online music unavailable"))
             .ok();
         let db_path = init.library_db.clone();
@@ -635,6 +641,7 @@ impl Shell {
             catalog: None,
             history: Vec::new(),
             playback_source: None,
+            storage,
             pending_playback_source: None,
             playback,
             playback_session,
@@ -1714,6 +1721,7 @@ impl Shell {
                 task
             }
             Message::Developer(message) => self.developer(message),
+            Message::Storage(message) => self.storage_message(message),
             Message::LanguagePicked(preference) => self.set_language(preference),
             Message::Theme(mode) => {
                 let before = self.appearance.clone();
@@ -2490,6 +2498,9 @@ impl Shell {
     }
 
     fn request_close(&mut self) -> Task<Message> {
+        if self.storage.defer_close() {
+            return Task::none();
+        }
         if self.closing {
             return Task::none();
         }
@@ -2498,6 +2509,18 @@ impl Shell {
         self.scene_generation = self.scene_generation.wrapping_add(1);
         self.playback.shutdown();
         task
+    }
+
+    fn storage_message(&mut self, message: storage::Message) -> Task<Message> {
+        #[cfg(target_os = "linux")]
+        let before = self.storage.active.clone();
+        let task =
+            self.storage.update(message, &self.store, self.omni.clone(), &mut self.playback, &mut self.scene_sound);
+        #[cfg(target_os = "linux")]
+        if before != self.storage.active {
+            self.media_session = media_session::Bridge::new(self.storage.active.clone());
+        }
+        if self.storage.take_close() { Task::batch([task, self.request_close()]) } else { task }
     }
 
     fn chrome(&mut self, message: chrome::Message) -> Task<Message> {
@@ -2980,6 +3003,7 @@ impl Shell {
         }
         if let Some(window) = &self.settings {
             let values = settings::Values {
+                storage: &self.storage,
                 scrobble_enabled: self.playback.settings.netease_scrobble_enabled,
                 scrobble_ready: self.omni.as_ref().is_some_and(|omni| omni.playback_reporting_ready("netease")),
                 sources: &self.sources,
@@ -3137,6 +3161,9 @@ impl Shell {
         ) {
             frame = frame.push(layer);
         }
+        if self.storage.moving {
+            frame = frame.push(self.storage.overlay(&self.i18n, settings_kit::Tokens::new(&self.theme, daylight)));
+        }
         // `z-[9999]`: the title bar sits above every page and dialog.
         let look = chrome::TitlebarLook {
             i18n: &self.i18n,
@@ -3183,6 +3210,9 @@ impl Shell {
 
     /// Settings, the lyric workbench, the sign-in window or the lyrics timeline.
     fn modal_open(&self) -> bool {
+        if self.storage.moving {
+            return true;
+        }
         if self.theme_park.is_some() {
             return true;
         }
@@ -4765,6 +4795,7 @@ impl Shell {
                 action.map_or_else(Task::none, |action| self.home(home::Message::RunCommand(Box::new(action))))
             }
             home::Message::RunCommand(action) => self.home(*action),
+            home::Message::CacheDirectory => self.storage_message(storage::Message::Choose),
             home::Message::Scrobble => self
                 .playback
                 .update(playback::Message::Scrobble(!self.playback.settings.netease_scrobble_enabled), &self.store)

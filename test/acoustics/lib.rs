@@ -14,6 +14,36 @@ fn default_seat_calibration_preserves_identity_and_physical_gain() {
 }
 
 #[test]
+fn room_cache_relocation_releases_the_database_before_copying() {
+    use folia_core::{AcousticWorld, RoomListener, RoomOutput, RoomRequest};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let target = temp.path().join("target");
+    let store = folia_store::Store::at(temp.path().join("config"));
+    let engine =
+        folia_acoustics::Engine::new(temp.path().join("missing-sdk"), source.join("room_sound.sqlite")).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    let listener = RoomListener { position: [0.0; 3], forward: [0.0, 0.0, -1.0], up: [0.0, 1.0, 0.0] };
+    let request = RoomRequest {
+        world: std::sync::Arc::new(AcousticWorld { meshes: vec![], materials: vec![] }),
+        speakers: [[0.0; 3]; 2],
+        listener,
+        output: RoomOutput::Speakers,
+        sample_rate: 48000,
+    };
+    assert!(runtime.block_on(engine.render(request, listener)).is_err());
+    assert!(source.join("room_sound.sqlite").is_file());
+    assert!(folia_store::StorageSettings::migrate(&store, &source, Some(target.clone()), &source, |_, _| {}).is_err());
+    runtime.block_on(engine.set_cache_path(source.join("room_sound.sqlite"))).unwrap();
+    let moved =
+        folia_store::StorageSettings::migrate(&store, &source, Some(target.clone()), &source, |_, _| {}).unwrap();
+    assert!(!moved.cleanup_pending);
+    assert!(target.join("room_sound.sqlite").is_file());
+    assert!(!source.join("room_sound.sqlite").exists());
+    runtime.block_on(engine.set_cache_path(target.join("room_sound.sqlite"))).unwrap();
+}
+
+#[test]
 #[cfg(feature = "stress")]
 #[ignore = "requires the pinned Steam Audio native library"]
 fn native_room_returns_finite_stereo_reflections_for_both_outputs() {

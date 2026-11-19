@@ -1510,6 +1510,7 @@ name = "folia-acoustics"
 version = "0.1.2"
 dependencies = [
  "folia-core",
+ "folia-store",
  "libloading 0.9.1",
  "ring",
  "rusqlite",

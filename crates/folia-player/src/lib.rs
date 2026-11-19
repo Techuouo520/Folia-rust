@@ -213,9 +213,20 @@ impl Player {
     }
 
     pub fn stop(&self) {
+        self.stop_with_ack(None);
+    }
+
+    /// Stops playback and acknowledges once the decoder has released its input file.
+    pub fn stop_and_release(&self) -> std::sync::mpsc::Receiver<()> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.stop_with_ack(Some(sender));
+        receiver
+    }
+
+    fn stop_with_ack(&self, acknowledged: Option<std::sync::mpsc::Sender<()>>) {
         self.cancel_input();
         self.shared.set_state(PlayerState::Idle);
-        self.send(Command::Stop);
+        self.send(Command::Stop(acknowledged));
         self.run_stream(!self.room.enabled() && !self.room.released());
     }
 

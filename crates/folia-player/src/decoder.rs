@@ -20,7 +20,7 @@ const UNDERRUN_REPORT: Duration = Duration::from_secs(1);
 
 pub enum Command {
     Load(Load),
-    Stop,
+    Stop(Option<std::sync::mpsc::Sender<()>>),
 }
 
 pub struct Load {
@@ -140,9 +140,12 @@ impl Decoder {
                     _ => {}
                 }
             }
-            Command::Stop => {
+            Command::Stop(acknowledged) => {
                 self.clear(0.0);
                 self.source = None;
+                if let Some(acknowledged) = acknowledged {
+                    let _ = acknowledged.send(());
+                }
             }
         }
     }

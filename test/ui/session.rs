@@ -57,6 +57,97 @@ fn reopening_restores_the_selected_song_instead_of_an_empty_player() {
     assert_eq!(restarted.title(), expected, "restart discarded the last selected song and queue");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn cache_settings_save_through_the_shell_without_resetting_playback() {
+    use folia_store::StorageSettings;
+    use folia_ui::StorageMessage;
+    let temp = tempfile::tempdir().unwrap();
+    let init = super::player_fixture::init(temp.path());
+    let store = init.store.clone();
+    store.save(&saved_session()).unwrap();
+    let (mut shell, task) = Shell::new(init);
+    complete(&mut shell, task);
+    let title = shell.title();
+    let target = temp.path().join("other-cache");
+    let task = shell.update(Message::Storage(StorageMessage::Picked(Some(target.clone()))));
+    complete(&mut shell, task);
+    assert_eq!(StorageSettings::load(&store).unwrap().cache_directory, Some(std::fs::canonicalize(&target).unwrap()));
+    assert_eq!(shell.title(), title);
+    let task = shell.update(Message::Storage(StorageMessage::Reset));
+    complete(&mut shell, task);
+    assert_eq!(StorageSettings::load(&store).unwrap(), StorageSettings::default());
+    assert_eq!(shell.title(), title);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_during_cache_migration_waits_for_files_and_preserves_the_bookmark() {
+    let temp = tempfile::tempdir().unwrap();
+    let init = super::player_fixture::init(temp.path());
+    let store = init.store.clone();
+    store.save(&saved_session()).unwrap();
+    let source = init.cache_dir.clone();
+    std::fs::create_dir_all(source.join("audio")).unwrap();
+    std::fs::write(source.join("audio/saved.mp3"), b"cached music").unwrap();
+    let target = temp.path().join("new-cache");
+    let (mut shell, task) = Shell::new(init);
+    complete(&mut shell, task);
+    let moving = shell.update(Message::Storage(folia_ui::StorageMessage::Picked(Some(target.clone()))));
+    let close = shell.update(Message::WindowClosing);
+    assert_eq!(complete(&mut shell, close), 0, "window exited while the migration was still pending");
+    assert_eq!(complete(&mut shell, moving), 1);
+    assert_eq!(std::fs::read(target.join("audio/saved.mp3")).unwrap(), b"cached music");
+    assert!(!source.join("audio/saved.mp3").exists());
+    assert_eq!(store.load::<PlaybackSession>().unwrap(), saved_session());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(feature = "ci", ignore = "requires an audio output device")]
+async fn cache_migration_restores_playing_and_paused_positions() {
+    for playing in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("playing.flac");
+        std::fs::write(&path, include_bytes!("../player/fixtures/seek.flac")).unwrap();
+        let duration = folia_player::DecodedSource::open(&path).unwrap().duration;
+        let mut init = super::player_fixture::init(temp.path());
+        init.playback.volume = 0.0;
+        let store = init.store.clone();
+        let mut saved = saved_session();
+        saved.queue.items =
+            vec![Track { id: 1, title: "Migration playback".into(), path, duration, ..Default::default() }];
+        saved.queue.current = Some(0);
+        saved.position = 0.75;
+        store.save(&saved).unwrap();
+        let (mut shell, task) = Shell::new(init);
+        complete(&mut shell, task);
+        if playing {
+            let task = shell.update(Message::Playback(PlaybackMessage::Toggle));
+            complete(&mut shell, task);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let task = shell.update(Message::Playback(PlaybackMessage::Tick));
+            complete(&mut shell, task);
+        }
+        let task =
+            shell.update(Message::Storage(folia_ui::StorageMessage::Picked(Some(temp.path().join("new-cache")))));
+        complete(&mut shell, task);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let tick = shell.update(Message::Playback(PlaybackMessage::Tick));
+        complete(&mut shell, tick);
+        let close = shell.update(Message::WindowClosing);
+        assert_eq!(complete(&mut shell, close), 1);
+        let restored: PlaybackSession = store.load().unwrap();
+        assert_eq!(restored.queue, saved.queue);
+        if playing {
+            assert!(
+                restored.position > 0.85 && restored.position < 2.0,
+                "playback did not continue: {}",
+                restored.position
+            );
+        } else {
+            assert!((restored.position - 0.75).abs() < 0.001);
+        }
+    }
+}
+
 fn saved_session() -> PlaybackSession {
     PlaybackSession {
         queue: QueueSnapshot {

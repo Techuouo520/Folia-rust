@@ -32,6 +32,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("cannot read or write the room-sound cache")]
     Database(#[from] rusqlite::Error),
+    #[error("room cache is in use")]
+    Cache(#[from] folia_store::StoreError),
     #[error("room-sound worker has stopped")]
     Worker,
 }

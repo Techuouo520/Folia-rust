@@ -11,7 +11,8 @@ type Prepared = Arc<Mutex<Option<Box<RoomConvolver>>>>;
 
 #[derive(Clone)]
 pub enum Message {
-    Initialized(Result<folia_acoustics::Engine, String>),
+    Initialized(PathBuf, Result<folia_acoustics::Engine, String>),
+    CacheReady(u64, Result<(), String>),
     Ready(u64, Result<Prepared, String>),
     Released(u64),
 }
@@ -30,6 +31,8 @@ struct Key {
 }
 
 pub struct SceneSound {
+    cache_path: PathBuf,
+    cache_blocked: bool,
     engine: Option<folia_acoustics::Engine>,
     pub available: bool,
     pub loading: bool,
@@ -41,6 +44,8 @@ pub struct SceneSound {
 
 impl SceneSound {
     pub fn new(cache: PathBuf) -> (Self, Task<AppMessage>) {
+        let cache_path = cache.clone();
+        let initialized_at = cache.clone();
         let task = Task::perform(
             crate::background::blocking(move || -> Result<folia_acoustics::Engine, String> {
                 let path = folia_acoustics::library_path().map_err(|error| crate::background::error_chain(&error))?;
@@ -50,14 +55,17 @@ impl SceneSound {
                 folia_acoustics::Engine::new(path, cache.join("room_sound.sqlite"))
                     .map_err(|error| crate::background::error_chain(&error))
             }),
-            |result| {
+            move |result| {
                 AppMessage::SceneSound(Message::Initialized(
+                    initialized_at.clone(),
                     result.unwrap_or_else(|| Err("room-sound worker initialization failed".into())),
                 ))
             },
         );
         (
             Self {
+                cache_path,
+                cache_blocked: false,
                 engine: None,
                 available: false,
                 loading: false,
@@ -76,6 +84,9 @@ impl SceneSound {
         playing_page: bool,
         playback: &mut Playback,
     ) -> Task<AppMessage> {
+        if self.cache_blocked {
+            return Task::none();
+        }
         let rate = (playing_page && settings.scene_id.is_some() && settings.scene_room_sound)
             .then(|| playback.room_sample_rate())
             .flatten();
@@ -144,12 +155,26 @@ impl SceneSound {
 
     pub fn update(&mut self, message: Message, playback: &mut Playback) -> Task<AppMessage> {
         match message {
-            Message::Initialized(Ok(engine)) => {
+            Message::Initialized(path, Ok(engine)) if path != self.cache_path => {
+                let path = self.cache_path.clone();
+                return Task::perform(
+                    async move {
+                        let result = engine
+                            .set_cache_path(path.join("room_sound.sqlite"))
+                            .await
+                            .map(|()| engine)
+                            .map_err(|error| crate::background::error_chain(&error));
+                        Message::Initialized(path, result)
+                    },
+                    AppMessage::SceneSound,
+                );
+            }
+            Message::Initialized(_, Ok(engine)) => {
                 self.engine = Some(engine);
                 self.available = true;
                 self.current = None;
             }
-            Message::Initialized(Err(error)) => {
+            Message::Initialized(_, Err(error)) => {
                 self.error = Some(error);
                 self.available = false;
             }
@@ -175,9 +200,44 @@ impl SceneSound {
             Message::Released(generation) if generation == self.generation && !playback.finish_room_change() => {
                 return release_after(generation, 100);
             }
+            Message::CacheReady(generation, result) if generation == self.generation => {
+                self.cache_blocked = false;
+                if let Err(error) = result {
+                    self.error = Some(error);
+                    self.available = false;
+                    self.engine = None;
+                }
+            }
             _ => {}
         }
         Task::none()
+    }
+
+    pub fn pause_cache(&mut self, playback: &mut Playback) -> (Option<folia_acoustics::Engine>, Task<AppMessage>) {
+        self.generation = self.generation.wrapping_add(1);
+        self.task = None;
+        self.current = None;
+        self.loading = false;
+        self.cache_blocked = true;
+        (self.engine.clone(), stop(playback, self.generation))
+    }
+
+    pub fn resume_cache(&mut self, path: PathBuf) -> Task<AppMessage> {
+        self.cache_path = path.clone();
+        let Some(engine) = self.engine.clone() else {
+            self.cache_blocked = false;
+            return Task::none();
+        };
+        let generation = self.generation;
+        Task::perform(
+            async move {
+                engine
+                    .set_cache_path(path.join("room_sound.sqlite"))
+                    .await
+                    .map_err(|error| crate::background::error_chain(&error))
+            },
+            move |result| AppMessage::SceneSound(Message::CacheReady(generation, result)),
+        )
     }
 }
 

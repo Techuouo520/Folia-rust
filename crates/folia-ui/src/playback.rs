@@ -12,6 +12,7 @@ use iced::Task;
 use crate::background::{blocking, error_chain, save};
 
 pub struct Playback {
+    cache_pause: Option<(u64, bool)>,
     listen: ListenTracker,
     listened_track: Option<(Track, AudioQuality)>,
     report_task: Option<iced::task::Handle>,
@@ -133,6 +134,7 @@ impl Playback {
         queue.repeat = settings.repeat;
         let status = Status { state: PlayerState::Idle, position: 0.0, duration: 0.0 };
         Self {
+            cache_pause: None,
             listen: ListenTracker::default(),
             listened_track: None,
             report_task: None,
@@ -366,6 +368,9 @@ impl Playback {
 
     /// Replaces the queue with `tracks` and plays the one at `index`. `origin` is where they were started.
     pub fn play(&mut self, tracks: Vec<Track>, index: usize, origin: Option<folia_core::Origin>) -> Task<Message> {
+        if self.cache_pause.is_some() {
+            return Task::none();
+        }
         match origin {
             Some(origin) => self.queue.replace_from(tracks, index, origin),
             None => self.queue.replace(tracks, index),
@@ -376,6 +381,9 @@ impl Playback {
 
     /// Plays personal FM's first batch; stepping on near the end fetches more from `fm` (`fmNeedsTopUpAt`).
     pub fn play_fm(&mut self, tracks: Vec<Track>, fm: Collection, origin: folia_core::Origin) -> Task<Message> {
+        if self.cache_pause.is_some() {
+            return Task::none();
+        }
         self.queue.replace_from(tracks, 0, origin);
         self.set_fm(Some(fm));
         self.start_current()
@@ -484,6 +492,9 @@ impl Playback {
     }
 
     pub fn update(&mut self, message: Message, store: &Store) -> Task<Message> {
+        if self.cache_pause.is_some() && !matches!(message, Message::Reported(_)) {
+            return Task::none();
+        }
         if matches!(
             &message,
             Message::CycleRepeat
@@ -1063,6 +1074,31 @@ impl Playback {
         self.with_player(Player::stop);
     }
 
+    pub(crate) fn suspend_cache(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
+        let position = self.heard_position();
+        let state = self.status.state;
+        let playing = self.is_playing() || self.loading.active();
+        self.request = self.request.wrapping_add(1);
+        self.cache_pause = Some((self.request, playing));
+        self.audio_task = None;
+        self.prefetch_task = None;
+        self.prefetch_dirty = false;
+        self.active_input = None;
+        self.failed_inputs.clear();
+        self.end_loading();
+        self.listen.discontinuity();
+        self.restored = self.current().map(|track| (track.id, position));
+        self.status.position = position;
+        self.status.state = if playing { PlayerState::Paused } else { state };
+        self.player.as_ref().map(Player::stop_and_release)
+    }
+
+    pub(crate) fn resume_cache(&mut self, store: &Store, resume: bool) -> Task<Message> {
+        let Some((request, playing)) = self.cache_pause.take() else { return Task::none() };
+        self.prefetch_dirty = true;
+        if request == self.request && playing && resume { self.update(Message::Toggle, store) } else { Task::none() }
+    }
+
     fn end_loading(&mut self) {
         self.loading.finish(self.request);
     }
@@ -1090,6 +1126,9 @@ impl Playback {
 
     /// Queue edits, shuffle, FM refill, quality and current-track changes all reach this single hook.
     pub fn refresh_prefetch(&mut self) -> Task<Message> {
+        if self.cache_pause.is_some() {
+            return Task::none();
+        }
         if self.restored.is_some() {
             self.prefetch_task = None;
             return Task::none();

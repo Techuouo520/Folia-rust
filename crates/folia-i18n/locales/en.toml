@@ -2,6 +2,20 @@
 name = "Folia"
 
 [options]
+cacheMigratingBeforeClose = "Exiting after the cache move"
+cacheMigrating = "Moving cache"
+cacheMigrationFailed = "Migration failed. The previous directory is still in use. Check space, permissions or conflicting files."
+cacheMigrationCleanup = "The directory was changed. Remaining old files will be cleaned up on the next launch."
+cacheDirectoryPending = "Pending directory"
+cacheDirectoryRestart = "After restart"
+cacheDirectoryKeepOld = "Existing cache remains in the previous directory."
+cacheDirectoryFailed = "Cannot use this directory. Check write permissions."
+settingsPageStorage = "Storage & backup"
+mediaCache = "Media Cache"
+cacheDirectory = "Cache Directory"
+chooseCacheDirectory = "Choose Folder"
+resetCacheDirectory = "Use Default Folder"
+
 latticeAutoFocusOnSongChange = "Focus on song change"
 latticeVignette = "Edge vignette"
 latticeBadgeCurrentOnly = "Number only the playing song"

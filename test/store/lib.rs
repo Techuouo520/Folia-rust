@@ -150,6 +150,180 @@ fn playback_keeps_volume_when_quality_is_missing() {
 }
 
 #[test]
+fn cache_directory_migration_moves_owned_files_and_can_reset() {
+    use folia_store::StorageSettings;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().join("config"));
+    let default = dir.path().join("cache");
+    let legacy = StorageSettings { cache_directory: Some(default.clone()), ..Default::default() };
+    store.save(&legacy).unwrap();
+    let config = store.dir().join("storage.toml");
+    let old = fs::read_to_string(&config).unwrap().replace("schema_version = 2", "schema_version = 1");
+    fs::write(&config, old).unwrap();
+    assert_eq!(StorageSettings::load(&store).unwrap(), legacy);
+    assert!(fs::read_to_string(config).unwrap().starts_with("schema_version = 2"));
+    fs::create_dir_all(default.join("audio")).unwrap();
+    fs::write(default.join("audio/keep.bin"), b"old audio").unwrap();
+    fs::write(default.join("unrelated.txt"), b"leave here").unwrap();
+    let target = dir.path().join("音乐 缓存");
+    fs::create_dir_all(target.join("covers")).unwrap();
+    fs::write(target.join("unrelated.txt"), b"keep target").unwrap();
+    let moved = StorageSettings::migrate(&store, &default, Some(target.clone()), &default, |_, _| {}).unwrap();
+    assert!(!moved.cleanup_pending);
+    let settings = moved.settings;
+    assert_eq!(StorageSettings::load(&store).unwrap(), settings);
+    assert_eq!(settings.cache_path(&default), fs::canonicalize(&target).unwrap());
+    assert_eq!(fs::read(target.join("audio/keep.bin")).unwrap(), b"old audio");
+    assert!(!default.join("audio/keep.bin").exists());
+    assert_eq!(fs::read(default.join("unrelated.txt")).unwrap(), b"leave here");
+    assert_eq!(fs::read(target.join("unrelated.txt")).unwrap(), b"keep target");
+    assert!(
+        !fs::read_dir(&target).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".folia-cache-migration-"))
+    );
+    let reset = StorageSettings::migrate(&store, &target, None, &default, |_, _| {}).unwrap();
+    assert_eq!(reset.settings.cache_path(&default), default);
+    assert_eq!(fs::read(default.join("audio/keep.bin")).unwrap(), b"old audio");
+    assert!(!target.join("audio/keep.bin").exists());
+    assert_eq!(StorageSettings::load(&store).unwrap(), StorageSettings::default());
+    assert!(target.is_dir());
+}
+
+#[test]
+fn invalid_cache_directory_never_replaces_the_last_good_setting() {
+    use folia_store::StorageSettings;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().join("config"));
+    let default = dir.path().join("cache");
+    let target = dir.path().join("selected");
+    let before =
+        StorageSettings::migrate(&store, &default, Some(target.clone()), &default, |_, _| {}).unwrap().settings;
+    let file = dir.path().join("file");
+    fs::write(&file, b"unrelated").unwrap();
+    for invalid in [file.clone(), file.join("nested"), std::path::PathBuf::from("relative-cache")] {
+        assert!(StorageSettings::migrate(&store, &target, Some(invalid), &default, |_, _| {}).is_err());
+        assert_eq!(StorageSettings::load(&store).unwrap(), before);
+    }
+    assert_eq!(fs::read(file).unwrap(), b"unrelated");
+}
+
+#[test]
+fn cache_migration_recovers_interrupted_copy_and_cleanup() {
+    use folia_store::{CacheMigration, StorageSettings};
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path().join("config"));
+    let source = temp.path().join("source");
+    let target = temp.path().join("target");
+    fs::create_dir_all(source.join("audio")).unwrap();
+    let bytes = vec![37; 200_000];
+    fs::write(source.join("audio/song.flac"), &bytes).unwrap();
+    let interrupted = std::panic::catch_unwind(|| {
+        let _ = StorageSettings::migrate(&store, &source, Some(target.clone()), &source, |copied, _| {
+            if copied > 0 {
+                panic!("simulated process interruption")
+            }
+        });
+    });
+    assert!(interrupted.is_err());
+    let pending = StorageSettings::load(&store).unwrap();
+    assert!(pending.cache_directory.is_none());
+    assert!(!pending.migration.as_ref().unwrap().cleanup);
+    assert_eq!(fs::read(source.join("audio/song.flac")).unwrap(), bytes);
+    let recovered = StorageSettings::load_and_resume(&store).unwrap();
+    assert!(recovered.migration.is_none());
+    assert_eq!(fs::read(target.join("audio/song.flac")).unwrap(), bytes);
+    assert!(!source.join("audio/song.flac").exists());
+    fs::write(source.join("audio/song.flac"), &bytes).unwrap();
+    let mut interrupted_cleanup = recovered;
+    interrupted_cleanup.migration = Some(CacheMigration {
+        source: fs::canonicalize(&source).unwrap(),
+        destination: fs::canonicalize(&target).unwrap(),
+        restore_default: false,
+        staging: "dead-beef".into(),
+        cleanup: true,
+    });
+    store.save(&interrupted_cleanup).unwrap();
+    assert!(StorageSettings::load_and_resume(&store).unwrap().migration.is_none());
+    assert!(!source.join("audio/song.flac").exists());
+    assert_eq!(fs::read(target.join("audio/song.flac")).unwrap(), bytes);
+}
+
+#[test]
+fn cache_migration_rejects_conflicts_overlaps_and_active_consumers() {
+    use folia_store::{CacheLease, StorageSettings};
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path().join("config"));
+    let source = temp.path().join("source");
+    let target = temp.path().join("target");
+    for root in [&source, &target] {
+        fs::create_dir_all(root.join("audio")).unwrap();
+    }
+    fs::write(source.join("audio/song.bin"), b"source").unwrap();
+    fs::write(target.join("audio/song.bin"), b"target").unwrap();
+    assert!(StorageSettings::migrate(&store, &source, Some(target.clone()), &source, |_, _| {}).is_err());
+    assert!(StorageSettings::load(&store).unwrap().cache_directory.is_none());
+    assert_eq!(fs::read(target.join("audio/song.bin")).unwrap(), b"target");
+    assert_eq!(fs::read(source.join("audio/song.bin")).unwrap(), b"source");
+    let cancelled = StorageSettings::migrate(&store, &source, None, &source, |_, _| {}).unwrap();
+    assert!(cancelled.settings.migration.is_none());
+    assert!(StorageSettings::load_and_resume(&store).unwrap().cache_directory.is_none());
+    assert!(StorageSettings::migrate(&store, &source, Some(source.join("nested")), &source, |_, _| {}).is_err());
+    let next = temp.path().join("new-target");
+    let lease = CacheLease::shared(&source).unwrap();
+    assert!(StorageSettings::migrate(&store, &source, Some(next.clone()), &source, |_, _| {}).is_err());
+    drop(lease);
+    let moved = StorageSettings::migrate(&store, &source, Some(next.clone()), &source, |_, _| {}).unwrap();
+    assert!(!moved.cleanup_pending);
+    assert_eq!(fs::read(next.join("audio/song.bin")).unwrap(), b"source");
+    assert_eq!(fs::read(target.join("audio/song.bin")).unwrap(), b"target");
+}
+
+#[cfg(unix)]
+#[test]
+fn cache_migration_rejects_linked_cache_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let target = temp.path().join("target");
+    let external = temp.path().join("external");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&external).unwrap();
+    fs::write(external.join("keep.bin"), b"not a cache file").unwrap();
+    std::os::unix::fs::symlink(&external, source.join("audio")).unwrap();
+    let store = Store::at(temp.path().join("config"));
+    assert!(folia_store::StorageSettings::migrate(&store, &source, Some(target), &source, |_, _| {}).is_err());
+    assert_eq!(fs::read(external.join("keep.bin")).unwrap(), b"not a cache file");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "set FOLIA_CACHE_TEST_DEST to a second temporary filesystem"]
+fn cache_move_across_filesystems_preserves_bytes() {
+    use std::os::unix::fs::MetadataExt;
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir_in(std::env::var_os("FOLIA_CACHE_TEST_DEST").unwrap()).unwrap();
+    assert_ne!(source.path().metadata().unwrap().dev(), target.path().metadata().unwrap().dev());
+    fs::create_dir(source.path().join("audio")).unwrap();
+    let bytes = vec![73; 200_000];
+    fs::write(source.path().join("audio/cross.flac"), &bytes).unwrap();
+    let store = Store::at(source.path().join("config"));
+    let result = folia_store::StorageSettings::migrate(
+        &store,
+        source.path(),
+        Some(target.path().into()),
+        source.path(),
+        |_, _| {},
+    )
+    .unwrap();
+    assert!(!result.cleanup_pending);
+    assert!(result.settings.migration.is_none());
+    assert_eq!(fs::read(target.path().join("audio/cross.flac")).unwrap(), bytes);
+    assert!(!source.path().join("audio/cross.flac").exists());
+}
+
+#[test]
 fn listening_report_preference_migrates_off_and_can_be_saved() {
     for schema in [1, 2] {
         let dir = tempfile::tempdir().unwrap();

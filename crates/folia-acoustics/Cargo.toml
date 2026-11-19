@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 folia-core.workspace = true
+folia-store.workspace = true
 libloading.workspace = true
 ring.workspace = true
 rusqlite.workspace = true

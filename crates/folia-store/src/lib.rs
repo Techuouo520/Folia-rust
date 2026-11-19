@@ -1,6 +1,10 @@
 // Settings persistence: each domain is one versioned TOML file in the config directory.
 
 mod ai;
+mod cache_move;
+pub use cache_move::{CacheLease, CacheMigration, CacheMoveResult};
+mod storage;
+pub use storage::StorageSettings;
 mod appearance;
 mod audio;
 mod developer;

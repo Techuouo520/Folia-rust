@@ -42,10 +42,15 @@ pub(crate) fn key(request: &RoomRequest) -> String {
     hash.finish().as_ref().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-pub(crate) struct Cache(Connection);
+pub(crate) struct Cache {
+    connection: Connection,
+    _lease: folia_store::CacheLease,
+}
 
 impl Cache {
     pub fn open(path: &Path) -> Result<Self, Error> {
+        let root = path.parent().ok_or(Error::Invalid("room cache has no directory"))?;
+        let lease = folia_store::CacheLease::shared(root)?;
         if let Some(parent) = path.parent().filter(|path| !path.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
@@ -57,12 +62,12 @@ impl Cache {
             return Err(Error::Invalid("unknown room cache schema"));
         }
         connection.execute_batch("CREATE TABLE IF NOT EXISTS responses (key TEXT PRIMARY KEY, rate INTEGER NOT NULL, frames INTEGER NOT NULL, samples BLOB NOT NULL, touched INTEGER NOT NULL); PRAGMA user_version = 1;")?;
-        Ok(Self(connection))
+        Ok(Self { connection, _lease: lease })
     }
 
     pub fn get(&self, key: &str) -> Result<Option<RoomImpulseResponse>, Error> {
         let value: Option<(u32, u32, Vec<u8>)> = self
-            .0
+            .connection
             .query_row("SELECT rate, frames, samples FROM responses WHERE key=?1", [key], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
@@ -85,14 +90,14 @@ impl Cache {
         if channels.iter().flatten().any(|sample| !sample.is_finite()) {
             return Err(Error::Invalid("non-finite room cache entry"));
         }
-        self.0.execute("UPDATE responses SET touched=unixepoch() WHERE key=?1", [key])?;
+        self.connection.execute("UPDATE responses SET touched=unixepoch() WHERE key=?1", [key])?;
         Ok(Some(RoomImpulseResponse { sample_rate: rate, channels, gain: 1.0 }))
     }
 
     pub fn put(&self, key: &str, impulse: &RoomImpulseResponse) -> Result<(), Error> {
         let bytes: Vec<u8> = impulse.channels.iter().flatten().flat_map(|value| value.to_le_bytes()).collect();
-        self.0.execute("INSERT INTO responses(key,rate,frames,samples,touched) VALUES(?1,?2,?3,?4,unixepoch()) ON CONFLICT(key) DO UPDATE SET rate=excluded.rate,frames=excluded.frames,samples=excluded.samples,touched=excluded.touched",params![key,impulse.sample_rate,impulse.channels[0].len() as u32,bytes])?;
-        self.0.execute("DELETE FROM responses WHERE key NOT IN (SELECT key FROM responses ORDER BY touched DESC,rowid DESC LIMIT 32)",[])?;
+        self.connection.execute("INSERT INTO responses(key,rate,frames,samples,touched) VALUES(?1,?2,?3,?4,unixepoch()) ON CONFLICT(key) DO UPDATE SET rate=excluded.rate,frames=excluded.frames,samples=excluded.samples,touched=excluded.touched",params![key,impulse.sample_rate,impulse.channels[0].len() as u32,bytes])?;
+        self.connection.execute("DELETE FROM responses WHERE key NOT IN (SELECT key FROM responses ORDER BY touched DESC,rowid DESC LIMIT 32)",[])?;
         Ok(())
     }
 }

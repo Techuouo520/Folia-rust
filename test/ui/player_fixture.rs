@@ -21,6 +21,7 @@ pub(super) fn complete(shell: &mut Shell, task: iced::Task<Message>) {
 
 pub(super) fn init(path: &std::path::Path) -> Init {
     Init {
+        storage: Default::default(),
         store: folia_store::Store::at(path.join("config")),
         general: Default::default(),
         graphics: Default::default(),

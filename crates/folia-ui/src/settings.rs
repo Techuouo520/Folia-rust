@@ -37,6 +37,7 @@ pub enum Section {
     Player,
     General,
     Integration,
+    Storage,
     Graphics,
     Developer,
     Sources,
@@ -50,6 +51,7 @@ impl Section {
             Section::Player => "options.settingsPagePlayer",
             Section::General => "options.settingsPageGeneral",
             Section::Integration => "options.settingsPageIntegration",
+            Section::Storage => "options.settingsPageStorage",
             Section::Graphics => "options.settingsPageGraphics",
             Section::Developer => "options.settingsPageDeveloper",
             Section::Sources => "options.customSources",
@@ -63,6 +65,7 @@ impl Section {
             Section::Player => Icon::MonitorPlay,
             Section::General => Icon::SlidersHorizontal,
             Section::Integration => Icon::Plug,
+            Section::Storage => Icon::HardDrive,
             Section::Graphics => Icon::Gauge,
             Section::Developer => Icon::Terminal,
             Section::Sources => Icon::ListMusic,
@@ -76,7 +79,7 @@ const NAV: [(&str, &[Section]); 3] = [
     ("options.settingsGroupInterface", &[Section::Appearance, Section::Player]),
     (
         "options.settingsGroupApp",
-        &[Section::General, Section::Graphics, Section::Sources, Section::Ai, Section::Integration],
+        &[Section::General, Section::Graphics, Section::Sources, Section::Ai, Section::Integration, Section::Storage],
     ),
     ("options.settingsGroupAdvanced", &[Section::Developer]),
 ];
@@ -102,9 +105,11 @@ const WALL: GroupDef = GroupDef { id: "libraryWallLook", title: "libraryBravais.
 const SONG_THEME: GroupDef = GroupDef { id: "songTheme", title: "options.settingsHeadingSongTheme", bare: false };
 const AI: GroupDef = GroupDef { id: "electronSettings", title: "options.aiServiceProviders", bare: true };
 const SERVICES: GroupDef = GroupDef { id: "services", title: "options.settingsHeadingServices", bare: false };
+const MEDIA: GroupDef = GroupDef { id: "mediaCache", title: "options.mediaCache", bare: false };
 
 /// Every option the pages draw, in page order: what the search finds.
 const OPTIONS: &[(Section, GroupDef, &str)] = &[
+    (Section::Storage, MEDIA, "options.cacheDirectory"),
     (Section::Integration, SERVICES, "options.neteaseScrobble"),
     (Section::Ai, AI, "options.aiProvider"),
     (Section::Ai, AI, "options.aiApiUrl"),
@@ -198,6 +203,7 @@ struct Motion {
 
 /// What the pages show and change; the shell owns the values.
 pub struct Values<'a> {
+    pub storage: &'a crate::storage::Storage,
     pub scrobble_enabled: bool,
     pub scrobble_ready: bool,
     pub sources: &'a crate::sources::Sources,
@@ -785,6 +791,7 @@ impl Settings {
         };
         match self.section {
             Section::Ai => vec![crate::ai_settings::connection_group(values.song_themes, i18n, tokens)],
+            Section::Storage => vec![values.storage.group(i18n, tokens)],
             Section::Appearance => {
                 let style = iced::widget::row![
                     kit::value(tokens, i18n.t(values.style.map_or("ui.visualizerRandom", Style::label_key)).to_owned()),

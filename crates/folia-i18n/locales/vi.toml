@@ -2,6 +2,20 @@
 name = "Folia"
 
 [options]
+cacheMigratingBeforeClose = "Thoát sau khi di chuyển xong"
+cacheMigrating = "Đang di chuyển bộ nhớ đệm"
+cacheMigrationFailed = "Di chuyển thất bại. Vẫn dùng thư mục cũ. Kiểm tra dung lượng, quyền truy cập hoặc tệp trùng."
+cacheMigrationCleanup = "Đã đổi thư mục. Các tệp cũ còn lại sẽ được dọn vào lần khởi động tiếp theo."
+cacheDirectoryPending = "Thư mục chờ áp dụng"
+cacheDirectoryRestart = "Sau khi khởi động lại"
+cacheDirectoryKeepOld = "Bộ nhớ đệm cũ vẫn nằm trong thư mục trước."
+cacheDirectoryFailed = "Không thể dùng thư mục này. Hãy kiểm tra quyền ghi."
+settingsPageStorage = "Lưu trữ & Sao lưu"
+mediaCache = "Bộ nhớ đệm phương tiện"
+cacheDirectory = "Thư mục bộ nhớ đệm"
+chooseCacheDirectory = "Chọn thư mục"
+resetCacheDirectory = "Dùng thư mục mặc định"
+
 latticeAutoFocusOnSongChange = "Tập trung khi đổi bài"
 latticeVignette = "Viền tối cạnh"
 latticeBadgeCurrentOnly = "Chỉ đánh số bài đang phát"

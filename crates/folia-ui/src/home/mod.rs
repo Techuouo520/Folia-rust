@@ -238,6 +238,7 @@ pub enum Message {
     Composing(bool),
     Settings,
     Scrobble,
+    CacheDirectory,
     Player,
     Import,
     Reload,
@@ -645,6 +646,7 @@ impl HomeChrome {
             | Message::FilterSubmit => {}
             Message::CycleTab(_)
             | Message::Scrobble
+            | Message::CacheDirectory
             | Message::ExportAppearance
             | Message::ImportAppearance
             | Message::PastedAppearance(_)

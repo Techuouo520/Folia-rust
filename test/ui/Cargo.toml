@@ -9,7 +9,7 @@ path = "lib.rs"
 
 [dependencies]
 folia-ai.workspace = true
-tokio = { version = "1.54.1", features = ["rt", "time", "net"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "net"] }
 tempfile.workspace = true
 folia-omni = { path = "../../crates/folia-omni" }
 folia-core.workspace = true

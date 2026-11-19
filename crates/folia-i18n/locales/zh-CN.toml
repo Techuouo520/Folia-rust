@@ -2,6 +2,20 @@
 name = "Folia"
 
 [options]
+cacheMigratingBeforeClose = "迁移完成后退出"
+cacheMigrating = "正在迁移缓存"
+cacheMigrationFailed = "迁移失败，继续使用原目录。请检查空间、权限或目标文件冲突。"
+cacheMigrationCleanup = "已切换目录，部分旧缓存暂未清理；下次启动会重试。"
+cacheDirectoryPending = "待生效目录"
+cacheDirectoryRestart = "重启后生效"
+cacheDirectoryKeepOld = "旧缓存保留在原目录。"
+cacheDirectoryFailed = "无法使用此目录，请检查写入权限。"
+settingsPageStorage = "存储与备份"
+mediaCache = "媒体缓存"
+cacheDirectory = "缓存目录"
+chooseCacheDirectory = "选择文件夹"
+resetCacheDirectory = "恢复默认目录"
+
 latticeAutoFocusOnSongChange = "切歌时自动聚焦"
 latticeVignette = "边缘暗角"
 latticeBadgeCurrentOnly = "只显示正在播放的序号"

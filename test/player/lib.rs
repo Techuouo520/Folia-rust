@@ -140,8 +140,12 @@ fn plays_seeks_and_ends() {
     assert_eq!(ended.state, PlayerState::Ended);
     assert!(ended.position > 1.4, "{ended:?}");
 
-    player.stop();
-    sleep(Duration::from_millis(50));
+    player.stop_and_release().recv_timeout(Duration::from_secs(2)).unwrap();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        drop(std::fs::OpenOptions::new().read(true).share_mode(0).open(&wav).unwrap());
+    }
     assert_eq!(player.status().state, PlayerState::Idle);
     assert_eq!(player.heard_position(), 0.0);
     let response = folia_core::RoomImpulseResponse {
