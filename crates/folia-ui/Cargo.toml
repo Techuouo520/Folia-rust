@@ -29,8 +29,5 @@ tracing.workspace = true
 toml.workspace = true
 tokio.workspace = true
 
-[target.'cfg(windows)'.dependencies]
-device_query.workspace = true
-
 [lints]
 workspace = true

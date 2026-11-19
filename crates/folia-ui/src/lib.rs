@@ -1796,6 +1796,7 @@ impl Shell {
                 if held { Task::none() } else { self.finish_slider() }
             }
             Message::WindowUnfocused => {
+                self.pointer_held = false;
                 self.drag_armed = false;
                 self.drag_from = None;
                 self.finish_slider()
@@ -2066,7 +2067,9 @@ impl Shell {
             Message::Pointer(window, at) if self.window == Some(window) => match at {
                 Some(at) => {
                     self.developer.pointer(at, self.window_size);
-                    self.chrome(chrome::Message::Activity { x: at.x, y: at.y })
+                    let activity = self.chrome(chrome::Message::Activity { x: at.x, y: at.y });
+                    let drag = self.drag_move(window, at.x, at.y);
+                    Task::batch([activity, drag])
                 }
                 None => self.chrome(chrome::Message::Left),
             },
@@ -2288,10 +2291,6 @@ impl Shell {
         }
         self.drag_armed = false;
         self.drag_from = None;
-        if !chrome::button_down() {
-            tracing::debug!("window drag dropped: the button was already up");
-            return Task::none();
-        }
         iced::window::drag(id)
     }
 
@@ -2336,7 +2335,7 @@ impl Shell {
             let _ = self.panel(panel::Message::QualitySelect(quality_select::Message::Close));
         }
         match message {
-            chrome::Message::Drag if !self.fullscreen && chrome::button_down() => iced::window::drag(id),
+            chrome::Message::Drag if !self.fullscreen => iced::window::drag(id),
             chrome::Message::Drag => Task::none(),
             chrome::Message::DragArm => {
                 if self.fullscreen {
@@ -2345,18 +2344,15 @@ impl Shell {
                 // The press is on the strip; the subscription's `PointerHeld(true)` may come after the first move.
                 self.pointer_held = true;
                 self.drag_armed = true;
-                self.drag_from = None;
+                self.drag_from = self.clock.pointer;
                 Task::none()
             }
-            chrome::Message::DragMove { x, y } => self.drag_move(id, x, y),
             chrome::Message::DragEnd => {
                 self.drag_armed = false;
                 self.drag_from = None;
                 Task::none()
             }
-            chrome::Message::Resize(direction) if !self.fullscreen && chrome::button_down() => {
-                iced::window::drag_resize(id, direction)
-            }
+            chrome::Message::Resize(direction) if !self.fullscreen => iced::window::drag_resize(id, direction),
             chrome::Message::Resize(_) => Task::none(),
             chrome::Message::Minimize => iced::window::minimize(id, true),
             chrome::Message::ToggleMaximize => {

@@ -24,6 +24,94 @@ fn test_device() -> &'static (wgpu::Adapter, wgpu::Device, wgpu::Queue) {
     })
 }
 
+#[test]
+#[cfg_attr(feature = "ci", ignore = "requires local graphics backends")]
+fn heavy_styles_render_with_downlevel_device_limits() {
+    let _guard = guarded();
+    folia_ui::install_fonts();
+    let lyrics = lyrics();
+    let theme = Theme::MIDNIGHT;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: if cfg!(windows) { wgpu::Backends::DX12 | wgpu::Backends::VULKAN } else { wgpu::Backends::PRIMARY },
+        ..Default::default()
+    });
+    let adapters = instance.enumerate_adapters(if cfg!(windows) {
+        wgpu::Backends::DX12 | wgpu::Backends::VULKAN
+    } else {
+        wgpu::Backends::PRIMARY
+    });
+    assert!(!adapters.is_empty());
+    let mut seen = std::collections::HashSet::new();
+    let mut rendered = 0;
+    for adapter in adapters {
+        let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            eprintln!("COMPAT skipping software adapter {}", info.name);
+            continue;
+        }
+        if !seen.insert((info.backend, info.vendor, info.device, info.name.clone())) {
+            continue;
+        }
+        eprintln!("COMPAT initializing {info:?}");
+        let limits =
+            wgpu::Limits { max_bind_groups: 2, max_non_sampler_bindings: 2048, ..wgpu::Limits::downlevel_defaults() };
+        let (device, queue) = pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() }),
+        )
+        .unwrap();
+        let errors = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let report = errors.clone();
+        device.on_uncaptured_error(std::sync::Arc::new(move |error| {
+            report.lock().unwrap().push(format!("{error}"));
+        }));
+        let _registration =
+            folia_render::quality::register_device(&adapter, &device, iced_wgpu::graphics::Shell::headless());
+        for (format, backdrop) in [
+            (wgpu::TextureFormat::Rgba8Unorm, true),
+            (wgpu::TextureFormat::Bgra8Unorm, true),
+            (wgpu::TextureFormat::Bgra8Unorm, false),
+        ] {
+            let engine = iced_wgpu::Engine::new(
+                &adapter,
+                device.clone(),
+                queue.clone(),
+                format,
+                None,
+                iced_wgpu::graphics::Shell::headless(),
+            );
+            let renderer = iced_wgpu::Renderer::new(engine, Font::DEFAULT, Pixels(16.0));
+            let mut picture = Picture::from_renderer(384, 256, device.clone(), queue.clone(), format, renderer);
+            for style in [Style::Nebbia, Style::Lumiere] {
+                let mut cache = Cache::default();
+                for _ in 0..5 {
+                    cache = picture.frame_with_clear(
+                        lyric_view::<Msg>(Scene { backdrop, ..scene(&lyrics, &theme, style) }),
+                        cache,
+                        if backdrop { Color::BLACK } else { Color::TRANSPARENT },
+                    );
+                }
+                let pixels = picture.screenshot();
+                let lit = (48..208)
+                    .flat_map(|y| (64..320).map(move |x| (y * 384 + x) * 4))
+                    .filter(|&i| pixels[i..i + 3].iter().any(|&c| c > 35))
+                    .count();
+                eprintln!(
+                    "COMPAT backend={:?} adapter={} type={:?} format={format:?} backdrop={backdrop} style={style:?} lit={lit} errors={:?}",
+                    info.backend,
+                    info.name,
+                    info.device_type,
+                    errors.lock().unwrap()
+                );
+                let failures = errors.lock().unwrap().clone();
+                assert!(failures.is_empty(), "{:?}", failures.first());
+                assert!(lit > 80, "{style:?} rendered black on {} {:?}", info.name, info.backend);
+                rendered += 1;
+            }
+        }
+    }
+    assert!(rendered > 0, "no hardware graphics adapter was exercised");
+}
+
 #[derive(Debug, Clone)]
 enum Msg {
     Monet,
@@ -231,6 +319,10 @@ impl Picture {
     }
 
     fn frame(&mut self, element: Element<'_, Msg>, cache: Cache) -> Cache {
+        self.frame_with_clear(element, cache, Color::BLACK)
+    }
+
+    fn frame_with_clear(&mut self, element: Element<'_, Msg>, cache: Cache, clear: Color) -> Cache {
         let mut submitted = folia_render::gpu_builds().1;
         let mut ui =
             UserInterface::build(element, Size::new(self.logical.0, self.logical.1), cache, &mut self.renderer);
@@ -240,7 +332,7 @@ impl Picture {
             &RenderStyle { text_color: Color::BLACK },
             mouse::Cursor::Unavailable,
         );
-        self.renderer.present(Some(Color::BLACK), self.format, &self.view, &self.viewport);
+        self.renderer.present(Some(clear), self.format, &self.view, &self.viewport);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while folia_render::gpu_builds().1 != submitted {
             submitted = folia_render::gpu_builds().1;
@@ -254,7 +346,7 @@ impl Picture {
                 &RenderStyle { text_color: Color::BLACK },
                 mouse::Cursor::Unavailable,
             );
-            self.renderer.present(Some(Color::BLACK), self.format, &self.view, &self.viewport);
+            self.renderer.present(Some(clear), self.format, &self.view, &self.viewport);
         }
 
         ui.into_cache()

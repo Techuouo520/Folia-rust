@@ -59,6 +59,8 @@ impl<T: Send + 'static> Prepared<T> {
         let task_result = result.clone();
         let task_finished = finished.clone();
         let task_owner = owner.clone();
+        let resource = std::any::type_name::<T>();
+        tracing::info!(resource, "GPU resource initialization queued");
         #[cfg(feature = "dev")]
         {
             PENDING.fetch_add(1, Ordering::Release);
@@ -68,12 +70,31 @@ impl<T: Send + 'static> Prepared<T> {
         let job = Box::new(move || {
             let _running = running;
             if task_owner.strong_count() > 0 {
+                let started = std::time::Instant::now();
+                tracing::info!(resource, "GPU resource initialization started");
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(make)) {
                     Ok(value) if task_owner.strong_count() > 0 => {
-                        *task_result.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(value)
+                        *task_result.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(value);
+                        tracing::info!(
+                            resource,
+                            elapsed_ms = started.elapsed().as_millis(),
+                            "GPU resource initialization completed"
+                        );
                     }
                     Ok(_) => {}
-                    Err(_) => tracing::error!("GPU resource initialization failed"),
+                    Err(payload) => {
+                        let detail = payload
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| payload.downcast_ref::<&str>().copied())
+                            .unwrap_or("non-string panic payload");
+                        tracing::error!(
+                            resource,
+                            elapsed_ms = started.elapsed().as_millis(),
+                            detail,
+                            "GPU resource initialization failed"
+                        );
+                    }
                 }
             }
             task_finished.store(true, Ordering::Release);

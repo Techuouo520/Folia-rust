@@ -8,6 +8,144 @@ use folia_ui::{
 use iced::keyboard::{Key, Modifiers, key::Named};
 use iced::{Color, Size};
 
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a renderer for the real drag strip")]
+fn title_drag_keeps_tracking_after_leaving_the_strip() {
+    use folia_ui::{Message, Shell};
+    use iced::advanced::renderer::Headless;
+    use iced::futures::StreamExt;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    folia_ui::install_fonts();
+    let temp = tempfile::tempdir().unwrap();
+    let (mut shell, initial) = Shell::new(super::player_fixture::init(temp.path()));
+    super::player_fixture::complete(&mut shell, initial);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    drop(shell.update(Message::SplashFrame));
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    let window = iced::window::Id::unique();
+    drop(shell.update(Message::WindowReady(Some(window))));
+    drop(shell.update(Message::Pointer(window, Some(iced::Point::new(300.0, 16.0)))));
+    let mut renderer =
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, iced::Pixels(16.0), None))
+            .unwrap();
+    let mut ui = UserInterface::build(shell.view(), Size::new(1200.0, 800.0), Cache::default(), &mut renderer);
+    let mut messages = Vec::new();
+    ui.update(
+        &[iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left))],
+        iced::mouse::Cursor::Available(iced::Point::new(300.0, 16.0)),
+        &mut renderer,
+        &mut iced::advanced::clipboard::Null,
+        &mut messages,
+    );
+    assert!(!messages.is_empty(), "the title strip must receive the press");
+    drop(ui);
+    for message in messages {
+        drop(shell.update(message));
+    }
+    drop(shell.update(Message::PointerHeld(true)));
+    let drags = |task| {
+        pollster::block_on(async {
+            let Some(mut stream) = iced_runtime::task::into_stream(task) else { return 0 };
+            let mut count = 0;
+            while let Some(action) = stream.next().await {
+                if matches!(action, iced_runtime::Action::Window(iced_runtime::window::Action::Drag(_))) {
+                    count += 1;
+                }
+            }
+            count
+        })
+    };
+    assert_eq!(
+        drags(shell.update(Message::Pointer(window, Some(iced::Point::new(310.0, 90.0))))),
+        1,
+        "a fast move outside the title strip lost the drag"
+    );
+    drop(shell.update(Message::PointerHeld(false)));
+    assert_eq!(
+        drags(shell.update(Message::Pointer(window, Some(iced::Point::new(320.0, 100.0))))),
+        0,
+        "release must disarm the drag"
+    );
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a renderer for the wall gesture")]
+fn wall_drag_keeps_the_press_across_overlays_and_rebuilds() {
+    use folia_ui::{LibraryMessage, Message, Shell, WallMessage};
+    use iced::advanced::renderer::Headless;
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    folia_ui::install_fonts();
+    let temp = tempfile::tempdir().unwrap();
+    let mut init = super::player_fixture::init(temp.path());
+    init.general.home_tab = folia_store::HomeTab::Local;
+    let (mut app, initial) = Shell::new(init);
+    super::player_fixture::complete(&mut app, initial);
+    drop(app.update(Message::Library(LibraryMessage::Loaded(Ok(
+        (1..=32).map(|id| folia_core::Track { id, title: format!("Song {id}"), ..Default::default() }).collect(),
+    )))));
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    drop(app.update(Message::SplashFrame));
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    let id = iced::window::Id::unique();
+    drop(app.update(Message::WindowReady(Some(id))));
+    let mut renderer =
+        pollster::block_on(<iced::Renderer as Headless>::new(folia_ui::INTERFACE_FONT, iced::Pixels(16.0), None))
+            .unwrap();
+    let mut cache = Cache::default();
+    let mut event = |app: &mut Shell, at: iced::Point, event: iced::Event| {
+        let mut ui =
+            UserInterface::build(app.view(), Size::new(1200.0, 800.0), std::mem::take(&mut cache), &mut renderer);
+        let mut messages = Vec::new();
+        ui.update(
+            &[event],
+            iced::mouse::Cursor::Available(at),
+            &mut renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut messages,
+        );
+        cache = ui.into_cache();
+        let pans = messages
+            .iter()
+            .filter(|message| matches!(message, Message::Library(LibraryMessage::Wall(WallMessage::Pan(_)))))
+            .count();
+        for message in messages {
+            drop(app.update(message));
+        }
+        drop(app.update(Message::Pointer(id, Some(at))));
+        pans
+    };
+    let at = iced::Point::new(300.0, 400.0);
+    event(&mut app, at, iced::Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now())));
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    event(&mut app, at, iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)));
+    drop(app.update(Message::PointerHeld(true)));
+    for (x, y) in [
+        (320.0, 400.0),
+        (580.0, 400.0),
+        (680.0, 400.0),
+        (900.0, 400.0),
+        (920.0, 400.0),
+        (900.0, 20.0),
+        (1205.0, 400.0),
+        (300.0, 400.0),
+        (320.0, 400.0),
+    ] {
+        let at = iced::Point::new(x, y);
+        assert_eq!(
+            event(&mut app, at, iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: at })),
+            1,
+            "held wall drag lost after the seam entered or left the viewport at {at:?}"
+        );
+    }
+    event(&mut app, at, iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)));
+    drop(app.update(Message::PointerHeld(false)));
+    let next = iced::Point::new(350.0, 400.0);
+    assert_eq!(event(&mut app, next, iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: next })), 0);
+    event(&mut app, next, iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)));
+    drop(app.update(Message::PointerHeld(true)));
+    assert_eq!(event(&mut app, at, iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: at })), 1);
+}
+
 fn token_colors(tokens: &Tokens) -> [Color; 20] {
     [
         tokens.win,

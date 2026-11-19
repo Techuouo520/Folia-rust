@@ -35,10 +35,6 @@ pub enum Message {
     /// Press on the drag strip. The window starts moving only after the pointer travels a few pixels,
     /// so a double click is not swallowed by the system move loop.
     DragArm,
-    DragMove {
-        x: f32,
-        y: f32,
-    },
     DragEnd,
     Resize(iced::window::Direction),
     Minimize,
@@ -93,25 +89,10 @@ pub fn resize_frame<'a>() -> Element<'a, Message> {
     .into()
 }
 
-/// Whether a mouse button is down right now, not as of the event batch being handled.
-// Windows only: a drag or resize that reaches winit after the release latches its `dragging` flag until restart.
-pub fn button_down() -> bool {
-    #[cfg(windows)]
-    {
-        use device_query::DeviceQuery;
-        device_query::DeviceState::new().get_mouse().button_pressed.iter().any(|pressed| *pressed)
-    }
-    #[cfg(not(windows))]
-    {
-        true
-    }
-}
-
 /// `content` that drags the window wherever none of its own controls takes the press.
 pub fn drag_area<'a, M: Clone + 'a>(content: Element<'a, M>, wrap: fn(Message) -> M) -> Element<'a, M> {
     mouse_area(content)
         .on_press(wrap(Message::DragArm))
-        .on_move(move |point| wrap(Message::DragMove { x: point.x, y: point.y }))
         .on_release(wrap(Message::DragEnd))
         .on_double_click(wrap(Message::ToggleMaximize))
         .into()

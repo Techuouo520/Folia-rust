@@ -1,20 +1,28 @@
 // Keeps the DirectComposition host frameless during Windows non-client recalculation and repaint.
-use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, RECT, SetLastError, WPARAM};
+use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, SetLastError, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{
     DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DwmGetWindowAttribute, DwmSetWindowAttribute,
 };
-use windows_sys::Win32::Graphics::Gdi::{BLACK_BRUSH, FillRect, GetDC, GetStockObject, HDC, ReleaseDC};
+use windows_sys::Win32::Graphics::Gdi::{
+    BLACK_BRUSH, FillRect, GetDC, GetMonitorInfoW, GetStockObject, HDC, MONITOR_DEFAULTTONEAREST,
+    MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect, MonitorFromWindow, ReleaseDC,
+};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic, STYLESTRUCT, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WM_ERASEBKGND,
-    WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCPAINT, WM_SETICON, WM_SETTEXT, WM_SIZE, WM_STYLECHANGING,
-    WS_CAPTION,
+    GWL_STYLE, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, IsIconic, IsZoomed, MINMAXINFO, SM_SWAPBUTTON,
+    STYLESTRUCT, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
+    SetWindowPos, WINDOWPOS, WM_CANCELMODE, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_KILLFOCUS,
+    WM_LBUTTONUP, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCLBUTTONDOWN, WM_NCPAINT, WM_SETICON, WM_SETTEXT,
+    WM_SIZE, WM_STYLECHANGING, WM_WINDOWPOSCHANGING, WS_CAPTION, WS_MAXIMIZE, WS_SYSMENU,
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 const SUBCLASS_ID: usize = 0x464f_4c49;
+const DIRECT_COMPOSITION: usize = 1;
+const DRAG_PENDING: usize = 2;
 
 pub fn system_reduced_motion() -> std::io::Result<bool> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
@@ -96,8 +104,9 @@ pub fn set_backdrop(window: &winit::window::Window, enabled: bool) -> Result<(),
 
 pub fn install(window: &winit::window::Window, direct_composition: bool) -> Result<(), Error> {
     let hwnd = owned_window(window)?;
+    let flags = usize::from(direct_composition);
     // SAFETY: Setup runs on the owner thread; the callback is static and owns no reference data.
-    if unsafe { SetWindowSubclass(hwnd, Some(frame_proc), SUBCLASS_ID, usize::from(direct_composition)) } == 0 {
+    if unsafe { SetWindowSubclass(hwnd, Some(frame_proc), SUBCLASS_ID, flags) } == 0 {
         return Err(Error::Subclass);
     }
     remove_caption_style(hwnd).map_err(Error::Style)?;
@@ -165,15 +174,158 @@ fn clear_backing(hwnd: HWND) -> Result<(), std::io::Error> {
     }
 }
 
+// Match winit's maximized work-area calculation for the simple RECT form.
+fn fit_maximized_client(hwnd: HWND, proposed: &mut RECT) {
+    // SAFETY: The non-client callback supplies a live HWND and a valid proposed client rectangle.
+    unsafe {
+        // winit removes the system menu for real fullscreen, including when entered from maximized.
+        if IsZoomed(hwnd) == 0 || GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_SYSMENU == 0 {
+            return;
+        }
+        let monitor = MonitorFromRect(proposed, MONITOR_DEFAULTTONULL);
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !monitor.is_null() && GetMonitorInfoW(monitor, &mut info) != 0 {
+            *proposed = info.rcWork;
+        }
+    }
+}
+
+// Constrain the actual window, including its hit-test region, before Windows maximizes it.
+fn fit_maximized_window(hwnd: HWND, limits: &mut MINMAXINFO) {
+    // SAFETY: The callback borrows a live window and the OS-owned sizing constraints.
+    unsafe {
+        if GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_SYSMENU == 0 {
+            return;
+        }
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info) == 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::warn!(error = &err as &dyn std::error::Error, "maximized work area unavailable");
+            return;
+        }
+        limits.ptMaxPosition =
+            POINT { x: info.rcWork.left - info.rcMonitor.left, y: info.rcWork.top - info.rcMonitor.top };
+        limits.ptMaxSize = POINT { x: info.rcWork.right - info.rcWork.left, y: info.rcWork.bottom - info.rcWork.top };
+    }
+}
+
+// Fullscreen restoration can bypass the maximize command while retaining WS_MAXIMIZE.
+fn fit_maximized_position(hwnd: HWND, position: &mut WINDOWPOS) {
+    // SAFETY: The callback borrows this window and the OS-owned proposed position on its owner thread.
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        if style & (WS_MAXIMIZE | WS_SYSMENU) != WS_MAXIMIZE | WS_SYSMENU || IsIconic(hwnd) != 0 {
+            return;
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect) == 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::warn!(error = &err as &dyn std::error::Error, "maximized window bounds unavailable");
+            return;
+        }
+        let width = if position.flags & SWP_NOSIZE == 0 { position.cx } else { rect.right - rect.left };
+        let height = if position.flags & SWP_NOSIZE == 0 { position.cy } else { rect.bottom - rect.top };
+        if position.flags & SWP_NOMOVE == 0 {
+            rect.left = position.x;
+            rect.top = position.y;
+        }
+        rect.right = rect.left + width;
+        rect.bottom = rect.top + height;
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if GetMonitorInfoW(MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST), &mut info) == 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::warn!(error = &err as &dyn std::error::Error, "maximized target work area unavailable");
+            return;
+        }
+        position.x = info.rcWork.left;
+        position.y = info.rcWork.top;
+        position.cx = info.rcWork.right - info.rcWork.left;
+        position.cy = info.rcWork.bottom - info.rcWork.top;
+        position.flags &= !(SWP_NOMOVE | SWP_NOSIZE);
+    }
+}
+
+fn set_drag_pending(hwnd: HWND, id: usize, flags: usize, pending: bool) {
+    let flags = if pending { flags | DRAG_PENDING } else { flags & !DRAG_PENDING };
+    // SAFETY: Updates the existing static callback on its owner thread without retaining Rust references.
+    if unsafe { SetWindowSubclass(hwnd, Some(frame_proc), id, flags) } == 0 {
+        tracing::error!(error = &Error::Subclass as &dyn std::error::Error, "native drag state update failed");
+    }
+}
+
+fn primary_button_down() -> bool {
+    // SAFETY: Reads the physical input state, accounting for Windows' logical button swap.
+    unsafe {
+        let key = if GetSystemMetrics(SM_SWAPBUTTON) == 0 { VK_LBUTTON } else { VK_RBUTTON };
+        GetAsyncKeyState(i32::from(key)) < 0
+    }
+}
+
 unsafe extern "system" fn frame_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
     id: usize,
-    direct_composition: usize,
+    flags: usize,
 ) -> LRESULT {
+    let direct_composition = flags & DIRECT_COMPOSITION;
     match message {
+        WM_WINDOWPOSCHANGING if lparam != 0 => {
+            // SAFETY: Apply native sizing policy before constraining the borrowed maximized outer rectangle.
+            unsafe {
+                DefSubclassProc(hwnd, message, wparam, lparam);
+                fit_maximized_position(hwnd, &mut *(lparam as *mut WINDOWPOS));
+            }
+            0
+        }
+        WM_GETMINMAXINFO if lparam != 0 => {
+            // SAFETY: Retain winit's min/max tracking constraints, then set only the maximized outer bounds.
+            unsafe {
+                DefSubclassProc(hwnd, message, wparam, lparam);
+                fit_maximized_window(hwnd, &mut *(lparam as *mut MINMAXINFO));
+            }
+            0
+        }
+        WM_NCLBUTTONDOWN
+            if wparam == HTCAPTION as usize || (HTLEFT as usize..=HTBOTTOMRIGHT as usize).contains(&wparam) =>
+        {
+            if !primary_button_down() {
+                set_drag_pending(hwnd, id, flags, false);
+                // SAFETY: Unwinds winit's pending move flag without entering an OS move loop after release.
+                unsafe {
+                    DefSubclassProc(hwnd, WM_EXITSIZEMOVE, 0, 0);
+                }
+                return 0;
+            }
+            let mut at = POINT::default();
+            // SAFETY: Reads the live cursor without retaining the asynchronous message's stack pointer.
+            if unsafe { GetCursorPos(&mut at) } == 0 {
+                let err = std::io::Error::last_os_error();
+                tracing::warn!(error = &err as &dyn std::error::Error, "native drag cursor unavailable");
+                set_drag_pending(hwnd, id, flags, false);
+                // SAFETY: Canceling the native operation must also release winit's pending move flag.
+                unsafe { DefSubclassProc(hwnd, WM_EXITSIZEMOVE, 0, 0) };
+                return 0;
+            }
+            set_drag_pending(hwnd, id, flags, true);
+            let position = ((at.x as u32 & 0xffff) | ((at.y as u32 & 0xffff) << 16)) as LPARAM;
+            // SAFETY: The remaining procedure chain owns the native move/resize operation.
+            unsafe { DefSubclassProc(hwnd, message, wparam, position) }
+        }
+        WM_EXITSIZEMOVE => {
+            set_drag_pending(hwnd, id, flags, false);
+            // SAFETY: Retains winit's normal move-loop completion and synthetic client release.
+            unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+        }
+        WM_LBUTTONUP | WM_CANCELMODE | WM_KILLFOCUS if flags & DRAG_PENDING != 0 => {
+            set_drag_pending(hwnd, id, flags, false);
+            // SAFETY: A canceled or unentered move still releases winit's latch before its original message.
+            unsafe {
+                DefSubclassProc(hwnd, WM_EXITSIZEMOVE, 0, 0);
+                DefSubclassProc(hwnd, message, wparam, lparam)
+            }
+        }
         WM_STYLECHANGING if wparam as i32 == GWL_STYLE && lparam != 0 => {
             // SAFETY: Windows lends this STYLESTRUCT during the synchronous style change notification.
             unsafe {
@@ -198,8 +350,11 @@ unsafe extern "system" fn frame_proc(
             }
             result
         }
-        // winit handles the NCCALCSIZE_PARAMS form, but delegates the simple RECT form to the native frame.
-        WM_NCCALCSIZE if wparam == 0 => 0,
+        WM_NCCALCSIZE if wparam == 0 && lparam != 0 => {
+            // SAFETY: With a zero WPARAM, Windows lends a writable RECT for the duration of this callback.
+            fit_maximized_client(hwnd, unsafe { &mut *(lparam as *mut RECT) });
+            0
+        }
         WM_NCPAINT => 0,
         WM_NCACTIVATE => {
             // SAFETY: This callback receives a live HWND; minimized windows retain default activation handling.

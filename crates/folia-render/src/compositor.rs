@@ -62,6 +62,7 @@ impl Compositor {
         tracing::info!(adapter = ?adapter.get_info(), ?format, ?alpha, "window composition selected");
         crate::backend::adapter_ready(adapter.get_info().name);
         let (device, queue) = request_device(&adapter).await?;
+        tracing::info!(features = ?device.features(), limits = ?device.limits(), "graphics device capabilities selected");
         let quality_device = crate::quality::register_device(&adapter, &device, shell.clone());
         let engine = iced_wgpu::Engine::new(&adapter, device.clone(), queue, format, settings.antialiasing, shell);
         Ok(Self { instance, adapter, device, _quality_device: quality_device, engine, settings, format, alpha })
