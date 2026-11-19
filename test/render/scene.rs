@@ -1220,6 +1220,47 @@ fn diff_count(left: &[u8], right: &[u8]) -> usize {
 
 #[test]
 #[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
+fn wall_capture_toggle_releases_targets_without_changing_pixels() {
+    let _guard = guarded();
+    let (adapter, device, _) = test_device();
+    let _registration = folia_render::quality::register_device(adapter, device, iced_wgpu::graphics::Shell::headless());
+    let mut picture = Picture::with_size(384, 256);
+    let mut cache = Cache::default();
+    let mut baseline: Option<Vec<u8>> = None;
+    for capture in [false, true, false] {
+        for _ in 0..4 {
+            let content = iced::widget::container(iced::widget::space())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(Color::from_rgb8(70, 130, 180).into()),
+                    ..Default::default()
+                });
+            cache = picture.frame(
+                folia_render::quality::wall_layer(
+                    content.into(),
+                    capture.then_some(folia_render::quality::WallLayer::GlassSource),
+                    None,
+                ),
+                cache,
+            );
+        }
+        assert_eq!(
+            folia_render::quality::target_sizes().is_empty(),
+            !capture,
+            "inactive wall capture must not retain an offscreen target"
+        );
+        let pixels = picture.screenshot();
+        if let Some(before) = &baseline {
+            assert_eq!(diff_count(before, &pixels), 0, "capture changed the wall's pixels");
+        } else {
+            baseline = Some(pixels);
+        }
+    }
+}
+
+#[test]
+#[cfg_attr(feature = "ci", ignore = "needs a GPU; CI runners only have a software renderer")]
 fn lyric_quality_changes_native_targets_and_antialiasing() {
     use folia_core::{LyricAntialias, LyricRenderQuality};
     let _guard = guarded();

@@ -94,6 +94,7 @@ struct Drag {
 }
 
 pub struct QueueList {
+    matches: Option<Vec<usize>>,
     id: Id,
     scroll: Scroll,
     /// Waiting for the list to be on screen to centre the playing row (`centeredRef`).
@@ -110,6 +111,7 @@ impl Default for QueueList {
     fn default() -> Self {
         Self {
             id: Id::unique(),
+            matches: None,
             scroll: Scroll::default(),
             center_pending: false,
             following: None,
@@ -124,6 +126,40 @@ impl Default for QueueList {
 
 impl QueueList {
     /// The list came on screen: centre the playing row once it is laid out (`scrollToRow align: 'center'`).
+    pub(crate) fn filter(&mut self, queue: &[Track], query: &str) {
+        let terms = query.trim().to_lowercase();
+        self.matches = (!terms.is_empty()).then(|| {
+            queue
+                .iter()
+                .enumerate()
+                .filter_map(|(index, track)| {
+                    let haystack = format!(
+                        "{} {} {}",
+                        track.title,
+                        track.artist.as_deref().unwrap_or_default(),
+                        track.album.as_deref().unwrap_or_default()
+                    )
+                    .to_lowercase();
+                    terms.split_whitespace().all(|word| haystack.contains(word)).then_some(index)
+                })
+                .collect()
+        });
+        self.opened();
+    }
+
+    pub(crate) fn row_count(&self, unfiltered: usize) -> usize {
+        self.matches.as_ref().map_or(unfiltered, Vec::len)
+    }
+    pub(crate) fn filtered(&self) -> bool {
+        self.matches.is_some()
+    }
+    pub(crate) fn first_match(&self) -> Option<usize> {
+        self.matches.as_ref()?.first().copied()
+    }
+    fn row_of(&self, index: usize) -> Option<usize> {
+        self.matches.as_ref().map_or(Some(index), |rows| rows.binary_search(&index).ok())
+    }
+
     pub fn opened(&mut self) {
         self.scroll.reset();
         self.center_pending = true;
@@ -139,12 +175,12 @@ impl QueueList {
 
     /// One frame: the pending centring, the smooth scroll, the drag's edge scrolling.
     pub fn frame(&mut self, queue: &[Track], current: Option<usize>, list_h: f32, now: Instant) -> Task<Message> {
-        let max = max_offset(queue.len(), list_h);
+        let max = max_offset(self.row_count(queue.len()), list_h);
         self.scroll.set_max(max);
         if self.center_pending {
             self.center_pending = false;
             self.following = current.and_then(|index| queue.get(index)).map(|track| track.id);
-            let Some(index) = current else { return Task::none() };
+            let Some(index) = current.and_then(|i| self.row_of(i)) else { return self.scroll.apply(self.id.clone()) };
             self.scroll.jump((index as f32 * ROW + ROW / 2.0 - list_h / 2.0).clamp(0.0, max));
             return self.scroll.apply(self.id.clone());
         }
@@ -174,8 +210,11 @@ impl QueueList {
             return;
         }
         self.following = id;
-        let Some(index) = current.filter(|_| self.drag.is_none() && !self.center_pending) else { return };
-        let max = max_offset(queue.len(), list_h);
+        let Some(index) = current.and_then(|i| self.row_of(i)).filter(|_| self.drag.is_none() && !self.center_pending)
+        else {
+            return;
+        };
+        let max = max_offset(self.row_count(queue.len()), list_h);
         self.scroll.set_max(max);
         let (top, bottom) = (index as f32 * ROW, index as f32 * ROW + ROW);
         let (view_top, view_bottom) = (self.scroll.offset(), self.scroll.offset() + list_h);
@@ -193,7 +232,7 @@ impl QueueList {
 
     pub fn update(&mut self, message: Message, queue: &[Track], list_h: f32) -> (Task<Message>, Option<Change>) {
         let now = Instant::now();
-        self.scroll.set_max(max_offset(queue.len(), list_h));
+        self.scroll.set_max(max_offset(self.row_count(queue.len()), list_h));
         match message {
             Message::Scrolled(viewport) => {
                 self.scroll.scrolled(&viewport, now);
@@ -311,20 +350,24 @@ impl QueueList {
         list_h: f32,
         now: Instant,
     ) -> Element<'a, Message> {
-        let count = queue.len();
+        let count = self.row_count(queue.len());
         let total = count as f32 * ROW;
         let dragging = self.drag.as_ref().filter(|drag| drag.active);
         let offset = self.scroll.offset();
         let first = ((offset / ROW).floor().max(0.0) as usize).saturating_sub(OVERSCAN);
         let last = (((offset + list_h) / ROW).ceil().max(0.0) as usize + OVERSCAN).min(count);
         let mut layers = vec![space().width(Length::Fill).height(Length::Fixed(total)).into()];
-        for (index, track) in queue.iter().enumerate().take(last).skip(first) {
+        for row in first..last {
+            let index = self.matches.as_ref().map_or(row, |rows| rows[row]);
+            let Some(track) = queue.get(index) else {
+                continue;
+            };
             if dragging.is_some_and(|drag| drag.from == index) {
                 continue;
             }
             let shift = self.shifts.get(&index).map_or(0.0, |tween| tween.value(now));
             let face = queue_row(self, look, track, index, current == Some(index), dragging.is_some());
-            layers.push(pin(face).y(index as f32 * ROW + shift).width(Length::Fill).into());
+            layers.push(pin(face).y(row as f32 * ROW + shift).width(Length::Fill).into());
         }
         let rows = stack(layers).width(Length::Fill).height(Length::Fixed(total));
         let list = scrollable(container(rows).padding([0.0, SIDE]))
@@ -339,9 +382,11 @@ impl QueueList {
             return list;
         }
         let mut face = stack![list].width(Length::Fill).height(Length::Fixed(list_h));
-        if let Some(drag) = dragging {
+        if let Some(drag) = dragging
+            && let Some(track) = queue.get(drag.from).filter(|track| track.id == drag.track)
+        {
             let y = (drag.pointer - drag.grab).clamp(-ROW / 2.0, list_h - ROW / 2.0);
-            let ghost = container(ghost(look, &queue[drag.from])).padding([0.0, SIDE]);
+            let ghost = container(ghost(look, track)).padding([0.0, SIDE]);
             face = face.push(pin(ghost).y(y).width(Length::Fill));
         }
         let handle = Rectangle { x: SIDE, y: 0.0, width: HANDLE_W, height: (total - offset).clamp(0.0, list_h) };

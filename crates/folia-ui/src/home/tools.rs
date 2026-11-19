@@ -13,7 +13,7 @@ use iced::widget::{
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Rectangle, Size, Theme};
 use lucide_static_svg::Icon;
 
-use super::{HELP_PAD, HELP_ROW_H, HELP_ROWS, HomeChrome, Host, Message};
+use super::{HELP_PAD, HELP_ROW_H, HomeChrome, Host, Message};
 use crate::icons::icon;
 use crate::queue_island;
 use crate::settings_kit::Faded;
@@ -25,12 +25,13 @@ const PANEL_RADIUS: f32 = 24.0;
 const ISLAND_RADIUS: f32 = 20.0;
 const ISLAND_HEADER: f32 = 36.0;
 const ISLAND_BORDER: f32 = 2.0;
-const PANEL_PAD: f32 = 10.0;
+// Iced draws borders inside the widget. Reserve the CSS border and padding together.
+const PANEL_INSET: f32 = 1.0 + 10.0;
 const QUICK_H: f32 = 40.0;
 const QUICK_GAP: f32 = 6.0;
 const VOLUME_H: f32 = 38.0;
 const HEADING_GAP: f32 = 6.0;
-const HEADING_H: f32 = 21.0;
+const HEADING_H: f32 = 24.0;
 const ROW_GAP: f32 = 2.0;
 const ACTION_H: f32 = 38.0;
 const HELP_MARGIN: f32 = 6.0;
@@ -47,12 +48,14 @@ const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(500)
 
 /// The panel without its optional help list: padding, quick row, volume, heading, look, tint and the help bar.
 fn panel_base() -> f32 {
-    2.0 * PANEL_PAD
+    2.0 * PANEL_INSET
         + QUICK_H
         + QUICK_GAP
         + VOLUME_H
         + HEADING_GAP
         + HEADING_H
+        + ROW_GAP
+        + ACTION_H
         + ROW_GAP
         + ACTION_H
         + ROW_GAP
@@ -72,30 +75,97 @@ struct Geometry {
     help_h: f32,
 }
 
-fn geometry(home: &HomeChrome, host: &Host<'_>, now: Instant) -> Geometry {
-    let edge = edge(host);
-    let panel_w = (host.window_width - 32.0).clamp(1.0, 296.0);
+fn geometry(home: &HomeChrome, size: Size, queue_len: usize, lattice: bool, radio: bool, now: Instant) -> Geometry {
+    let edge = edge_for_width(size.width);
+    let panel_w = (size.width - 32.0).clamp(1.0, 296.0);
     let island = home.island_shown(now);
-    let room = (host.window_height - edge - BUTTON - GAP - TOP_RESERVE).max(0.0);
-    let help_h = help_visible(host, island, room);
+    let room = (size.height - edge - BUTTON - GAP - TOP_RESERVE).max(0.0);
+    let help_h = help_height(size.height, island, room, help_rows(lattice, radio).len());
     let help = if home.help_shown(now) { HELP_LIST_MARGIN + help_h * home.help(now) } else { 0.0 };
     let panel_h = panel_base() + help;
-    let ideal = queue_island::list_height(host.queue.len()) + ISLAND_HEADER + ISLAND_BORDER;
+    let ideal = queue_island::list_height(home.queue.row_count(queue_len)) + ISLAND_HEADER + ISLAND_BORDER;
     let island_h = if island { ideal.min((room - STACK_GAP - panel_h).max(ISLAND_MIN)) } else { 0.0 };
     let list_h = if island { (island_h - ISLAND_HEADER - ISLAND_BORDER).max(1.0) } else { 0.0 };
-    let panel_top = host.window_height - edge - BUTTON - GAP - panel_h;
+    let panel_top = size.height - edge - BUTTON - GAP - panel_h;
     let island_top = panel_top - STACK_GAP - island_h;
     Geometry { panel_w, panel_h, panel_top, island, island_h, island_top, list_h, help_h }
 }
 
+pub(super) fn over_dock(
+    home: &HomeChrome,
+    at: iced::Point,
+    size: Size,
+    queue_len: usize,
+    lattice: bool,
+    radio: bool,
+    now: Instant,
+) -> bool {
+    let edge = edge_for_width(size.width);
+    if Rectangle::new(
+        iced::Point::new(size.width - edge - BUTTON, size.height - edge - BUTTON),
+        Size::new(BUTTON, BUTTON),
+    )
+    .contains(at)
+    {
+        return true;
+    }
+    if home.tools(now) <= 0.02 {
+        return false;
+    }
+    let geo = geometry(home, size, queue_len, lattice, radio, now);
+    let x = size.width - edge - geo.panel_w;
+    let hit = |y, h| Rectangle::new(iced::Point::new(x, y), Size::new(geo.panel_w, h)).contains(at);
+    hit(geo.panel_top, geo.panel_h) || geo.island && hit(geo.island_top, geo.island_h)
+}
+
+pub(super) fn island_list_height(
+    home: &HomeChrome,
+    width: f32,
+    height: f32,
+    now: Instant,
+    rows: usize,
+    lattice: bool,
+    radio: bool,
+) -> f32 {
+    let room = (height - if width < 640.0 { 16.0 } else { 24.0 } - BUTTON - GAP - TOP_RESERVE).max(0.0);
+    let help_h = help_height(height, true, room, help_rows(lattice, radio).len());
+    let panel = panel_base() + if home.help_shown(now) { HELP_LIST_MARGIN + help_h * home.help(now) } else { 0.0 };
+    queue_island::list_height(rows).min((room - STACK_GAP - panel).max(ISLAND_MIN) - ISLAND_HEADER - ISLAND_BORDER)
+}
+
 fn edge(host: &Host<'_>) -> f32 {
-    if host.window_width < 640.0 { 16.0 } else { 24.0 }
+    edge_for_width(host.window_width)
+}
+fn edge_for_width(width: f32) -> f32 {
+    if width < 640.0 { 16.0 } else { 24.0 }
 }
 
 /// `max-height: max(150px, calc(100vh - 600px))`, further capped so the panel and the smallest island fit.
-fn help_visible(host: &Host<'_>, island: bool, room: f32) -> f32 {
-    let full = HELP_PAD + HELP_ROWS as f32 * HELP_ROW_H;
-    let base = (host.window_height - 600.0).max(150.0);
+fn help_rows(lattice: bool, radio: bool) -> &'static [super::HelpRow] {
+    use super::HelpRow;
+    const POSTERS: &[HelpRow] = &[
+        HelpRow { label: "home.latticeHelpPoster", kbd: "Enter" },
+        HelpRow { label: "home.latticeHelpMove", kbd: "↑ ↓ ← →" },
+        HelpRow { label: "home.latticeHelpCommands", kbd: "S" },
+        HelpRow { label: "home.latticeHelpOpen", kbd: super::PRIMARY_B },
+    ];
+    const RADIO: &[HelpRow] = &[
+        HelpRow { label: "home.latticeRadioHelpCard", kbd: "" },
+        HelpRow { label: "home.latticeRadioHelpMove", kbd: "← →" },
+        HelpRow { label: "home.latticeHelpOpen", kbd: super::PRIMARY_B },
+    ];
+    if !lattice {
+        &super::HELP_LIST
+    } else if radio {
+        RADIO
+    } else {
+        POSTERS
+    }
+}
+
+fn help_height(height: f32, island: bool, room: f32, rows: usize) -> f32 {
+    let full = HELP_PAD + rows as f32 * HELP_ROW_H;
+    let base = (height - 600.0).max(150.0);
     let cap = if island { (room - STACK_GAP - ISLAND_MIN - (panel_base() + HELP_LIST_MARGIN)).max(48.0) } else { full };
     full.min(base).min(cap)
 }
@@ -103,17 +173,39 @@ fn help_visible(host: &Host<'_>, island: bool, room: f32) -> f32 {
 pub fn dock<'a>(home: &'a HomeChrome, host: &Host<'a>, now: Instant) -> Element<'a, Message> {
     let open = home.tools(now);
     let edge = edge(host);
-    let button = tool_button(host, open > 0.5);
+    let button = tool_button(home, host, open > 0.5);
     if open <= 0.02 {
         return pin_corner(button, edge);
     }
-    let geo = geometry(home, host, now);
+    let geo = geometry(
+        home,
+        Size::new(host.window_width, host.window_height),
+        host.queue.len(),
+        host.lattice,
+        host.fm || host.wall.radio,
+        now,
+    );
     let mut body = column![].width(Length::Fixed(geo.panel_w)).align_x(Alignment::End);
     if geo.island {
-        body = body.push(island_face(home, Face::new(host, home.island(now)), &geo, now));
+        let amount = home.island(now);
+        let scale = 0.96 + 0.04 * amount;
+        let island = island_face(home, Face::new(host, amount), &geo, now);
+        body = body.push(crate::float_layer::place(
+            island,
+            host.modal || amount >= 1.0,
+            iced::Vector::new(geo.panel_w * (1.0 - scale) / 2.0, geo.island_h * (1.0 - scale) / 2.0),
+            scale,
+        ));
         body = body.push(space().height(Length::Fixed(STACK_GAP)));
     }
-    body = body.push(panel_face(home, Face::new(host, open), &geo, now));
+    let panel = panel_face(home, Face::new(host, open), &geo, now);
+    let scale = 0.9 + 0.1 * open;
+    body = body.push(crate::float_layer::place(
+        panel,
+        host.modal || open >= 1.0,
+        iced::Vector::new(geo.panel_w * (1.0 - scale) / 2.0, geo.panel_h * (1.0 - scale) / 2.0),
+        scale,
+    ));
     body = body.push(space().height(Length::Fixed(GAP)));
     body = body.push(button);
     // Presses on the panel padding stay here. The dismiss layer is underneath.
@@ -163,6 +255,11 @@ pub fn back<'a>(host: &Host<'a>, shown: f32, hover: f32) -> Element<'a, Message>
         .align_y(Alignment::Start)
         .padding(Padding { top, right: 0.0, bottom: 0.0, left })
         .into()
+}
+
+pub(super) fn lattice_back<'a>(host: &Host<'a>) -> Element<'a, Message> {
+    let back = round_button(Icon::ChevronLeft, 20.0, 40.0, host.tokens.fill, host.text, Some(Message::Destination));
+    container(back).padding(20).into()
 }
 
 fn pin_corner<'a>(body: impl Into<Element<'a, Message>>, edge: f32) -> Element<'a, Message> {
@@ -220,6 +317,19 @@ fn plate<'a>(
     shadow: [f32; 4],
     fade: f32,
 ) -> Element<'a, Message> {
+    let scale = if host.modal {
+        1.0
+    } else if radius == ISLAND_RADIUS {
+        0.96 + 0.04 * fade
+    } else {
+        0.9 + 0.1 * fade
+    };
+    let rect = Rectangle {
+        x: rect.x + rect.width * (1.0 - scale),
+        y: rect.y + rect.height * (1.0 - scale),
+        width: rect.width * scale,
+        height: rect.height * scale,
+    };
     let right = rect.x + rect.width;
     let bottom = rect.y + rect.height;
     let x0 = (rect.x - REACH).max(0.0);
@@ -251,12 +361,18 @@ fn plate<'a>(
 /// What a panel face reads of the host: its words and state, and its colours only through the panel's fade.
 #[derive(Clone, Copy)]
 struct Face<'a> {
+    wall: folia_store::WallAppearance,
+    lattice: bool,
+    can_save: bool,
+    can_generate: bool,
+    generating: bool,
     i18n: &'a I18n,
     paint: Faded,
     has_track: bool,
     fm: bool,
     volume: f32,
     muted: bool,
+    randomize_on_entry: bool,
     queue: &'a [Track],
     queue_index: Option<usize>,
 }
@@ -264,12 +380,18 @@ struct Face<'a> {
 impl<'a> Face<'a> {
     fn new(host: &Host<'a>, alpha: f32) -> Self {
         Self {
+            wall: host.wall,
+            lattice: host.lattice,
+            can_save: host.can_save,
+            can_generate: host.can_generate,
+            generating: host.generating,
             i18n: host.i18n,
             paint: Faded::new(host.tokens, host.text, host.accent, host.daylight, alpha),
             has_track: host.has_track,
             fm: host.fm,
             volume: host.volume,
             muted: host.muted,
+            randomize_on_entry: host.randomize_on_entry,
             queue: host.queue,
             queue_index: host.queue_index,
         }
@@ -280,13 +402,17 @@ fn island_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: In
     let paint = face.paint;
     let border = paint.wash(0.07, 0.08);
     let count = face.queue.len();
-    let list: Element<'a, Message> = if count == 0 {
-        container(text(face.i18n.t("queue.empty").to_owned()).size(crate::typeface::size::HINT).color(paint.ink(0.45)))
-            .width(Length::Fill)
-            .height(Length::Fixed(geo.list_h))
-            .align_x(Alignment::Center)
-            .align_y(Alignment::Center)
-            .into()
+    let list: Element<'a, Message> = if home.queue.row_count(count) == 0 {
+        container(
+            text(face.i18n.t(if count == 0 { "queue.empty" } else { "wallTools.queueNoMatches" }).to_owned())
+                .size(crate::typeface::size::HINT)
+                .color(paint.ink(0.45)),
+        )
+        .width(Length::Fill)
+        .height(Length::Fixed(geo.list_h))
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .into()
     } else {
         let look = queue_island::Look {
             i18n: face.i18n,
@@ -294,7 +420,7 @@ fn island_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: In
             ink: paint.text(),
             daylight: paint.daylight(),
             actions_on_current: false,
-            reorder: true,
+            reorder: home.queue_search.as_ref().is_none_or(|query| query.trim().is_empty()),
             row: queue_island::ISLAND_ROW,
         };
         home.queue.view(look, face.queue, face.queue_index, geo.list_h, now).map(Message::ToolsQueue)
@@ -322,8 +448,45 @@ fn island_header<'a>(home: &HomeChrome, face: Face<'a>, count: usize) -> Element
         .width(Length::Fill)
         .wrapping(iced::widget::text::Wrapping::None);
     let mut bar = row![title].align_y(Alignment::Center).width(Length::Fill);
-    // The playing item stays after a clear, so with it alone there is nothing left to clear.
-    if count > 1 {
+    if let Some(query) = &home.queue_search {
+        let placeholder = face.i18n.format("wallTools.queueSearchPlaceholder", &[("count", &count_text)]);
+        let input = crate::typeface::text_input(&placeholder, query)
+            .id("wall-queue-search")
+            .size(12)
+            .on_input(|text| Message::QueueSearch(Some(text)))
+            .on_submit_maybe(
+                home.queue.first_match().map(|index| Message::ToolsQueue(queue_island::Message::Jump(index))),
+            );
+        bar = row![
+            input,
+            button(icon(Icon::X, 16.0, face.paint.text())).on_press(Message::QueueSearch(None)).style(button::text)
+        ]
+        .align_y(Alignment::Center);
+    } else if let Some(name) = home.queue_name() {
+        let input = crate::typeface::text_input(face.i18n.t("localMusic.enterPlaylistName"), name)
+            .id("wall-playlist-name")
+            .on_input(Message::QueueName)
+            .on_submit(Message::CommitQueue)
+            .size(12);
+        bar = row![
+            input,
+            button(icon(Icon::Check, 16.0, face.paint.text()))
+                .on_press_maybe((!name.trim().is_empty()).then_some(Message::CommitQueue))
+        ]
+        .align_y(Alignment::Center);
+    } else if face.can_save {
+        let save =
+            button(icon(Icon::ListPlus, 16.0, face.paint.text())).on_press(Message::SaveQueue).style(button::text);
+        bar = bar.push(tooltip(save, text(face.i18n.t("localMusic.saveQueueAsPlaylist")), Position::Top));
+    }
+    if count > 0 && !home.queue_editing() {
+        bar = bar.push(tooltip(
+            button(icon(Icon::Search, 16.0, face.paint.text()))
+                .on_press(Message::QueueSearch(Some(String::new())))
+                .style(button::text),
+            text(face.i18n.t("wallTools.queueSearch")),
+            Position::Top,
+        ));
         bar = bar.push(clear_button(home, face));
     }
     column![
@@ -389,13 +552,22 @@ fn clear_button<'a>(home: &HomeChrome, face: Face<'a>) -> Element<'a, Message> {
 fn panel_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: Instant) -> Element<'a, Message> {
     let border = face.paint.wash(0.07, 0.08);
     let mut inner = column![
-        quick_row(home, face, geo.panel_w),
+        quick_row(home, face),
         space().height(Length::Fixed(QUICK_GAP)),
         volume_row(face),
         space().height(Length::Fixed(HEADING_GAP)),
         heading(face, "libraryBravais.toolsAppearance"),
         space().height(Length::Fixed(ROW_GAP)),
-        look_row(face),
+        action_row(
+            face,
+            Icon::Shuffle,
+            face.i18n.t("options.wallRandomizeOnEntry"),
+            None,
+            Some(face.randomize_on_entry),
+            Some(Message::RandomizeOnEntry)
+        ),
+        space().height(Length::Fixed(ROW_GAP)),
+        if face.lattice { form_row(face) } else { look_row(face) },
         space().height(Length::Fixed(ROW_GAP)),
         tint_row(face),
         space().height(Length::Fixed(HELP_MARGIN)),
@@ -411,7 +583,8 @@ fn panel_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: Ins
     }
     container(inner)
         .width(Length::Fixed(geo.panel_w))
-        .padding(PANEL_PAD)
+        .padding(PANEL_INSET)
+        .clip(true)
         .style(move |_theme: &Theme| container::Style {
             border: Border { radius: PANEL_RADIUS.into(), width: 1.0, color: border },
             ..container::Style::default()
@@ -419,13 +592,23 @@ fn panel_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: Ins
         .into()
 }
 
-fn quick_row<'a>(home: &HomeChrome, face: Face<'a>, panel_w: f32) -> Element<'a, Message> {
-    let cell = ((panel_w - 20.0) - 4.0 * 5.0) / 6.0;
+fn quick_row<'a>(home: &HomeChrome, face: Face<'a>) -> Element<'a, Message> {
     let (i18n, paint, fm) = (face.i18n, face.paint, face.fm);
     let queue_open = home.queue_island_open();
-    let shuffle_tip =
-        tooltip_text(i18n.t("wallTools.shuffle"), Some(i18n.t("wallTools.shuffleUnavailable")), Some(": + R"));
-    let theme_tip = tooltip_text(i18n.t("wallTools.theme"), Some(i18n.t("wallTools.themeUnavailable")), None);
+    let shuffle = !fm && face.queue.len() > 1;
+    let shuffle_tip = tooltip_text(
+        i18n.t("wallTools.shuffle"),
+        (!shuffle).then(|| i18n.t("wallTools.shuffleUnavailable")),
+        Some(": + R"),
+    );
+    let status = if face.generating {
+        Some(i18n.t("wallTools.themeBusy"))
+    } else if !face.can_generate {
+        Some(i18n.t("wallTools.themeUnavailable"))
+    } else {
+        None
+    };
+    let theme_tip = tooltip_text(i18n.t("wallTools.theme"), status, None);
     let queue_status = if fm {
         i18n.t("wallTools.queueUnavailableInFm")
     } else if queue_open {
@@ -434,9 +617,11 @@ fn quick_row<'a>(home: &HomeChrome, face: Face<'a>, panel_w: f32) -> Element<'a,
         i18n.t("wallTools.queueShow")
     };
     let queue_tip = tooltip_text(i18n.t("wallTools.queue"), Some(queue_status), None);
-    let lattice_status = if fm { i18n.t("status.latticeUnavailableInFm") } else { i18n.t("status.latticeUnavailable") };
-    // No Lattice and no Ctrl/Cmd + B in this build: the label and the reason only.
-    let lattice_tip = tooltip_text(i18n.t("libraryBravais.toolsLattice"), Some(lattice_status), None);
+    let lattice_tip = tooltip_text(
+        i18n.t(if face.lattice { "wallTools.goHome" } else { "libraryBravais.toolsLattice" }),
+        None,
+        (!face.lattice).then_some(super::PRIMARY_B),
+    );
     let player_tip = tooltip_text(
         i18n.t("wallTools.openPlayer"),
         (!face.has_track).then_some(i18n.t("wallTools.openPlayerUnavailable")),
@@ -444,13 +629,24 @@ fn quick_row<'a>(home: &HomeChrome, face: Face<'a>, panel_w: f32) -> Element<'a,
     );
     let settings_tip = i18n.t("wallTools.openSettings").to_owned();
     row![
-        quick(Icon::Shuffle, cell, paint, None, shuffle_tip),
-        quick(Icon::Sparkles, cell, paint, None, theme_tip),
-        quick(Icon::ListMusic, cell, paint, (!fm).then_some(Message::ToolsQueueToggle), queue_tip),
-        quick(Icon::PanelsTopLeft, cell, paint, None, lattice_tip),
-        quick(Icon::Disc3, cell, paint, face.has_track.then_some(Message::Player), player_tip),
-        quick(Icon::Settings, cell, paint, Some(Message::Settings), settings_tip),
+        quick(Icon::Shuffle, paint, shuffle.then_some(Message::Shuffle), shuffle_tip),
+        quick(
+            if face.generating { Icon::LoaderCircle } else { Icon::Sparkles },
+            paint,
+            face.can_generate.then_some(Message::GenerateTheme),
+            theme_tip
+        ),
+        quick(Icon::ListMusic, paint, (!fm).then_some(Message::ToolsQueueToggle), queue_tip),
+        quick(
+            if face.lattice { Icon::House } else { Icon::PanelsTopLeft },
+            paint,
+            Some(Message::Destination),
+            lattice_tip
+        ),
+        quick(Icon::Disc3, paint, face.has_track.then_some(Message::Player), player_tip),
+        quick(Icon::Settings, paint, Some(Message::Settings), settings_tip),
     ]
+    .width(Length::Fill)
     .spacing(4)
     .height(Length::Fixed(QUICK_H))
     .into()
@@ -494,15 +690,55 @@ fn rule<'a>(color: Color) -> Element<'a, Message> {
         .into()
 }
 
-/// `透光`: value cycled by the wall look store, which this build does not have yet; shown as its current solid state.
-fn look_row<'a>(face: Face<'a>) -> Element<'a, Message> {
-    let value = face.i18n.t("options.libraryWallLookSolid");
-    action_row(face, Icon::Blinds, face.i18n.t("options.libraryWallLook"), Some(value), None, false)
+pub(crate) fn look_label(look: folia_store::WallLook) -> &'static str {
+    match look {
+        folia_store::WallLook::Solid => "options.libraryWallLookSolid",
+        folia_store::WallLook::Partial => "options.libraryWallLookPartial",
+        folia_store::WallLook::Clear => "options.libraryWallLookClear",
+    }
 }
 
-/// `海报聚焦叠色`: the toggle needs `latticePosterTintEnabled`, absent here, so it stays off and disabled.
+fn look_row<'a>(face: Face<'a>) -> Element<'a, Message> {
+    action_row(
+        face,
+        Icon::Blinds,
+        face.i18n.t("options.libraryWallLook"),
+        Some(face.i18n.t(look_label(face.wall.look))),
+        None,
+        Some(Message::WallLook(face.wall.look.next())),
+    )
+}
+
+fn form_row<'a>(face: Face<'a>) -> Element<'a, Message> {
+    let value =
+        if face.fm || face.wall.radio { "options.latticeWallForm_radio" } else { "options.latticeWallForm_poster" };
+    let row = action_row(
+        face,
+        Icon::GalleryHorizontal,
+        face.i18n.t("options.latticeWallForm"),
+        Some(face.i18n.t(value)),
+        None,
+        (!face.fm).then_some(Message::Radio(!face.wall.radio)),
+    );
+    if face.fm {
+        tooltip(row, text(face.i18n.t("wallTools.wallFormFixedInFm")).size(crate::typeface::size::HINT), Position::Top)
+            .delay(TOOLTIP_DELAY)
+            .style(face.paint.tip())
+            .into()
+    } else {
+        row
+    }
+}
+
 fn tint_row<'a>(face: Face<'a>) -> Element<'a, Message> {
-    action_row(face, Icon::Layers, face.i18n.t("options.latticePosterTint"), None, Some(false), false)
+    action_row(
+        face,
+        Icon::Layers,
+        face.i18n.t("options.latticePosterTint"),
+        None,
+        Some(face.wall.tint),
+        Some(Message::Tint(!face.wall.tint)),
+    )
 }
 
 fn action_row<'a>(
@@ -511,16 +747,18 @@ fn action_row<'a>(
     label: &str,
     value: Option<&str>,
     toggle: Option<bool>,
-    enabled: bool,
+    message: Option<Message>,
 ) -> Element<'a, Message> {
-    let paint = face.paint.faded(if enabled { 1.0 } else { 0.35 });
+    let paint = face.paint.faded(if message.is_some() { 1.0 } else { 0.35 });
     let ink = paint.text();
     let icon = icon(glyph, 17.0, ink);
     let label = text(label.to_owned())
         .size(crate::typeface::size::CONTROL)
-        .font(crate::typeface::adapt(crate::typeface::font(iced::font::Weight::Normal)))
+        .font(crate::typeface::adapt(crate::typeface::MEDIUM))
+        .width(Length::Fill)
         .color(ink);
-    let mut content = row![icon, label].spacing(11).align_y(Alignment::Center).width(Length::Fill);
+    let mut content =
+        row![icon, label].spacing(11).align_y(Alignment::Center).width(Length::Fill).height(Length::Fixed(ACTION_H));
     if let Some(value) = value {
         content = content.push(
             text(value.to_owned())
@@ -536,9 +774,9 @@ fn action_row<'a>(
         .width(Length::Fill)
         .height(Length::Fixed(ACTION_H))
         .padding(Padding { top: 0.0, right: 12.0, bottom: 0.0, left: 12.0 })
-        .on_press_maybe(enabled.then_some(Message::Frame))
+        .on_press_maybe(message)
         .style(move |_theme: &Theme, status| {
-            let hot = enabled && matches!(status, button::Status::Hovered | button::Status::Pressed);
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
             button::Style {
                 background: hot.then_some(Background::Color(paint.wash(0.07, 0.10))),
                 border: Border { radius: 12.0.into(), ..Border::default() },
@@ -549,8 +787,9 @@ fn action_row<'a>(
 }
 
 fn toggle_face<'a>(paint: Faded, checked: bool) -> Element<'a, Message> {
+    let paint = paint.faded(if checked { 1.0 } else { 0.42 });
     let fill = checked.then_some(paint.tokens().accent);
-    let ring = paint.ink(if checked { 1.0 } else { 0.42 });
+    let ring = paint.text();
     let knob = if checked { paint.tokens().on_accent } else { paint.text() };
     container(container(space()).width(Length::Fixed(12.0)).height(Length::Fixed(12.0)).style(move |_| {
         container::Style {
@@ -561,7 +800,8 @@ fn toggle_face<'a>(paint: Faded, checked: bool) -> Element<'a, Message> {
     }))
     .width(Length::Fixed(30.0))
     .height(Length::Fixed(18.0))
-    .padding(2)
+    .padding(3)
+    .align_y(Alignment::Center)
     .align_x(if checked { Alignment::End } else { Alignment::Start })
     .style(move |_theme: &Theme| container::Style {
         background: fill.map(Background::Color),
@@ -589,18 +829,29 @@ fn help_section<'a>(face: Face<'a>) -> Element<'a, Message> {
 }
 
 fn lights_toggle<'a>(face: Face<'a>) -> Element<'a, Message> {
-    // No lighting backend yet: the wall is lit, so the on segment is current and the control is inert at 35%.
-    let paint = face.paint.faded(0.35);
+    let paint = face.paint;
+    let on = face.i18n.t("home.latticeLightsOn");
+    let off = face.i18n.t("home.latticeLightsOff");
+    let font = crate::typeface::SEMIBOLD;
+    let size = crate::typeface::size::QUEUE_ARTIST;
+    let width = [on, off]
+        .into_iter()
+        .map(|label| crate::typeface::measure(label, size, font, f32::INFINITY).width.ceil() + 18.0)
+        .fold(44.0, f32::max);
     let segment = |label: &str, active: bool| {
         let (fill, color) =
             if active { (Some(paint.tokens().accent), paint.tokens().on_accent) } else { (None, paint.ink(0.58)) };
         container(
             text(label.to_owned())
-                .size(crate::typeface::size::QUEUE_ARTIST)
-                .font(crate::typeface::adapt(crate::typeface::BOLD))
+                .size(size)
+                .font(crate::typeface::adapt(font))
+                .align_x(Alignment::Center)
+                .wrapping(iced::widget::text::Wrapping::None)
                 .color(color),
         )
-        .width(Length::Fixed(44.0))
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(size * 1.5 + 8.0))
+        .align_y(Alignment::Center)
         .align_x(Alignment::Center)
         .padding(Padding { top: 4.0, right: 9.0, bottom: 4.0, left: 9.0 })
         .style(move |_theme: &Theme| container::Style {
@@ -609,15 +860,14 @@ fn lights_toggle<'a>(face: Face<'a>) -> Element<'a, Message> {
             ..container::Style::default()
         })
     };
-    let face_row =
-        row![segment(face.i18n.t("home.latticeLightsOn"), true), segment(face.i18n.t("home.latticeLightsOff"), false)]
-            .spacing(2);
-    container(face_row)
-        .padding(3)
-        .style(move |_theme: &Theme| container::Style {
+    let face_row = row![segment(on, face.wall.lights_on), segment(off, !face.wall.lights_on)].spacing(2);
+    button(face_row)
+        .padding(4)
+        .on_press(Message::Lights(!face.wall.lights_on))
+        .style(move |_theme: &Theme, _| button::Style {
             background: Some(Background::Color(paint.wash(0.05, 0.06))),
             border: Border { radius: 999.0.into(), width: 1.0, color: paint.ink(0.18) },
-            ..container::Style::default()
+            ..button::Style::default()
         })
         .into()
 }
@@ -646,10 +896,10 @@ fn help_trigger<'a>(face: Face<'a>) -> Element<'a, Message> {
 
 fn help_list<'a>(face: Face<'a>, panel_w: f32, visible: f32, amount: f32) -> Element<'a, Message> {
     let rows = face.paint.faded(amount);
-    let inner_w = (panel_w - 20.0).max(1.0);
-    let full = HELP_PAD + HELP_ROWS as f32 * HELP_ROW_H;
+    let inner_w = (panel_w - 2.0 * PANEL_INSET).max(1.0);
+    let full = HELP_PAD + help_rows(face.lattice, face.fm || face.wall.radio).len() as f32 * HELP_ROW_H;
     let body = column(
-        super::HELP_LIST
+        help_rows(face.lattice, face.fm || face.wall.radio)
             .iter()
             .enumerate()
             .map(|(index, row)| help_row(face.i18n, rows, row.label, row.kbd, index > 0))
@@ -752,21 +1002,25 @@ fn volume_row<'a>(face: Face<'a>) -> Element<'a, Message> {
                     ..button::Style::default()
                 }
             }),
-        iced::widget::slider(0.0..=1.0, shown, Message::Volume).step(0.01_f32).on_release(Message::VolumeDone).style(
-            move |_theme: &Theme, _status| iced::widget::slider::Style {
+        iced::widget::slider(0.0..=1.0, shown, Message::Volume)
+            .height(22)
+            .step(0.01_f32)
+            .on_release(Message::VolumeDone)
+            .style(move |_theme: &Theme, status| iced::widget::slider::Style {
                 rail: Rail {
                     backgrounds: (Background::Color(accent), Background::Color(track)),
                     width: 4.0,
                     border: Border { radius: 2.0.into(), width: 0.0, color: Color::TRANSPARENT },
                 },
                 handle: Handle {
-                    shape: HandleShape::Circle { radius: 7.0 },
+                    shape: HandleShape::Circle {
+                        radius: if status == iced::widget::slider::Status::Dragged { 7.0 * 1.18 } else { 7.0 }
+                    },
                     background: Background::Color(ink),
                     border_width: 1.0,
                     border_color: handle_ring,
                 },
-            }
-        ),
+            }),
         text(label)
             .size(crate::typeface::size::HINT)
             .color(paint.ink(0.66))
@@ -788,7 +1042,7 @@ fn volume_row<'a>(face: Face<'a>) -> Element<'a, Message> {
         .into()
 }
 
-fn tool_button<'a>(host: &Host<'a>, open: bool) -> Element<'a, Message> {
+fn tool_button<'a>(home: &HomeChrome, host: &Host<'a>, open: bool) -> Element<'a, Message> {
     let (fill, icon_color) = if host.daylight {
         (Color { r: 1.0, g: 1.0, b: 1.0, a: 0.7 }, host.text)
     } else {
@@ -797,14 +1051,44 @@ fn tool_button<'a>(host: &Host<'a>, open: bool) -> Element<'a, Message> {
     let icon = if open { Icon::X } else { Icon::Settings2 };
     // `SlideActionButton`: `backdrop-blur-md` (12px) under the fill. The fill stays on the button so hover can lift it.
     let glass = crate::chrome::glass_disc(BUTTON, [0.0; 4], 12.0, 1.0);
-    stack![glass, round_button(icon, 20.0, BUTTON, fill, icon_color, Some(Message::Tools))].into()
+    let delta = home.dock_delta().unwrap_or_default();
+    let face = container(crate::icons::icon(if delta >= 36.0 { Icon::Command } else { icon }, 20.0, icon_color))
+        .center(BUTTON)
+        .style(move |_| container::Style {
+            background: Some(fill.into()),
+            border: iced::Border::default().rounded(24.0),
+            ..Default::default()
+        });
+    let visual = crate::float_layer::place(stack![glass, face], host.modal, iced::Vector::new(-delta, 0.0), 1.0);
+    let capture = crate::drag_capture::Capture::new(
+        button(visual).on_press(Message::Tools).padding(0).style(|_, _| button::Style::default()),
+        Rectangle { x: 0.0, y: 0.0, width: BUTTON, height: BUTTON },
+        Message::DockPress,
+        Message::DockMove,
+        Message::DockRelease,
+        Message::DockCancel,
+    )
+    .before_child()
+    .held(home.dock_delta().is_some(), delta > 2.0)
+    .cursor(iced::mouse::Interaction::Pointer);
+    Element::new(capture)
 }
 
-fn quick<'a>(lucide: Icon, cell: f32, paint: Faded, on_press: Option<Message>, tip: String) -> Element<'a, Message> {
+fn quick<'a>(lucide: Icon, paint: Faded, on_press: Option<Message>, tip: String) -> Element<'a, Message> {
     let enabled = on_press.is_some();
     let dim = paint.faded(if enabled { 1.0 } else { 0.35 });
-    let button = button(container(icon(lucide, 18.0, dim.text())).center(Length::Fill))
-        .width(Length::Fixed(cell))
+    let glyph = if lucide == Icon::LoaderCircle {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        crate::icons::spinner(
+            18.0,
+            dim.text(),
+            START.get_or_init(Instant::now).elapsed().as_secs_f32().fract() * std::f32::consts::TAU,
+        )
+    } else {
+        icon(lucide, 18.0, dim.text())
+    };
+    let button = button(container(glyph).center(Length::Fill))
+        .width(Length::FillPortion(1))
         .height(Length::Fixed(QUICK_H))
         .padding(0)
         .on_press_maybe(on_press)

@@ -35,14 +35,25 @@ pub fn bar<'a>(_home: &'a HomeChrome, host: &Host<'a>, _now: Instant) -> Element
 fn strip<'a>(host: &Host<'a>) -> Element<'a, Message> {
     let horizontal = host.horizontal;
     let ink = fade(host.text, host.opacity);
-    let paper = mix_paper(host);
+    let paper = if host.wall.seam_clear { host.background } else { mix_paper(host) };
     let ring = Color { a: if host.daylight { 0.08 } else { 0.06 }, ..ink };
     let (origin, size) = plate_box(host);
     let plate = Plate {
         radius: 0.0,
         fill_origin: origin,
         fill_size: size,
-        fill: [paper.r, paper.g, paper.b, 1.0],
+        fill: [
+            paper.r,
+            paper.g,
+            paper.b,
+            if host.wall.seam_clear {
+                if host.wall.backdrop_blur { 0.5 } else { 0.64 }
+            } else if host.wall.look != folia_store::WallLook::Solid {
+                0.8
+            } else {
+                1.0
+            },
+        ],
         shadow: seam_shadow(host),
         shadow_blur: SHADOW,
         shadow_y: 24.0,
@@ -1356,7 +1367,7 @@ fn tool_grid<'a>(ink: Color) -> Element<'a, Message> {
         ]
         .spacing(8),
         row![
-            tool(Icon::PanelsTopLeft, 40.0, ink, None, true),
+            tool(Icon::PanelsTopLeft, 40.0, ink, Some(Message::Destination), false),
             tool(Icon::Ellipsis, 40.0, ink, Some(Message::More), false),
         ]
         .spacing(8),
@@ -1370,7 +1381,7 @@ fn tool_column<'a>(ink: Color) -> Element<'a, Message> {
     column![
         tool(Icon::Search, 36.0, ink, Some(Message::Search), false),
         tool(Icon::Settings, 36.0, ink, Some(Message::Settings), false),
-        tool(Icon::PanelsTopLeft, 36.0, ink, None, true),
+        tool(Icon::PanelsTopLeft, 36.0, ink, Some(Message::Destination), false),
         tool(Icon::Ellipsis, 36.0, ink, Some(Message::More), false),
     ]
     .spacing(6)
@@ -1383,7 +1394,7 @@ fn tool_row<'a>(ink: Color, spine: bool) -> Element<'a, Message> {
     row![
         tool(Icon::Search, box_px, ink, Some(Message::Search), false),
         tool(Icon::Settings, box_px, ink, Some(Message::Settings), false),
-        tool(Icon::PanelsTopLeft, box_px, ink, None, true),
+        tool(Icon::PanelsTopLeft, box_px, ink, Some(Message::Destination), false),
         tool(Icon::Ellipsis, box_px, ink, Some(Message::More), false),
     ]
     .spacing(6)

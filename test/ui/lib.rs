@@ -24,6 +24,7 @@ mod seam_title;
 mod text_atlas;
 mod transparent;
 mod wall_loading;
+mod wall_tools;
 mod workbench;
 
 use folia_core::Line;

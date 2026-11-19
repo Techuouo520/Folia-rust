@@ -12,9 +12,9 @@ struct Uniforms {
     encode: f32,
     vignette: f32,
     grain: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    seam_axis: f32,
+    seam_start: f32,
+    seam_end: f32,
     base: vec4<f32>,
     glows: array<Glow, 2>,
 }
@@ -36,6 +36,8 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_wash(input: VsOut) -> @location(0) vec4<f32> {
     let px = input.uv * u.resolution;
+    let coord = select(px.x, px.y, u.seam_axis > 0.5);
+    if coord >= u.seam_start && coord < u.seam_end { discard; }
     var rgb = u.base.rgb;
     for (var i = 1; i >= 0; i--) {
         rgb = mix(rgb, u.glows[i].color.rgb, glow_alpha(u.glows[i], px));

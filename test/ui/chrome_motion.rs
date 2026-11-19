@@ -91,6 +91,12 @@ fn probe(label: &str) -> (Key, Modifiers, WallKey) {
         }
         "libraryBravais.helpEnqueue" => (Key::Named(Named::Enter), Modifiers::SHIFT, WallKey::Card(CardKey::Enqueue)),
         "libraryBravais.helpBack" => (Key::Named(Named::Escape), none, WallKey::Card(CardKey::Escape)),
+        "libraryBravais.helpShuffle" | "libraryBravais.helpLocate" => {
+            (Key::Character(":".into()), none, WallKey::Chord)
+        }
+        "libraryBravais.helpLattice" => (Key::Character("b".into()), Modifiers::COMMAND, WallKey::Destination),
+        "libraryBravais.helpTabs" => (Key::Named(Named::F6), none, WallKey::CycleTab(false)),
+        "libraryBravais.helpCommands" => (Key::Character("k".into()), Modifiers::COMMAND, WallKey::Commands),
         other => panic!("no probe for {other}"),
     }
 }
@@ -111,10 +117,14 @@ fn every_help_row_names_a_key_with_that_action() {
             ("libraryBravais.helpPlay", "Enter"),
             ("libraryBravais.helpEnqueue", "Shift + Enter"),
             ("libraryBravais.helpBack", "ESC"),
+            ("libraryBravais.helpTabs", "F6"),
+            ("libraryBravais.helpLocate", ": + C"),
+            ("libraryBravais.helpShuffle", ": + R"),
+            ("libraryBravais.helpLattice", if cfg!(target_os = "macos") { "⌘ + B" } else { "Ctrl + B" }),
+            ("libraryBravais.helpCommands", if cfg!(target_os = "macos") { "⌘ + K" } else { "Ctrl + K" }),
         ]
     );
-    // F6 has no tab cycling in this build, so its row is left out.
-    assert_eq!(press(Key::Named(Named::F6), Modifiers::empty()), None);
+    assert_eq!(press(Key::Named(Named::F6), Modifiers::empty()), Some(WallKey::CycleTab(false)));
 }
 
 #[test]

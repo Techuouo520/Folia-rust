@@ -20,7 +20,6 @@ pub struct Playback {
     pub status: Status,
     pub settings: PlaybackSettings,
     /// Silenced without losing `settings.volume`, like the original `isMuted`.
-    pub muted: bool,
     queue_ended: bool,
     /// Seconds the playing song's lyrics are moved later (`lyricTimelineOffsetMs`); every song starts at 0.
     pub lyric_offset: f64,
@@ -112,7 +111,7 @@ impl Playback {
     pub fn new(settings: PlaybackSettings, omni: Option<Omni>) -> Self {
         let player = match Player::new() {
             Ok(player) => {
-                player.set_volume(settings.volume);
+                player.set_volume(if settings.muted { 0.0 } else { settings.volume });
                 Some(player)
             }
             Err(err) => {
@@ -131,7 +130,7 @@ impl Playback {
             lyrics_pending: false,
             status,
             settings,
-            muted: false,
+
             queue_ended: false,
             lyric_offset: 0.0,
             seeking: None,
@@ -250,7 +249,7 @@ impl Playback {
         if self.replay_gain == ReplayGainMode::Off || self.gain.is_none() {
             self.applied_db = 0.0;
         }
-        let level = if self.muted { 0.0 } else { self.settings.volume * self.gain_factor() };
+        let level = if self.settings.muted { 0.0 } else { self.settings.volume * self.gain_factor() };
         self.with_player(|player| player.set_volume(level.clamp(0.0, 1.0)));
     }
 
@@ -320,6 +319,15 @@ impl Playback {
         self.queue.append(tracks, |a, b| a.id == b.id)
     }
 
+    /// Only a local song and an entirely local queue can be saved to the library index.
+    pub fn can_save_queue(&self) -> bool {
+        let indexed = |track: &Track| track.online.is_none() && track.id > 0;
+        !self.is_fm()
+            && self.current().is_some_and(indexed)
+            && !self.queue.items().is_empty()
+            && self.queue.items().iter().all(indexed)
+    }
+
     /// Shuffles the queue (`shuffleQueue`): the playing song to the head, the rest drawn from `seed`.
     pub fn shuffle(&mut self, seed: u64) -> bool {
         self.prefetch_dirty = true;
@@ -329,10 +337,10 @@ impl Playback {
         self.queue.shuffle(seed)
     }
 
-    /// `clearQueue`: every queued item except the playing one leaves; the player keeps running.
+    /// Clears the editable list without stopping the active audio request.
     pub fn clear_queue(&mut self) -> bool {
         self.prefetch_dirty = true;
-        let cleared = self.queue.clear_except_current();
+        let cleared = !self.is_fm() && self.queue.clear_list();
         if cleared {
             self.failures = 0;
         }
@@ -427,7 +435,7 @@ impl Playback {
             }
             Message::Volume(volume) => {
                 self.settings.volume = volume;
-                self.muted = false;
+                self.settings.muted = false;
                 self.apply_gain();
                 Task::none()
             }
@@ -436,9 +444,9 @@ impl Playback {
                 Task::none()
             }
             Message::ToggleMute => {
-                self.muted = !self.muted;
+                self.settings.muted = !self.settings.muted;
                 self.apply_gain();
-                Task::none()
+                save(store, &self.settings)
             }
             Message::VolumeDone => save(store, &self.settings),
             Message::CycleRepeat => {

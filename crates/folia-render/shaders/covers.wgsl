@@ -74,6 +74,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
         rgb = mix(in.color0.rgb, sample.rgb, sample.a);
     }
     rgb = mix(rgb, frame.shade.rgb, shade_a(in.local.y, in.params.x));
+    if in.params.w > 0.0 { rgb = poster_color(rgb, in.params.w); }
     if (frame.encode.x > 0.5) {
         rgb = to_linear(rgb);
     }

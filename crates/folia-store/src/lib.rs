@@ -21,7 +21,7 @@ mod visualizer;
 pub use ai::{AiProtocol, AiSettings, SongThemeSettings, ThemeGenerationSource};
 pub use appearance::{
     AppearanceSettings, FontSettings, FontStyle, FrameRate, RowSource, SubtitleContentMode, SubtitleLayout,
-    SubtitleSettings, ThemeMode,
+    SubtitleSettings, ThemeMode, WallAppearance, WallLook,
 };
 pub use audio::{AudioSettings, ReplayGainMode};
 pub use developer::{DeveloperSettings, LogMode, clamp_interval_ms};

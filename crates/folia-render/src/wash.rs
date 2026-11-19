@@ -20,6 +20,8 @@ pub struct Glow {
 /// Opaque `base` with `glows[0]` painted over `glows[1]`, the order CSS stacks backgrounds in.
 #[derive(Debug, Clone, Copy)]
 pub struct Wash {
+    /// Axis, lower and upper bounds of the transparent seam in logical pixels.
+    pub seam: [f32; 3],
     pub base: [f32; 3],
     pub glows: [Glow; 2],
 }
@@ -38,6 +40,7 @@ impl<Message> shader::Program<Message> for Wash {
     fn draw(&self, _state: &Self::State, _cursor: mouse::Cursor, bounds: Rectangle) -> Self::Primitive {
         let [r, g, b] = self.base;
         let mut uniforms = Uniforms::sized(bounds);
+        uniforms.seam = self.seam;
         uniforms.base = [r, g, b, 1.0];
         uniforms.glows =
             self.glows.map(|glow| GlowUniform { center: glow.center, reach: glow.reach, _pad: 0.0, color: glow.rgba });
@@ -73,7 +76,7 @@ struct Uniforms {
     encode: f32,
     vignette: f32,
     grain: f32,
-    _pad: [f32; 3],
+    seam: [f32; 3],
     base: [f32; 4],
     glows: [GlowUniform; 2],
 }

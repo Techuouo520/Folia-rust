@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use folia_core::{LyricAntialias, LyricRenderQuality};
+use iced::advanced::image::{Allocation, Handle, Renderer as _};
 use iced::advanced::{Clipboard, Layout, Shell, Widget, layout, renderer, widget};
 use iced::{Element, Event, Length, Rectangle, Size, Vector, mouse};
 use iced_wgpu::graphics::{self, Viewport, core::Renderer as _};
@@ -49,18 +50,82 @@ pub fn layer<'a, M: 'a>(content: Element<'a, M>, quality: LyricRenderQuality, pu
     if quality.normalized() == LyricRenderQuality::default() {
         return content;
     }
-    Element::new(Layer { content, quality: quality.normalized(), publish_blur })
+    Element::new(Layer {
+        content,
+        quality: quality.normalized(),
+        publish_blur,
+        wall: None,
+        posters: None,
+        images: None,
+    })
+}
+
+/// Captures a wall composition for glass, or blurs the player surface in its own texture before the wall is drawn.
+/// `None` draws directly while keeping the same widget tree across capture changes.
+pub fn wall_layer<'a, M: 'a>(
+    content: Element<'a, M>,
+    mode: Option<WallLayer>,
+    images: Option<ImageSources<'a>>,
+) -> Element<'a, M> {
+    Element::new(Layer {
+        content,
+        quality: LyricRenderQuality::default(),
+        publish_blur: false,
+        wall: mode,
+        posters: None,
+        images,
+    })
+}
+
+/// One visible poster transformed from wall coordinates to texture UVs.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PosterRegion {
+    pub center: [f32; 2],
+    pub x_axis: [f32; 2],
+    pub y_axis: [f32; 2],
+    pub amount: f32,
+    pub padding: f32,
+}
+
+type PosterRegions<'a> = Box<dyn Fn(&mut Vec<PosterRegion>, &mut Vec<Handle>) + 'a>;
+type ImageSources<'a> = Box<dyn Fn(&mut Vec<Handle>) + 'a>;
+
+/// Applies CSS saturation and brightness to the composed poster, including its artwork and lettering.
+/// The callback also supplies asynchronous images that must be resident before switching to this renderer.
+pub fn poster_surface<'a, M: 'a>(
+    content: Element<'a, M>,
+    regions: impl Fn(&mut Vec<PosterRegion>, &mut Vec<Handle>) + 'a,
+) -> Element<'a, M> {
+    Element::new(Layer {
+        content,
+        quality: LyricRenderQuality::default(),
+        publish_blur: false,
+        wall: None,
+        posters: Some(Box::new(regions)),
+        images: None,
+    })
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum WallLayer {
+    GlassSource,
+    BlurredPlayer,
 }
 
 struct Layer<'a, M> {
     content: Element<'a, M>,
     quality: LyricRenderQuality,
     publish_blur: bool,
+    wall: Option<WallLayer>,
+    posters: Option<PosterRegions<'a>>,
+    images: Option<ImageSources<'a>>,
 }
 
 struct State {
     frame: Offscreen,
     antialias: LyricAntialias,
+    wall: Option<WallLayer>,
 }
 
 #[derive(Default)]
@@ -73,11 +138,52 @@ struct Frame {
     stamp: u64,
     bounds: Rectangle,
     physical: Rectangle,
+    regions: Vec<PosterRegion>,
+    images: PosterImages,
+}
+
+#[derive(Default)]
+struct PosterImages {
+    handles: Vec<Handle>,
+    uploads: Vec<PosterUpload>,
+}
+
+struct PosterUpload {
+    handle: Handle,
+    result: Arc<Mutex<Option<Result<Allocation, iced::advanced::image::Error>>>>,
+}
+
+impl PosterImages {
+    fn pending(&self) -> bool {
+        self.uploads.iter().any(|upload| upload.result.lock().is_none())
+    }
+
+    fn ready(&mut self, renderer: &mut iced::Renderer) -> bool {
+        self.uploads.retain(|upload| self.handles.iter().any(|shown| shown.id() == upload.handle.id()));
+        for handle in &self.handles {
+            if !self.uploads.iter().any(|upload| upload.handle.id() == handle.id()) {
+                let result = Arc::new(Mutex::new(None));
+                let ready = result.clone();
+                renderer.allocate_image(handle, move |allocation| {
+                    if let Err(err) = &allocation {
+                        tracing::warn!(error = err as &dyn std::error::Error, "poster filter image upload failed");
+                    }
+                    *ready.lock() = Some(allocation);
+                });
+                self.uploads.push(PosterUpload { handle: handle.clone(), result });
+            }
+            // Poll the renderer's image worker without waiting on the GPU or decoding on this thread.
+            let _ = renderer.measure_image(handle);
+        }
+        self.uploads.iter().all(|upload| upload.result.lock().as_ref().is_some_and(Result::is_ok))
+    }
 }
 
 struct Target {
     view: wgpu::TextureView,
     bind: wgpu::BindGroup,
+    blurred: Option<(crate::Pyramid, Option<wgpu::BindGroup>)>,
+    poster_filter: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     size: Size<u32>,
     #[cfg(feature = "dev")]
     id: usize,
@@ -97,11 +203,15 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Layer<'_, M> {
     }
 
     fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<State>()
+        if self.posters.is_some() { widget::tree::Tag::of::<PosterRegion>() } else { widget::tree::Tag::of::<State>() }
     }
 
     fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(State { frame: Offscreen::default(), antialias: self.quality.antialias })
+        widget::tree::State::new(State {
+            frame: Offscreen::default(),
+            antialias: self.quality.antialias,
+            wall: self.wall,
+        })
     }
 
     fn children(&self) -> Vec<widget::Tree> {
@@ -114,7 +224,10 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Layer<'_, M> {
             state.frame = Offscreen::default();
             state.antialias = self.quality.antialias;
             tree.children[0] = widget::Tree::new(&self.content);
+        } else if state.wall != self.wall {
+            state.frame = Offscreen::default();
         }
+        state.wall = self.wall;
         tree.diff_children(std::slice::from_ref(&self.content));
     }
 
@@ -134,12 +247,42 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Layer<'_, M> {
     ) {
         let state = tree.state.downcast_ref::<State>();
         let bounds = layout.bounds();
+        if self.wall.is_none() && self.posters.is_none() && self.quality == LyricRenderQuality::default() {
+            self.content.as_widget().draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+            return;
+        }
+        if let Some(images) = &self.images {
+            let mut frame = state.frame.0.lock();
+            frame.images.handles.clear();
+            images(&mut frame.images.handles);
+        }
+        if let Some(regions) = &self.posters {
+            let mut frame = state.frame.0.lock();
+            frame.regions.clear();
+            frame.images.handles.clear();
+            let Frame { regions: faces, images, .. } = &mut *frame;
+            regions(faces, &mut images.handles);
+            if frame.regions.is_empty() {
+                drop(frame);
+                self.content.as_widget().draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+                return;
+            }
+        }
         let ready = state.frame.record(bounds, self.quality.antialias, |inner| {
             self.content.as_widget().draw(&tree.children[0], inner, theme, style, layout, cursor, viewport);
         });
+        if !ready && (self.wall.is_some() || self.posters.is_some()) {
+            self.content.as_widget().draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+        }
         renderer.draw_primitive(
             bounds,
-            Pass { frame: state.frame.clone(), quality: self.quality, ready, publish_blur: self.publish_blur },
+            Pass {
+                frame: state.frame.clone(),
+                quality: self.quality,
+                ready,
+                publish_blur: self.publish_blur,
+                wall: self.wall,
+            },
         );
     }
 
@@ -165,7 +308,11 @@ impl<M> Widget<M, iced::Theme, iced::Renderer> for Layer<'_, M> {
             viewport,
         );
         let state = tree.state.downcast_ref::<State>();
-        if self.quality != LyricRenderQuality::default() && state.frame.pending() {
+        if (self.wall.is_some()
+            || self.quality != LyricRenderQuality::default()
+            || (self.posters.is_some() && !state.frame.0.lock().regions.is_empty()))
+            && state.frame.pending()
+        {
             shell.request_redraw_at(std::time::Instant::now() + std::time::Duration::from_millis(16));
         }
     }
@@ -208,6 +355,7 @@ struct Pass {
     quality: LyricRenderQuality,
     ready: bool,
     publish_blur: bool,
+    wall: Option<WallLayer>,
 }
 
 impl std::fmt::Debug for Pass {
@@ -229,6 +377,8 @@ pub struct OffscreenDevice {
 struct Pipeline {
     target: OffscreenDevice,
     plain: wgpu::RenderPipeline,
+    poster: wgpu::RenderPipeline,
+    poster_layout: wgpu::BindGroupLayout,
     antialias: wgpu::RenderPipeline,
 }
 
@@ -238,7 +388,12 @@ impl iced_wgpu::primitive::Pipeline for Pipeline {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("folia-lyric-quality"),
             source: wgpu::ShaderSource::Wgsl(
-                concat!(include_str!("../shaders/antialias.wgsl"), include_str!("../shaders/quality.wgsl")).into(),
+                concat!(
+                    include_str!("../shaders/antialias.wgsl"),
+                    include_str!("../shaders/poster_color.wgsl"),
+                    include_str!("../shaders/quality.wgsl")
+                )
+                .into(),
             ),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -246,10 +401,28 @@ impl iced_wgpu::primitive::Pipeline for Pipeline {
             bind_group_layouts: &[&target.layout],
             push_constant_ranges: &[],
         });
-        let create = |fragment| {
+        let poster_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("folia-poster-regions"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let filtered_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("folia-poster-filter"),
+            bind_group_layouts: &[&target.layout, &poster_layout],
+            push_constant_ranges: &[],
+        });
+        let create = |fragment, layout| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("folia-lyric-quality"),
-                layout: Some(&pipeline_layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &module,
                     entry_point: Some("vs"),
@@ -273,7 +446,13 @@ impl iced_wgpu::primitive::Pipeline for Pipeline {
                 cache: None,
             })
         };
-        Self { target, plain: create("plain"), antialias: create("antialias") }
+        Self {
+            target,
+            plain: create("plain", &pipeline_layout),
+            antialias: create("antialias", &pipeline_layout),
+            poster: create("poster_filter", &filtered_layout),
+            poster_layout,
+        }
     }
 }
 
@@ -289,6 +468,41 @@ impl iced_wgpu::primitive::Primitive for Pass {
         viewport: &Viewport,
     ) {
         self.frame.prepare(&pipeline.target, bounds, viewport, self.quality, self.ready);
+        if !self.ready {
+            return;
+        }
+        let mut frame = self.frame.0.lock();
+        let Frame { target: source, regions, .. } = &mut *frame;
+        let Some(source) = source else { return };
+        if !regions.is_empty() {
+            let packed = bytemuck::cast_slice::<PosterRegion, u8>(regions);
+            let needed = (16 + packed.len()) as u64;
+            let gpu = source.poster_filter.get_or_insert_with(|| poster_buffer(pipeline, needed));
+            if gpu.0.size() < needed {
+                *gpu = poster_buffer(pipeline, needed);
+            }
+            let header = [regions.len() as u32, u32::from(pipeline.target.format.is_srgb()), 0, 0];
+            pipeline.target.queue.write_buffer(&gpu.0, 0, bytemuck::cast_slice(&header));
+            pipeline.target.queue.write_buffer(&gpu.0, 16, packed);
+        }
+    }
+
+    fn draw(&self, pipeline: &Pipeline, pass: &mut wgpu::RenderPass<'_>) -> bool {
+        let frame = self.frame.0.lock();
+        if frame.regions.is_empty() {
+            return false;
+        }
+        // Keep poster filters in submission order with the wall's vignette and grain.
+        if self.ready
+            && let Some(source) = &frame.target
+            && let Some((_, params)) = &source.poster_filter
+        {
+            pass.set_pipeline(&pipeline.poster);
+            pass.set_bind_group(0, &source.bind, &[]);
+            pass.set_bind_group(1, params, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        true
     }
 
     fn render(
@@ -301,8 +515,27 @@ impl iced_wgpu::primitive::Primitive for Pass {
         if !self.ready {
             return;
         }
-        let frame = self.frame.0.lock();
-        let Some(source) = &frame.target else { return };
+        let mut frame = self.frame.0.lock();
+        let physical = frame.physical;
+        let bounds = frame.bounds;
+        let stamp = frame.stamp;
+        let Some(source) = &mut frame.target else { return };
+        let device = &pipeline.target.device;
+        let bind = if self.wall == Some(WallLayer::BlurredPlayer) {
+            let (pyramid, bind) =
+                source.blurred.get_or_insert_with(|| (crate::Pyramid::new(device, pipeline.target.format), None));
+            let level = crate::levels_for_radius(24.0);
+            let rebuilt = pyramid.ensure(device, &pipeline.target.queue, source.size.width, source.size.height, level);
+            pyramid.copy_into_source(device, encoder, &source.view);
+            pyramid.blur(device, encoder, &[level]);
+            if rebuilt || bind.is_none() {
+                *bind = pyramid.output(0).map(|view| pipeline.target.bind(view));
+            }
+            bind.as_ref().unwrap_or(&source.bind)
+        } else {
+            source.blurred = None;
+            &source.bind
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("folia-lyric-quality"),
@@ -314,24 +547,27 @@ impl iced_wgpu::primitive::Primitive for Pass {
                 })],
                 ..Default::default()
             });
-            pass.set_viewport(
-                frame.physical.x,
-                frame.physical.y,
-                frame.physical.width,
-                frame.physical.height,
-                0.0,
-                1.0,
-            );
+            pass.set_viewport(physical.x, physical.y, physical.width, physical.height, 0.0, 1.0);
             pass.set_scissor_rect(clip.x, clip.y, clip.width, clip.height);
             pass.set_pipeline(if self.quality.antialias == LyricAntialias::On {
                 &pipeline.antialias
             } else {
                 &pipeline.plain
             });
-            pass.set_bind_group(0, &source.bind, &[]);
+            pass.set_bind_group(0, bind, &[]);
             pass.draw(0..3, 0..1);
         }
-        if self.publish_blur {
+        if self.wall == Some(WallLayer::GlassSource) {
+            crate::paint_external(
+                device,
+                &pipeline.target.queue,
+                encoder,
+                pipeline.target.format,
+                &source.view,
+                stamp,
+                [bounds.width, bounds.height],
+            );
+        } else if self.publish_blur {
             crate::paint_over_underlay(
                 &pipeline.target.device,
                 &pipeline.target.queue,
@@ -339,8 +575,8 @@ impl iced_wgpu::primitive::Primitive for Pass {
                 pipeline.target.format,
                 crate::UnderlayOverlay {
                     foreground: &source.view,
-                    stamp: frame.stamp,
-                    window: [frame.bounds.width, frame.bounds.height],
+                    stamp,
+                    window: [bounds.width, bounds.height],
                     veil: [0.0; 4],
                 },
             );
@@ -348,7 +584,34 @@ impl iced_wgpu::primitive::Primitive for Pass {
     }
 }
 
+fn poster_buffer(pipeline: &Pipeline, needed: u64) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let device = &pipeline.target.device;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("folia-hover-faces"),
+        size: needed.next_power_of_two(),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("folia-hover-faces"),
+        layout: &pipeline.poster_layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+    });
+    (buffer, bind)
+}
+
 impl OffscreenDevice {
+    fn bind(&self, view: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("folia-lyric-quality"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+            ],
+        })
+    }
+
     fn target(&self, size: Size<u32>) -> Target {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("folia-lyric-quality"),
@@ -361,14 +624,7 @@ impl OffscreenDevice {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("folia-lyric-quality"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-            ],
-        });
+        let bind = self.bind(&view);
         #[cfg(feature = "dev")]
         let id = NEXT_TARGET.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "dev")]
@@ -376,6 +632,8 @@ impl OffscreenDevice {
         Target {
             view,
             bind,
+            blurred: None,
+            poster_filter: None,
             size,
             #[cfg(feature = "dev")]
             id,
@@ -392,7 +650,8 @@ impl Offscreen {
         self.0.lock().stamp
     }
     pub fn pending(&self) -> bool {
-        !self.0.lock().owner.load(Ordering::Acquire)
+        let frame = self.0.lock();
+        !frame.owner.load(Ordering::Acquire) || frame.images.pending()
     }
 
     pub fn record(&self, bounds: Rectangle, antialias: LyricAntialias, draw: impl FnOnce(&mut iced::Renderer)) -> bool {
@@ -400,7 +659,11 @@ impl Offscreen {
         if frame.antialias != antialias {
             return false;
         }
-        let Some(inner) = frame.renderer.as_mut().and_then(crate::Prepared::poll) else { return false };
+        let Frame { renderer, images, .. } = &mut *frame;
+        let Some(inner) = renderer.as_mut().and_then(crate::Prepared::poll) else { return false };
+        if !images.ready(inner) {
+            return false;
+        }
         inner.reset(Rectangle::with_size(bounds.size()));
         inner.with_translation(Vector::new(-bounds.x, -bounds.y), draw);
         true
@@ -435,6 +698,7 @@ impl Offscreen {
                 let engine = iced_wgpu::Engine::new(&adapter, device, queue, format, samples, shell);
                 iced_wgpu::Renderer::new(engine, iced::Font::DEFAULT, iced::Pixels(16.0))
             }));
+            frame.images.uploads.clear();
             frame.antialias = antialias;
             frame.target = None;
             return;

@@ -69,6 +69,7 @@ fn save_then_load() {
         home_tab: HomeTab::Radio,
         online_provider: None,
         wall_tools_queue_island_open: false,
+        wall_randomize_on_entry: true,
     };
 
     store.save(&settings).unwrap();
@@ -77,7 +78,7 @@ fn save_then_load() {
     let text = fs::read_to_string(dir.path().join("nested/general.toml")).unwrap();
     assert_eq!(
         text,
-        "schema_version = 1\nlanguage = \"vi\"\nhome_tab = \"radio\"\nwall_tools_queue_island_open = false\n"
+        "schema_version = 2\nlanguage = \"vi\"\nhome_tab = \"radio\"\nwall_tools_queue_island_open = false\nwall_randomize_on_entry = true\n"
     );
     assert!(!dir.path().join("nested/general.toml.tmp").exists());
 }
@@ -87,14 +88,14 @@ fn rejects_other_schema_versions() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("general.toml"), "schema_version = 9\nlanguage = \"en\"\n").unwrap();
     let err = Store::at(dir.path()).load::<GeneralSettings>().unwrap_err();
-    assert!(matches!(err, StoreError::SchemaVersion { found: 9, expected: 1, .. }), "{err}");
+    assert!(matches!(err, StoreError::SchemaVersion { found: 9, expected: 2, .. }), "{err}");
 }
 
 #[test]
 fn rejects_malformed_files() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("general.toml"), "schema_version = 1\nlanguage = 42\n").unwrap();
-    let err = Store::at(dir.path()).load::<GeneralSettings>().unwrap_err();
+    let err = GeneralSettings::load(&Store::at(dir.path())).unwrap_err();
     assert!(matches!(err, StoreError::Parse { .. }), "{err}");
 }
 
@@ -102,10 +103,26 @@ fn rejects_malformed_files() {
 fn playback_keeps_volume_when_quality_is_missing() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("playback.toml"), "schema_version = 1\nvolume = 0.35\nrepeat = \"all\"\n").unwrap();
-    let settings: PlaybackSettings = Store::at(dir.path()).load().unwrap();
+    let settings = PlaybackSettings::load(&Store::at(dir.path())).unwrap();
     assert_eq!(settings.volume, 0.35);
     assert_eq!(settings.repeat, folia_core::Repeat::All);
     assert_eq!(settings.audio_quality, AudioQuality::High);
+    assert!(!settings.muted);
+}
+
+#[test]
+fn general_migration_preserves_preferences_and_defaults_wall_randomization_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path());
+    fs::write(dir.path().join("general.toml"), "schema_version = 1\nlanguage = \"vi\"\nhome_tab = \"albums\"\nonline_provider = \"qq\"\nwall_tools_queue_island_open = true\n").unwrap();
+    let settings = GeneralSettings::load(&store).unwrap();
+    assert_eq!(settings.language, LanguagePreference::Fixed(Language::Vi));
+    assert_eq!(settings.home_tab, HomeTab::Albums);
+    assert_eq!(settings.online_provider.as_deref(), Some("qq"));
+    assert!(settings.wall_tools_queue_island_open);
+    assert!(!settings.wall_randomize_on_entry);
+    assert_eq!(store.load::<GeneralSettings>().unwrap(), settings);
+    assert!(fs::read_to_string(dir.path().join("general.toml")).unwrap().starts_with("schema_version = 2\n"));
 }
 
 #[test]
@@ -164,12 +181,18 @@ fn an_older_appearance_file_reads_with_the_new_defaults() {
     assert!(!appearance.follow_system_theme);
     assert!(!appearance.use_cover_color_bg);
     assert_eq!(appearance.cover_background_opacity, 0.75);
-    assert!(fs::read_to_string(dir.path().join("appearance.toml")).unwrap().starts_with("schema_version = 2\n"));
+    assert!(fs::read_to_string(dir.path().join("appearance.toml")).unwrap().starts_with("schema_version = 3\n"));
     assert_eq!(appearance.lyrics_font_scale, 1.1);
     assert_eq!(appearance.visualizer, "monet");
     assert_eq!(appearance.stored_background_mode(), None);
     assert_eq!(appearance.subtitle, folia_store::SubtitleSettings::default());
     assert_eq!(appearance.lyrics_font, folia_store::FontSettings::default());
+    let store = Store::at(dir.path());
+    fs::write(dir.path().join("appearance.toml"), "schema_version = 2\ntheme = \"light\"\nlyrics_font_scale = 1.4\n")
+        .unwrap();
+    let migrated = AppearanceSettings::load(&store).unwrap();
+    assert_eq!(migrated.wall, folia_store::WallAppearance::default());
+    assert_eq!(migrated.lyrics_font_scale, 1.4);
 }
 
 #[test]

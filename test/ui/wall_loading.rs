@@ -3,6 +3,88 @@ use folia_ui::{Wall, WallCover, WallMessage, WallShape, WallTile};
 use iced::futures::StreamExt;
 use iced::{Size, Task, Vector};
 
+#[test]
+fn randomized_song_and_collection_walls_keep_identity_order_for_each_visit() {
+    for stack in [false, true] {
+        let mut tiles: Vec<_> = (0..32)
+            .map(|id| WallTile {
+                id,
+                title: format!("Item {id}"),
+                subtitle: String::new(),
+                badge: None,
+                cover: WallCover::None,
+                heading: false,
+                hue: 0.0,
+                stack,
+            })
+            .collect();
+        let mut wall = Wall::new();
+        let positions = |wall: &Wall, tiles: &[WallTile]| {
+            tiles.iter().enumerate().map(|(index, tile)| (tile.id, wall.slot_of(index).unwrap())).collect::<Vec<_>>()
+        };
+        drop(wall.relayout(&tiles, WallShape::Finite, None));
+        let original = positions(&wall, &tiles);
+        wall.set_order_seed(Some(41));
+        drop(wall.relayout(&tiles, WallShape::Finite, None));
+        let visit = positions(&wall, &tiles);
+        assert_ne!(visit, original);
+        assert_eq!(wall.boundary_slot(false), Some(original.first().unwrap().1));
+        assert_eq!(wall.boundary_slot(true), Some(original.last().unwrap().1));
+        tiles[0].title = "Metadata updated".into();
+        drop(wall.relayout(&tiles, WallShape::Finite, None));
+        drop(wall.update(WallMessage::Viewport(Size::new(1200.0, 800.0)), &tiles, None));
+        drop(wall.update(WallMessage::Pan(Vector::new(2000.0, 1000.0)), &tiles, None));
+        assert_eq!(positions(&wall, &tiles), visit);
+        tiles.reverse();
+        drop(wall.relayout(&tiles, WallShape::Finite, None));
+        let mut reloaded = positions(&wall, &tiles);
+        reloaded.sort_by_key(|&(id, _)| id);
+        assert_eq!(reloaded, visit);
+        tiles.reverse();
+        wall.set_order_seed(Some(42));
+        drop(wall.relayout(&tiles, WallShape::Finite, None));
+        assert_ne!(positions(&wall, &tiles), visit);
+        wall.set_order_seed(None);
+        drop(wall.relayout(&tiles, WallShape::Finite, None));
+        assert_eq!(positions(&wall, &tiles), original);
+
+        wall.set_order_seed(Some(41));
+        drop(wall.relayout(&tiles, WallShape::Blocks, None));
+        for index in 0..tiles.len() {
+            wall.center_on(index);
+            let slot = wall.slot_of(index).unwrap();
+            let rect = wall.slot_screen(slot).unwrap();
+            assert!(
+                rect.intersects(&iced::Rectangle::new(iced::Point::ORIGIN, wall.viewport())),
+                "tile {index} cannot be located after randomization"
+            );
+        }
+    }
+}
+
+#[test]
+fn random_wall_order_handles_empty_and_single_item_walls() {
+    let mut wall = Wall::new();
+    wall.set_order_seed(Some(7));
+    drop(wall.relayout(&[], WallShape::Blocks, None));
+    wall.center_on(0);
+    assert!(wall.slot_of(0).is_none());
+    let tiles = [WallTile {
+        id: 77,
+        title: "Only song".into(),
+        subtitle: String::new(),
+        badge: None,
+        cover: WallCover::None,
+        heading: false,
+        hue: 0.0,
+        stack: false,
+    }];
+    drop(wall.update(WallMessage::Viewport(Size::new(1200.0, 800.0)), &tiles, None));
+    drop(wall.relayout(&tiles, WallShape::Blocks, None));
+    wall.center_on(0);
+    assert!(wall.slot_of(0).is_some());
+}
+
 fn messages(task: Task<WallMessage>) -> Vec<WallMessage> {
     iced::futures::executor::block_on(async {
         let Some(stream) = iced_runtime::task::into_stream(task) else { return Vec::new() };

@@ -93,6 +93,53 @@ pub fn projected<'a>(
     folia_visualizer::cinema::view(source, config, crate::Message::SceneFailed)
 }
 
+fn ground<'a>(scene: &Scene<'a>, screen: Screen<'a>, publish: bool) -> Ground<'a> {
+    Ground {
+        static_mode: screen.shared.static_mode,
+        mode: screen.shared.mode,
+        seed: scene.seed,
+        time: scene.time,
+        theme: scene.theme,
+        audio: scene.audio,
+        shapes: screen.shared.shapes,
+        vignette: screen.shared.vignette,
+        publish,
+        paused: screen.shared.paused,
+        player: !scene.preview,
+        cover: screen.cover,
+        cover_overlay: screen.cover_overlay,
+        latent: screen.latent,
+        daylight: screen.daylight,
+        sora: screen.sora,
+        monet: screen.monet,
+        picture: screen.picture,
+        nomand: screen.nomand,
+    }
+}
+
+pub fn wall<'a>(
+    surface: Surface<'a>,
+    screen: Screen<'a>,
+    appearance: folia_store::WallAppearance,
+) -> Element<'a, crate::Message> {
+    let scene = match surface {
+        Surface::Flat(scene) | Surface::Cinema { scene, .. } => scene,
+    };
+    let shared = scene.shows_shared_background();
+    let mut layers = stack![];
+    if shared {
+        layers = layers.push(background_view(ground(&scene, screen, !appearance.backdrop_blur)));
+    }
+    if appearance.backdrop_lyrics || !shared {
+        layers = layers.push(lyric_view(Scene { backdrop: !shared, ..scene }));
+    }
+    if appearance.backdrop_blur {
+        folia_render::quality::wall_layer(layers.into(), Some(folia_render::quality::WallLayer::BlurredPlayer), None)
+    } else {
+        layers.into()
+    }
+}
+
 fn composition<'a, M: From<folia_visualizer::styles::monet::Event> + 'a>(
     scene: Scene<'a>,
     i18n: &'a I18n,
@@ -112,27 +159,7 @@ fn composition<'a, M: From<folia_visualizer::styles::monet::Event> + 'a>(
     let subtitle_scale = screen.subtitle_scale;
     let show = scene.shows_shared_background() && !screen.transparent;
     let flat = !matches!(scene.style, folia_visualizer::Style::Nebbia | folia_visualizer::Style::Lumiere);
-    let ground = Ground {
-        static_mode: screen.shared.static_mode,
-        mode: screen.shared.mode,
-        seed: scene.seed,
-        time: scene.time,
-        theme: scene.theme,
-        audio: scene.audio,
-        shapes: screen.shared.shapes,
-        vignette: screen.shared.vignette,
-        publish: !scene.preview && !projected,
-        paused: screen.shared.paused,
-        player: !scene.preview,
-        cover: screen.cover,
-        cover_overlay: screen.cover_overlay,
-        latent: screen.latent,
-        daylight: screen.daylight,
-        sora: screen.sora,
-        monet: screen.monet,
-        picture: screen.picture,
-        nomand: screen.nomand,
-    };
+    let ground = ground(&scene, screen, !scene.preview && !projected);
     let scene = Scene { backdrop: scene.backdrop && !show && !screen.transparent, ..scene };
     let harmony = screen.harmony.show_harmony.then(|| {
         crate::harmony::view(

@@ -349,7 +349,8 @@ impl SongThemes {
     }
 
     pub fn can_generate(&self, playback: &Playback) -> bool {
-        playback.current().is_some()
+        self.ready
+            && playback.current().is_some()
             && !self.generating
             && (self.preferences.generation_source == ThemeGenerationSource::Cover || !playback.lyrics_loading())
     }

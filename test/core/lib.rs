@@ -131,6 +131,14 @@ fn clearing_the_queue_keeps_the_current_item_playing() {
 
     let mut empty = Queue::<char>::default();
     assert!(!empty.clear_except_current());
+
+    let mut detached = folia_core::Queue::default();
+    detached.replace(vec![1, 2, 3], 1);
+    assert!(detached.clear_list());
+    assert_eq!((detached.items().len(), detached.current_index(), detached.current()), (0, None, Some(&2)));
+    assert!(!detached.clear_list());
+    assert_eq!(detached.append(vec![2, 4, 5], |a, b| a == b), 2);
+    assert_eq!(detached.advance(false), Some(&4));
     assert!(empty.items().is_empty());
 }
 
@@ -181,6 +189,13 @@ fn shuffle_keeps_the_playing_song_and_repeats_with_the_same_seed() {
     let mut single = only_one;
     single.replace(vec![7], 0);
     assert!(!single.shuffle(9));
+    let mut waiting = folia_core::Queue::default();
+    waiting.append(vec![1, 2, 3, 4], |a, b| a == b);
+    assert!(waiting.shuffle(9));
+    assert_eq!(waiting.current(), None);
+    let mut songs = waiting.items().to_vec();
+    songs.sort_unstable();
+    assert_eq!(songs, [1, 2, 3, 4]);
 }
 
 #[test]

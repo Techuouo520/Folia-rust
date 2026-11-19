@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 
 use crate::blur::{self, Pyramid};
 
-const COVERS: &str = include_str!("../shaders/covers.wgsl");
+const COVERS: &str = concat!(include_str!("../shaders/poster_color.wgsl"), include_str!("../shaders/covers.wgsl"));
 const MAX_SIDE: u32 = 256;
 const ATLAS_LIMIT: u32 = 2048;
 
@@ -29,6 +29,7 @@ pub struct Quad {
     pub color1: [f32; 4],
     /// 0 poster shade, 1 mosaic shade, 2 no shade.
     pub shade: f32,
+    pub hover_filter: f32,
     pub alpha: f32,
 }
 
@@ -968,7 +969,13 @@ impl Picture {
             let uv =
                 self.places.get(quad.image as usize).copied().map(|place| map_uv(place, quad.uv)).unwrap_or(quad.uv);
             let mode = if quad.image == u32::MAX { 0.0 } else { 1.0 };
-            push_quad(&mut verts, quad.rect, uv, [quad.color0, quad.color1], [quad.shade, quad.alpha, mode, 0.0]);
+            push_quad(
+                &mut verts,
+                quad.rect,
+                uv,
+                [quad.color0, quad.color1],
+                [quad.shade, quad.alpha, mode, quad.hover_filter],
+            );
         }
         let bytes = bytemuck::cast_slice(&verts);
         let needed = bytes.len() as u64;
@@ -1222,6 +1229,7 @@ fn sample_wall(width: f32, height: f32) -> Scene {
     for (index, color) in tiles.iter().enumerate() {
         let x = 40.0 + index as f32 * (side + 16.0);
         quads.push(Quad {
+            hover_filter: 0.0,
             rect: [x, y, side, side],
             uv: [0.0, 0.0, 1.0, 1.0],
             image: u32::MAX,
@@ -1231,6 +1239,7 @@ fn sample_wall(width: f32, height: f32) -> Scene {
             alpha: 1.0,
         });
         quads.push(Quad {
+            hover_filter: 0.0,
             rect: [x + 24.0, y + side - 48.0, side - 48.0, 14.0],
             uv: [0.0; 4],
             image: u32::MAX,

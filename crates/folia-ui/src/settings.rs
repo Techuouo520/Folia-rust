@@ -92,6 +92,7 @@ const PERFORMANCE: GroupDef =
 const MOTION: GroupDef = GroupDef { id: "graphicsMotion", title: "options.reduceMotionSection", bare: false };
 const DEVELOPER: GroupDef = GroupDef { id: "developerTools", title: "options.developerTools", bare: true };
 const SOURCES: GroupDef = GroupDef { id: "customSources", title: "options.customSources", bare: true };
+const WALL: GroupDef = GroupDef { id: "libraryWallLook", title: "libraryBravais.toolsAppearance", bare: false };
 const SONG_THEME: GroupDef = GroupDef { id: "songTheme", title: "options.settingsHeadingSongTheme", bare: false };
 const AI: GroupDef = GroupDef { id: "electronSettings", title: "options.aiServiceProviders", bare: true };
 
@@ -115,6 +116,18 @@ const OPTIONS: &[(Section, GroupDef, &str)] = &[
     (Section::Appearance, SONG_THEME, "options.autoGenerateSongTheme"),
     (Section::Appearance, SONG_THEME, "options.themeGenerationSource"),
     (Section::Appearance, SONG_THEME, "options.preferCustomTheme"),
+    (Section::Appearance, WALL, "options.libraryWallLook"),
+    (Section::Appearance, WALL, "options.libraryWallWindows"),
+    (Section::Appearance, WALL, "options.bravaisSeamClear"),
+    (Section::Appearance, WALL, "options.bravaisBackdropLyrics"),
+    (Section::Appearance, WALL, "options.bravaisBackdropBlur"),
+    (Section::Appearance, WALL, "options.latticePosterTint"),
+    (Section::Appearance, WALL, "options.latticePosterTintCustomColor"),
+    (Section::Appearance, WALL, "options.latticePosterTintColor"),
+    (Section::Appearance, WALL, "options.latticePosterTintIntensity"),
+    (Section::Appearance, WALL, "options.latticeWallForm"),
+    (Section::Appearance, WALL, "options.latticeRadioHideUpcoming"),
+    (Section::Appearance, WALL, "wallTools.preset"),
     (Section::Player, BAR, "options.playerBottomBarOffset"),
     (Section::Player, BAR, "options.playerBottomBarReposition"),
     (Section::General, LANGUAGE, "options.appLanguage"),
@@ -789,6 +802,7 @@ impl Settings {
                         tokens,
                         values.theme_settings.custom_dual_theme.is_some(),
                     ),
+                    wall_group(values.appearance.wall, i18n, tokens),
                 ]
             }
             Section::Player => {
@@ -1073,6 +1087,98 @@ impl Gutter {
 }
 
 /// The groups of a category, in page order.
+fn wall_group<'a>(wall: folia_store::WallAppearance, i18n: &'a I18n, tokens: Tokens) -> Group<'a, crate::Message> {
+    use crate::Message::Home;
+    use crate::home::Message as Change;
+    use folia_store::WallLook;
+    let row = |key, control| Row { label: i18n.t(key).to_owned(), control, hint: None, below: None, sub: false };
+    let toggle = |key, on, message| row(key, kit::toggle(tokens, if on { 1.0 } else { 0.0 }, Home(message)));
+    let look = kit::segmented(
+        tokens,
+        [WallLook::Solid, WallLook::Partial, WallLook::Clear]
+            .map(|mode| (mode, i18n.t(crate::home::look_label(mode)).to_owned()))
+            .into(),
+        wall.look,
+        None,
+        |mode| Home(Change::WallLook(mode)),
+    );
+    let mut rows = vec![row("options.libraryWallLook", look)];
+    if wall.look == WallLook::Partial {
+        let count = wall.reserved();
+        rows.push(row(
+            "options.libraryWallWindows",
+            kit::segmented(tokens, (1..=6).map(|n| (n, n.to_string())).collect(), count, None, |n| {
+                Home(Change::Windows(n))
+            }),
+        ));
+    }
+    rows.push(toggle("options.bravaisSeamClear", wall.seam_clear, Change::SeamClear(!wall.seam_clear)));
+    rows.push(toggle(
+        "options.bravaisBackdropLyrics",
+        wall.backdrop_lyrics,
+        Change::BackdropLyrics(!wall.backdrop_lyrics),
+    ));
+    rows.push(toggle("options.bravaisBackdropBlur", wall.backdrop_blur, Change::BackdropBlur(!wall.backdrop_blur)));
+    rows.push(toggle("options.latticePosterTint", wall.tint, Change::Tint(!wall.tint)));
+    if wall.tint {
+        rows.push(toggle(
+            "options.latticePosterTintCustomColor",
+            wall.custom_tint,
+            Change::CustomTint(!wall.custom_tint),
+        ));
+        if wall.custom_tint {
+            let color = wall.tint_color;
+            let mut picker = row(
+                "options.latticePosterTintColor",
+                kit::value(tokens, format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)),
+            );
+            picker.below = Some(crate::color_picker::view(
+                color,
+                |rgb| Home(Change::TintColor(rgb)),
+                Home(Change::CommitAppearance),
+            ));
+            rows.push(picker);
+        }
+        let amount = iced::widget::slider(0.0..=1.0, wall.intensity, |n| Home(Change::Intensity(n)))
+            .step(0.01_f32)
+            .width(120)
+            .on_release(Home(Change::CommitAppearance))
+            .style(move |_, _| kit::slider_style(tokens));
+        rows.push(row(
+            "options.latticePosterTintIntensity",
+            iced::widget::row![amount, kit::value(tokens, format!("{:.0}%", wall.intensity * 100.0))].spacing(8).into(),
+        ));
+    }
+    let form = kit::segmented(
+        tokens,
+        [false, true]
+            .map(|radio| {
+                (
+                    radio,
+                    i18n.t(if radio { "options.latticeWallForm_radio" } else { "options.latticeWallForm_poster" })
+                        .to_owned(),
+                )
+            })
+            .into(),
+        wall.radio,
+        None,
+        |radio| Home(Change::Radio(radio)),
+    );
+    rows.push(row("options.latticeWallForm", form));
+    rows.push(toggle(
+        "options.latticeRadioHideUpcoming",
+        wall.hide_upcoming,
+        Change::HideUpcoming(!wall.hide_upcoming),
+    ));
+    let preset = iced::widget::row![
+        button(text(i18n.t("wallTools.copyPreset"))).on_press(Home(Change::ExportAppearance)).style(button::text),
+        button(text(i18n.t("wallTools.pastePreset"))).on_press(Home(Change::ImportAppearance)).style(button::text)
+    ]
+    .spacing(6);
+    rows.push(row("wallTools.preset", preset.into()));
+    Group { title: i18n.t(WALL.title).to_owned(), bare: false, rows, foot: None }
+}
+
 fn groups_of(section: Section) -> Vec<GroupDef> {
     let mut groups: Vec<GroupDef> = Vec::new();
     for &(owner, group, _) in OPTIONS {

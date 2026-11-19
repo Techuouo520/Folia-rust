@@ -245,7 +245,16 @@ impl Focus {
 
     /// The keyboard focus pop (each side out by a gap) of a slot: 1 for the focused one once it has popped.
     pub fn pop(&self, slot: SlotId, now: Instant) -> f32 {
-        let t = self.pop_at.map_or(1.0, |at| ease_at(at, now, POP_MS, EASE_OUT));
+        self.focus_progress(slot, now, EASE_OUT)
+    }
+
+    /// Collection shadows retract with the original 300ms CSS ease, independently of the card transform.
+    pub fn page_retraction(&self, slot: SlotId, now: Instant) -> f32 {
+        self.focus_progress(slot, now, Ease::new(0.25, 0.1, 0.25, 1.0))
+    }
+
+    fn focus_progress(&self, slot: SlotId, now: Instant, ease: Ease) -> f32 {
+        let t = self.pop_at.map_or(1.0, |at| ease_at(at, now, POP_MS, ease));
         if self.keyboard == Some(slot) {
             t
         } else if self.left == Some(slot) {

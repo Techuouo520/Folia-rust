@@ -273,6 +273,7 @@ impl CatalogPage {
         let config = Config::new(size);
         let state = &self.artist_page;
         let wash = folia_render::Wash {
+            seam: [0.0; 3],
             base: [view.background.r, view.background.g, view.background.b],
             glows: [
                 folia_render::Glow {

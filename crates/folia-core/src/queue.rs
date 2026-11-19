@@ -17,24 +17,38 @@ pub struct Origin {
     pub name: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Queue<T> {
     items: Vec<T>,
+    revision: u64,
     current: Option<usize>,
+    detached: Option<T>,
     origin: Option<Origin>,
     pub repeat: Repeat,
 }
 
+impl<T: PartialEq> PartialEq for Queue<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items
+            && self.current == other.current
+            && self.detached == other.detached
+            && self.origin == other.origin
+            && self.repeat == other.repeat
+    }
+}
+
 impl<T> Default for Queue<T> {
     fn default() -> Self {
-        Self { items: Vec::new(), current: None, origin: None, repeat: Repeat::Off }
+        Self { items: Vec::new(), revision: 0, current: None, detached: None, origin: None, repeat: Repeat::Off }
     }
 }
 
 impl<T> Queue<T> {
     /// Replaces the queue and makes `start` current. A replacement is not the previous source's queue.
     pub fn replace(&mut self, items: Vec<T>, start: usize) {
+        self.detached = None;
         self.current = (start < items.len()).then_some(start);
+        self.revision = self.revision.wrapping_add(1);
         self.items = items;
         self.origin = None;
     }
@@ -49,6 +63,11 @@ impl<T> Queue<T> {
         self.origin.as_ref()
     }
 
+    /// Changes when the queue contents or their order can have changed.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn items(&self) -> &[T] {
         &self.items
     }
@@ -58,11 +77,12 @@ impl<T> Queue<T> {
     }
 
     pub fn current(&self) -> Option<&T> {
-        self.items.get(self.current?)
+        self.current.and_then(|index| self.items.get(index)).or(self.detached.as_ref())
     }
 
     pub fn current_mut(&mut self) -> Option<&mut T> {
-        self.items.get_mut(self.current?)
+        self.revision = self.revision.wrapping_add(1);
+        self.current.and_then(|index| self.items.get_mut(index)).or(self.detached.as_mut())
     }
 
     /// `applyQueueAddBehavior` with `append`: the incoming items, each once and not the current one, go to the end;
@@ -91,6 +111,7 @@ impl<T> Queue<T> {
         }
         let added = targets.len();
         kept.extend(targets);
+        self.revision = self.revision.wrapping_add(1);
         self.items = kept;
         self.current = next_current;
         self.origin = None;
@@ -102,6 +123,7 @@ impl<T> Queue<T> {
         if index >= self.items.len() {
             return None;
         }
+        self.detached = None;
         self.current = Some(index);
         self.items.get(index)
     }
@@ -111,6 +133,7 @@ impl<T> Queue<T> {
         if index >= self.items.len() {
             return None;
         }
+        self.revision = self.revision.wrapping_add(1);
         let item = self.items.remove(index);
         self.current = match self.current {
             Some(current) if current > index => Some(current - 1),
@@ -128,10 +151,25 @@ impl<T> Queue<T> {
         Some(item)
     }
 
+    /// Clears the editable list while the player continues using the current song.
+    pub fn clear_list(&mut self) -> bool {
+        if self.items.is_empty() {
+            return false;
+        }
+        if let Some(index) = self.current.take() {
+            self.detached = Some(self.items.swap_remove(index));
+        }
+        self.items.clear();
+        self.origin = None;
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
+
     /// `clearQueue` while the playing item keeps playing: every other item leaves and the current one moves to
     /// the head. Returns whether anything left. An empty queue or a lone current item is unchanged.
     pub fn clear_except_current(&mut self) -> bool {
         let Some(current) = self.current.filter(|&index| index < self.items.len()) else {
+            self.revision = self.revision.wrapping_add(1);
             let had = !self.items.is_empty();
             self.items.clear();
             self.origin = None;
@@ -140,6 +178,7 @@ impl<T> Queue<T> {
         if self.items.len() <= 1 {
             return false;
         }
+        self.revision = self.revision.wrapping_add(1);
         let current = self.items.remove(current);
         self.items.clear();
         self.items.push(current);
@@ -150,10 +189,14 @@ impl<T> Queue<T> {
 
     /// Places `index` immediately after the current item. The current item stays current.
     pub fn move_after_current(&mut self, index: usize) -> bool {
+        if self.detached.is_some() {
+            return self.move_to(index, 0);
+        }
         let Some(current) = self.current else { return false };
         if index >= self.items.len() || index == current {
             return false;
         }
+        self.revision = self.revision.wrapping_add(1);
         let item = self.items.remove(index);
         let current = if index < current { current - 1 } else { current };
         let insert = (current + 1).min(self.items.len());
@@ -167,6 +210,7 @@ impl<T> Queue<T> {
         if from >= self.items.len() || to >= self.items.len() || from == to {
             return false;
         }
+        self.revision = self.revision.wrapping_add(1);
         let item = self.items.remove(from);
         self.items.insert(to, item);
         self.current = self.current.map(|current| match current {
@@ -183,6 +227,7 @@ impl<T> Queue<T> {
         if index >= self.items.len() {
             return false;
         }
+        self.revision = self.revision.wrapping_add(1);
         let item = self.items.remove(index);
         self.items.push(item);
         if let Some(current) = self.current {
@@ -196,14 +241,13 @@ impl<T> Queue<T> {
     }
 
     /// Shuffles the queue as the original's `shuffleQueue`: the current item goes to the head and the rest are
-    /// permuted with a seeded generator. Returns false where nothing plays or only one item is queued.
+    /// permuted with a seeded generator. An unselected queue shuffles in full.
     pub fn shuffle(&mut self, seed: u64) -> bool {
-        let Some(current) = self.current.filter(|&index| index < self.items.len()) else { return false };
         if self.items.len() < 2 {
             return false;
         }
         let mut rest = std::mem::take(&mut self.items);
-        let current_item = rest.remove(current);
+        let current_item = self.current.map(|index| rest.remove(index));
         let mut state = seed | 1;
         let mut next = move || {
             state ^= state << 13;
@@ -215,30 +259,34 @@ impl<T> Queue<T> {
             let other = (next() % (index as u64 + 1)) as usize;
             rest.swap(index, other);
         }
-        rest.insert(0, current_item);
+        if let Some(current) = current_item {
+            rest.insert(0, current);
+            self.current = Some(0);
+        }
+        self.revision = self.revision.wrapping_add(1);
         self.items = rest;
-        self.current = Some(0);
         true
     }
 
     /// Moves to the next item. `finished` is true when the current item played to its end,
     /// in which case repeat-one replays it.
     pub fn advance(&mut self, finished: bool) -> Option<&T> {
-        let current = self.current?;
-        let next = if finished && self.repeat == Repeat::One { Some(current) } else { self.next_index() };
-        self.current = next.or(self.current);
-        next.and_then(|index| self.items.get(index))
+        if finished && self.repeat == Repeat::One {
+            return self.current();
+        }
+        self.select(self.next_index()?)
     }
 
     /// Moves to the previous item, wrapping only when repeating the whole queue.
     pub fn back(&mut self) -> Option<&T> {
-        let previous = self.previous_index();
-        self.current = previous.or(self.current);
-        previous.and_then(|index| self.items.get(index))
+        self.select(self.previous_index()?)
     }
 
     /// The item a skip forward would play, wrapping only when repeating the whole queue.
     pub fn next_index(&self) -> Option<usize> {
+        if self.detached.is_some() {
+            return (!self.items.is_empty()).then_some(0);
+        }
         let current = self.current?;
         match self.repeat {
             Repeat::All => Some((current + 1) % self.items.len()),

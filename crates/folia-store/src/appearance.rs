@@ -260,10 +260,90 @@ impl Default for SubtitleSettings {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WallLook {
+    #[default]
+    Solid,
+    Partial,
+    Clear,
+}
+
+impl WallLook {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Solid => Self::Partial,
+            Self::Partial => Self::Clear,
+            Self::Clear => Self::Solid,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WallAppearance {
+    pub look: WallLook,
+    pub windows_per_block: u8,
+    pub lights_on: bool,
+    pub tint: bool,
+    pub custom_tint: bool,
+    pub tint_color: folia_core::Rgb,
+    pub intensity: f32,
+    pub radio: bool,
+    pub hide_upcoming: bool,
+    pub seam_clear: bool,
+    pub backdrop_lyrics: bool,
+    pub backdrop_blur: bool,
+}
+
+impl Default for WallAppearance {
+    fn default() -> Self {
+        Self {
+            look: WallLook::Solid,
+            windows_per_block: 3,
+            lights_on: true,
+            tint: true,
+            custom_tint: false,
+            tint_color: folia_core::Rgb { r: 22, g: 20, b: 25 },
+            intensity: 0.5,
+            radio: false,
+            hide_upcoming: false,
+            seam_clear: true,
+            backdrop_lyrics: false,
+            backdrop_blur: false,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WallPreset {
+    wall: WallAppearance,
+}
+
+impl WallAppearance {
+    pub fn export(self) -> Result<String, toml::ser::Error> {
+        toml::to_string_pretty(&WallPreset { wall: self })
+    }
+
+    pub fn import(text: &str) -> Result<Self, toml::de::Error> {
+        let mut wall = toml::from_str::<WallPreset>(text)?.wall;
+        wall.windows_per_block = wall.windows_per_block.clamp(1, 6);
+        wall.intensity =
+            if wall.intensity.is_finite() { wall.intensity.clamp(0.0, 1.0) } else { Self::default().intensity };
+        Ok(wall)
+    }
+
+    pub fn reserved(self) -> u8 {
+        if self.look == WallLook::Partial { self.windows_per_block.clamp(1, 6) } else { 0 }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceSettings {
     pub theme: ThemeMode,
+    pub wall: WallAppearance,
     pub follow_system_theme: bool,
     pub use_cover_color_bg: bool,
     pub cover_background_opacity: f32,
@@ -291,6 +371,7 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: ThemeMode::Dark,
+            wall: WallAppearance::default(),
             follow_system_theme: false,
             use_cover_color_bg: false,
             cover_background_opacity: 0.75,
@@ -312,11 +393,15 @@ impl AppearanceSettings {
     /// Preserves version 1 settings while adding native system-theme and common-cover preferences.
     pub fn load(store: &Store) -> Result<Self, StoreError> {
         match store.load::<Self>() {
-            Err(StoreError::SchemaVersion { found: 1, .. }) => {
-                let previous: PreviousAppearance = store.load()?;
-                store.save(&previous.settings)?;
-                tracing::info!("appearance settings migrated to schema 2");
-                Ok(previous.settings)
+            Err(StoreError::SchemaVersion { found: version @ (1 | 2), .. }) => {
+                let previous = if version == 1 {
+                    store.load::<PreviousAppearance<1>>()?.settings
+                } else {
+                    store.load::<PreviousAppearance<2>>()?.settings
+                };
+                store.save(&previous)?;
+                tracing::info!("appearance settings migrated to schema 3");
+                Ok(previous)
             }
             result => result,
         }
@@ -335,16 +420,16 @@ impl AppearanceSettings {
 
 impl Domain for AppearanceSettings {
     const FILE: &'static str = "appearance.toml";
-    const SCHEMA_VERSION: u32 = 2;
+    const SCHEMA_VERSION: u32 = 3;
 }
 
 #[derive(Default, Serialize, Deserialize)]
-struct PreviousAppearance {
+struct PreviousAppearance<const VERSION: u32> {
     #[serde(flatten)]
     settings: AppearanceSettings,
 }
 
-impl Domain for PreviousAppearance {
+impl<const VERSION: u32> Domain for PreviousAppearance<VERSION> {
     const FILE: &'static str = AppearanceSettings::FILE;
-    const SCHEMA_VERSION: u32 = 1;
+    const SCHEMA_VERSION: u32 = VERSION;
 }

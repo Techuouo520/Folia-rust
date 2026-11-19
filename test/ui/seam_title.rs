@@ -18,6 +18,11 @@ fn collapsed_seam_has_a_clickable_restore_tab() {
     let theme = folia_core::Theme::MIDNIGHT;
     for (horizontal, before, width) in [(false, true, 1200), (false, false, 1200), (true, true, 500)] {
         let host = folia_ui::HomeHost {
+            wall: Default::default(),
+            lattice: false,
+            can_save: false,
+            can_generate: false,
+            generating: false,
             i18n: &i18n,
             text: Color::WHITE,
             background: Color::BLACK,
@@ -26,6 +31,7 @@ fn collapsed_seam_has_a_clickable_restore_tab() {
             has_track: false,
             busy: false,
             explore_refresh: None,
+            randomize_on_entry: false,
             volume: 1.0,
             muted: false,
             tokens: folia_ui::Tokens::new(&theme, false),

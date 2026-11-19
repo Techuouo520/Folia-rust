@@ -270,6 +270,15 @@ impl Library {
         playlists::create(&self.conn, name)
     }
 
+    /// Creates a named playlist and commits its ordered local tracks together.
+    pub fn save_queue(&mut self, name: &str, tracks: &[i64]) -> Result<(), LibraryError> {
+        let tx = self.conn.transaction()?;
+        let playlist = playlists::create(&tx, name)?;
+        playlists::add(&tx, playlist.id, tracks)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// The liked-songs list, created on first use (`getFavoriteLocalPlaylist`).
     pub fn favorite_playlist(&self) -> Result<Playlist, LibraryError> {
         playlists::favorite(&self.conn)

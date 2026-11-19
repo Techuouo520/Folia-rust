@@ -71,7 +71,10 @@ fn main() -> anyhow::Result<()> {
     let store = Store::at(&dirs.config);
     let developer: DeveloperSettings = store.load_or_default();
     let log = init_logging(&dirs, &developer);
-    let general: GeneralSettings = store.load_or_default();
+    let general = GeneralSettings::load(&store).unwrap_or_else(|err| {
+        tracing::warn!(error = &err as &dyn std::error::Error, "general settings unreadable, using defaults");
+        GeneralSettings::default()
+    });
     let system_locale = sys_locale::get_locale();
     let i18n = I18n::new(general.language.resolve(system_locale.as_deref()))?;
     tracing::info!(config = %store.dir().display(), language = i18n.language().code(), "starting");
@@ -100,7 +103,10 @@ fn main() -> anyhow::Result<()> {
             .join("models"),
         theme: store.load_or_default::<folia_store::ThemeSettings>(),
         audio: store.load_or_default::<folia_store::AudioSettings>(),
-        playback: store.load_or_default::<PlaybackSettings>(),
+        playback: PlaybackSettings::load(&store).unwrap_or_else(|err| {
+            tracing::warn!(error = &err as &dyn std::error::Error, "playback settings unreadable, using defaults");
+            Default::default()
+        }),
         player: store.load_or_default::<PlayerSettings>(),
         visualizer: store.load_or_default::<folia_store::VisualizerSettings>(),
         developer,

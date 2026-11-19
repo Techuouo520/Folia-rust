@@ -225,6 +225,7 @@ pub struct LibraryPage {
     pub busy: bool,
     error: Option<String>,
     wall: Wall,
+    randomize_on_entry: bool,
     hint_at: Option<Instant>,
     pub tab: HomeTab,
     pub online: Online,
@@ -308,15 +309,22 @@ pub enum Message {
 
 impl LibraryPage {
     /// Shows what the index already holds; scanning only happens on import or reload.
-    pub fn new(db_path: PathBuf, tab: HomeTab, omni: Option<Omni>, provider: Option<&str>) -> (Self, Task<Message>) {
+    pub fn new(
+        db_path: PathBuf,
+        tab: HomeTab,
+        omni: Option<Omni>,
+        provider: Option<&str>,
+        randomize_on_entry: bool,
+    ) -> (Self, Task<Message>) {
         let task = load(db_path.clone(), None, false);
         let (online, restore) = Online::new(omni, provider);
-        let page = Self {
+        let mut page = Self {
             db_path,
             tracks: Vec::new(),
             busy: true,
             error: None,
             wall: Wall::new(),
+            randomize_on_entry,
             hint_at: None,
             tab,
             online,
@@ -334,7 +342,30 @@ impl LibraryPage {
             tiles: Vec::new(),
             actions: Vec::new(),
         };
+        page.renew_wall_order();
         (page, Task::batch([task, restore.map(Message::Online)]))
+    }
+
+    pub fn order_seed(&self) -> Option<u64> {
+        self.wall.order_seed()
+    }
+
+    fn renew_wall_order(&mut self) {
+        self.wall.begin_visit(self.randomize_on_entry);
+    }
+
+    pub fn enter_wall(&mut self, i18n: &I18n) -> Task<Message> {
+        if !self.randomize_on_entry {
+            return Task::none();
+        }
+        self.renew_wall_order();
+        self.rebuild(i18n)
+    }
+
+    pub fn set_randomize_on_entry(&mut self, enabled: bool, i18n: &I18n) -> Task<Message> {
+        self.randomize_on_entry = enabled;
+        self.renew_wall_order();
+        self.rebuild(i18n)
     }
 
     /// The seam the wall opens for the home chrome, and where it is on screen.
@@ -568,11 +599,7 @@ impl LibraryPage {
             }
             Key::First | Key::Last => {
                 // `first` is rank 0 of a finite wall or the start tile of an endless one; only a finite wall has a last.
-                let wanted = match key {
-                    Key::First => Some(0),
-                    _ => self.wall.finite_count().map(|count| count.saturating_sub(1)),
-                };
-                if let Some(slot) = wanted.and_then(|index| self.wall.slot_of(index)) {
+                if let Some(slot) = self.wall.boundary_slot(matches!(key, Key::Last)) {
                     self.wall.focus_slot(Some(slot), true, bottom);
                 }
                 (Task::none(), None)
@@ -627,7 +654,7 @@ impl LibraryPage {
                     return (self.center_on_track(track), None);
                 }
                 self.locating = Some(track);
-                (self.open(collection, i18n), None)
+                (self.open(collection, i18n, true), None)
             }
             Some(Source::Tab(tab)) => {
                 let (shown, effect) = if tab == self.tab && self.layer.is_none() {
@@ -698,6 +725,7 @@ impl LibraryPage {
     pub fn signed_in(&mut self, provider: &'static str, i18n: &I18n) -> Task<Message> {
         let task = self.online.signed_in_now(provider).map(Message::Online);
         self.layer = None;
+        self.renew_wall_order();
         Task::batch([task, self.rebuild(i18n)])
     }
 
@@ -705,6 +733,7 @@ impl LibraryPage {
     pub fn switch_provider(&mut self, provider: &'static str, i18n: &I18n) -> Task<Message> {
         let task = self.online.switch_to(provider).map(Message::Online);
         self.layer = None;
+        self.renew_wall_order();
         Task::batch([task, self.rebuild(i18n)])
     }
 
@@ -715,6 +744,7 @@ impl LibraryPage {
             return task;
         }
         self.layer = None;
+        self.renew_wall_order();
         Task::batch([task, self.rebuild(i18n)])
     }
 
@@ -836,6 +866,7 @@ impl LibraryPage {
                 }
                 self.tab = tab;
                 self.layer = None;
+                self.renew_wall_order();
                 let ensure = self.online.ensure(tab).map(Message::Online);
                 (Task::batch([ensure, self.rebuild(i18n)]), Some(Effect::SaveTab(tab)))
             }
@@ -919,6 +950,9 @@ impl LibraryPage {
                     ))
                 });
                 let from = self.poster_quad();
+                if self.layer.is_some() {
+                    self.renew_wall_order();
+                }
                 self.layer = None;
                 self.wall.album = None;
                 self.poster_cover = None;
@@ -1020,8 +1054,7 @@ impl LibraryPage {
                 let Some(collection) = self.layer.as_ref().map(|layer| layer.collection.clone()) else {
                     return (Task::none(), None);
                 };
-                self.layer = None;
-                (self.open(collection, i18n), None)
+                (self.open(collection, i18n, false), None)
             }
         }
     }
@@ -1073,13 +1106,16 @@ impl LibraryPage {
             }
             Action::Open(collection) => {
                 self.wall.flip_from_press();
-                (self.open(collection, i18n), None)
+                (self.open(collection, i18n, true), None)
             }
             Action::None => (Task::none(), None),
         }
     }
 
-    fn open(&mut self, collection: Collection, i18n: &I18n) -> Task<Message> {
+    fn open(&mut self, collection: Collection, i18n: &I18n, entering: bool) -> Task<Message> {
+        if entering {
+            self.renew_wall_order();
+        }
         self.collection_request += 1;
         let request = self.collection_request;
         let daily = (collection.kind == CollectionKind::DailySongs)
@@ -1152,6 +1188,32 @@ impl LibraryPage {
     }
 
     /// Builds the tiles of the current layer or tab and lays them on the wall.
+    pub(crate) fn wall_pointer(&mut self, at: Option<iced::Point>, now: Instant) {
+        self.wall.linked = self.layer.as_ref().filter(|layer| layer.list).and_then(|layer| layer.list_hover);
+        self.wall.pointer(at, &self.tiles, now);
+    }
+
+    pub(crate) fn suspend_wall(&mut self, suspended: bool) -> Task<Message> {
+        self.wall.set_suspended(suspended, &self.tiles, self.online.omni()).map(Message::Wall)
+    }
+
+    pub(crate) fn wall_appearance(&mut self, next: folia_store::WallAppearance, i18n: &I18n) -> Task<Message> {
+        if self.wall.appearance == next {
+            return Task::none();
+        }
+        let layout = self.wall.appearance.look != next.look || self.wall.appearance.reserved() != next.reserved();
+        if layout {
+            self.wall.capture(&self.tiles);
+        }
+        self.wall.appearance(next);
+        if layout {
+            let (_, _, shape) = self.compose(i18n);
+            self.wall.layout_tiles(&self.tiles, shape, self.online.omni(), true).map(Message::Wall)
+        } else {
+            Task::none()
+        }
+    }
+
     fn rebuild(&mut self, i18n: &I18n) -> Task<Message> {
         let (tiles, actions, shape) = self.compose(i18n);
         self.wall.capture(&self.tiles);
@@ -1458,6 +1520,10 @@ impl LibraryPage {
         })
     }
 
+    pub(crate) fn wall_images(&self, playing: Option<i64>, images: &mut Vec<iced::widget::image::Handle>) {
+        self.wall.filter_images(&self.tiles, playing, images, Instant::now());
+    }
+
     /// The empty-wall copy: online tabs without an account (`onlineWallHint`), or an empty local library.
     fn hint_text(&self, i18n: &I18n) -> Option<(String, String)> {
         if self.layer.is_some() {
@@ -1517,13 +1583,24 @@ impl LibraryPage {
                     entry: self.poster_entry(Instant::now()),
                 },
             );
-        let wall: Element<'a, wall::Message> = canvas(self.wall.view(&self.tiles, theme, daylight, playing, band))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into();
-        let mut layers = stack![ground(theme)];
-        if look.glass {
-            let scene = self.wall.glass_scene(&self.tiles, theme, daylight, Instant::now());
+        let wall = self.wall.surface(&self.tiles, theme, daylight, playing, band);
+        let opaque = self.wall.appearance.look == folia_store::WallLook::Solid;
+        let mut layers = stack![];
+        if opaque {
+            let seam = self.wall.seam();
+            let cut = if self.wall.appearance.seam_clear && !self.wall.tilted(Instant::now()) {
+                [
+                    if seam.horizontal { 1.0 } else { 0.0 },
+                    seam.center - seam.width * 0.5,
+                    seam.center + seam.width * 0.5,
+                ]
+            } else {
+                [0.0; 3]
+            };
+            layers = layers.push(ground(theme, cut));
+        }
+        if look.glass && opaque {
+            let scene = self.wall.glass_scene(&self.tiles, theme, daylight, playing, Instant::now());
             let backdrop: Element<'a, Message> =
                 shader(folia_render::Backdrop::new(scene)).width(Length::Fill).height(Length::Fill).into();
             layers = layers.push(backdrop);
@@ -1566,7 +1643,9 @@ impl LibraryPage {
                 look.modal,
             ));
         }
-        layers = layers.push(veil(daylight));
+        if opaque {
+            layers = layers.push(veil(daylight));
+        }
         if let (true, Some(error)) = (local_error, &self.error) {
             layers = layers.push(container(text(error).color(muted)).center(Length::Fill));
         }
@@ -1695,7 +1774,7 @@ fn card_type(kind: CollectionKind) -> &'static str {
     }
 }
 
-fn track_tile(track: &Track, badge: Option<String>, i18n: &I18n) -> Tile {
+pub(crate) fn track_tile(track: &Track, badge: Option<String>, i18n: &I18n) -> Tile {
     let cover = match (&track.cover_url, track.path.as_os_str().is_empty()) {
         (Some(url), _) => CoverSource::Remote(url.clone()),
         (None, false) => CoverSource::Local(track.path.clone()),
@@ -1721,13 +1800,14 @@ fn track_tile(track: &Track, badge: Option<String>, i18n: &I18n) -> Tile {
 }
 
 /// `wall.css`: the theme background lit by an accent glow top-left and a secondary glow bottom-right.
-fn ground<'a, M: 'a>(theme: &Theme) -> Element<'a, M> {
+pub(crate) fn ground<'a, M: 'a>(theme: &Theme, seam: [f32; 3]) -> Element<'a, M> {
     let srgb = |rgb: folia_core::Rgb| [rgb.r, rgb.g, rgb.b].map(|channel| f32::from(channel) / 255.0);
     let glow = |rgb: folia_core::Rgb, alpha: f32, center: [f32; 2], reach: f32| {
         let [r, g, b] = srgb(rgb);
         Glow { center, reach, rgba: [r, g, b, alpha] }
     };
     let wash = Wash {
+        seam,
         base: srgb(theme.background),
         glows: [glow(theme.accent, 0.16, [0.14, 0.12], 0.29), glow(theme.secondary, 0.20, [0.86, 0.82], 0.32)],
     };

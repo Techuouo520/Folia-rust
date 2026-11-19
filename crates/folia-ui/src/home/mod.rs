@@ -1,9 +1,11 @@
 // Home shell: the seam, the corner back button and the tools panel.
 
+mod commands;
 pub mod flip;
 mod seam;
 pub mod title;
 mod tools;
+pub(crate) use tools::look_label;
 
 use std::time::{Duration, Instant};
 
@@ -42,7 +44,7 @@ pub const HELP_PAD: f32 = 14.0;
 pub const LIST_SCROLL: &str = "bravais-list-panel";
 pub const HELP_SCROLL: &str = "wall-tools-help";
 /// The help rows this build actually has keys for, in the original's order.
-pub const HELP_ROWS: usize = 6;
+pub const HELP_ROWS: usize = 11;
 
 /// One line of the tools panel's help list (`BravaisHelpRow`): the label key and the key cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,8 +53,7 @@ pub struct HelpRow {
     pub kbd: &'static str,
 }
 
-/// `BRAVAIS_HELP_ROWS` less the rows whose keys this build has no action for (typing to filter, Tab between the
-/// wall and the seam, F6, `: + C`, `: + R`, Ctrl/Cmd + B and K).
+/// Keyboard actions available while browsing the home wall.
 pub const HELP_LIST: [HelpRow; HELP_ROWS] = [
     HelpRow { label: "libraryBravais.helpSearch", kbd: "/" },
     HelpRow { label: "libraryBravais.helpMove", kbd: "↑ ↓ ← →" },
@@ -60,11 +61,25 @@ pub const HELP_LIST: [HelpRow; HELP_ROWS] = [
     HelpRow { label: "libraryBravais.helpPlay", kbd: "Enter" },
     HelpRow { label: "libraryBravais.helpEnqueue", kbd: "Shift + Enter" },
     HelpRow { label: "libraryBravais.helpBack", kbd: "ESC" },
+    HelpRow { label: "libraryBravais.helpTabs", kbd: "F6" },
+    HelpRow { label: "libraryBravais.helpLocate", kbd: ": + C" },
+    HelpRow { label: "libraryBravais.helpShuffle", kbd: ": + R" },
+    HelpRow { label: "libraryBravais.helpLattice", kbd: PRIMARY_B },
+    HelpRow { label: "libraryBravais.helpCommands", kbd: PRIMARY_K },
 ];
+
+pub const PRIMARY_K: &str = if cfg!(target_os = "macos") { "⌘ + K" } else { "Ctrl + K" };
+
+pub const PRIMARY_B: &str = if cfg!(target_os = "macos") { "⌘ + B" } else { "Ctrl + B" };
 
 /// What a key does on the home wall.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WallKey {
+    Commands,
+    LatticeCommands,
+    CycleTab(bool),
+    Destination,
+    Chord,
     /// `/`: the home seam's online search.
     Search,
     /// Tab: the next or previous focusable control.
@@ -78,6 +93,25 @@ pub enum WallKey {
 pub fn wall_key_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers, repeat: bool) -> Option<WallKey> {
     use iced::keyboard::{Key, key::Named};
     let chord = modifiers.control() || modifiers.logo() || modifiers.alt();
+    if let Key::Character(c) = key
+        && !repeat
+    {
+        if c.eq_ignore_ascii_case("k") && modifiers == iced::keyboard::Modifiers::COMMAND {
+            return Some(WallKey::Commands);
+        }
+        if !chord && c.eq_ignore_ascii_case("s") {
+            return Some(WallKey::LatticeCommands);
+        }
+        if c.eq_ignore_ascii_case("b") && modifiers == iced::keyboard::Modifiers::COMMAND {
+            return Some(WallKey::Destination);
+        }
+        if !chord && c.as_str() == ":" {
+            return Some(WallKey::Chord);
+        }
+    }
+    if *key == Key::Named(Named::F6) && !repeat && !chord {
+        return Some(WallKey::CycleTab(modifiers.shift()));
+    }
     if *key == Key::Named(Named::Tab) && !chord {
         return Some(WallKey::Focus { backwards: modifiers.shift() });
     }
@@ -137,8 +171,44 @@ pub enum Message {
     Tab,
     More,
     Tools,
+    RandomizeOnEntry,
     /// The panel's queue cell: shows or hides the queue island above it.
     ToolsQueueToggle,
+    Shuffle,
+    GenerateTheme,
+    Destination,
+    WallLook(folia_store::WallLook),
+    Radio(bool),
+    HideUpcoming(bool),
+    LocatePlaying,
+    Windows(u8),
+    Lights(bool),
+    Tint(bool),
+    CustomTint(bool),
+    TintColor(folia_core::Rgb),
+    Intensity(f32),
+    BackdropLyrics(bool),
+    SeamClear(bool),
+    BackdropBlur(bool),
+    Chord,
+    Commands,
+    LatticeCommands,
+    CommandQuery(String),
+    RunCommand(Box<Message>),
+    DockPress(iced::Point),
+    DockMove(iced::Point),
+    DockRelease,
+    DockCancel,
+    CycleTab(bool),
+    QueueSearch(Option<String>),
+    SaveQueue,
+    QueueName(String),
+    CommitQueue,
+    ExportAppearance,
+    ImportAppearance,
+    PastedAppearance(Option<String>),
+    CommitAppearance,
+
     /// A message from the queue island's list (drag, scroll, row actions).
     ToolsQueue(queue_island::Message),
     /// The queue header's clear button: the first press arms, the second clears.
@@ -228,6 +298,12 @@ pub struct HomeChrome {
     queue: QueueList,
     /// The clear button is armed; `None` after the 3s window or a successful clear.
     queue_clear: Option<Instant>,
+    queue_name: Option<String>,
+    queue_search: Option<String>,
+    filter_revision: Option<u64>,
+    command_query: Option<String>,
+    execute: bool,
+    dock_drag: Option<(f32, f32)>,
     clear_serial: u64,
     help_scroll: Scroll,
     help_from: f32,
@@ -284,6 +360,12 @@ impl HomeChrome {
             island_fm: false,
             queue: QueueList::default(),
             queue_clear: None,
+            queue_name: None,
+            queue_search: None,
+            filter_revision: None,
+            command_query: None,
+            execute: false,
+            dock_drag: None,
             clear_serial: 0,
             help_scroll: Scroll::default(),
             help_from: 0.0,
@@ -325,6 +407,17 @@ impl HomeChrome {
     /// The playing song and Personal FM state, from the shell on every update: the list follows the song, and
     /// FM hides the island without touching the preference.
     pub fn sync_queue(&mut self, queue: &[Track], current: Option<usize>, fm: bool, now: Instant) {
+        self.sync_queue_height(queue, current, fm, now, queue_island::list_height(self.queue.row_count(queue.len())));
+    }
+
+    pub(crate) fn sync_queue_height(
+        &mut self,
+        queue: &[Track],
+        current: Option<usize>,
+        fm: bool,
+        now: Instant,
+        list_h: f32,
+    ) {
         if fm != self.island_fm {
             self.island_fm = fm;
             self.set_island(!fm && self.queue_open && self.tools_goal > 0.5, now, None);
@@ -333,7 +426,6 @@ impl HomeChrome {
             self.queue_clear = None;
         }
         if self.island_shown(now) {
-            let list_h = queue_island::list_height(queue.len());
             self.queue.follow(queue, current, list_h, now);
         }
     }
@@ -345,6 +437,10 @@ impl HomeChrome {
         list_h: f32,
     ) -> (Task<queue_island::Message>, Option<queue_island::Change>) {
         self.queue.update(message, queue, list_h)
+    }
+
+    pub fn list_height(&self, size: iced::Size, now: Instant, count: usize, lattice: bool, radio: bool) -> f32 {
+        tools::island_list_height(self, size.width, size.height, now, self.queue.row_count(count), lattice, radio)
     }
 
     pub fn queue_frame(
@@ -381,6 +477,11 @@ impl HomeChrome {
         let current = self.island_goal > 0.5;
         if open == current && trail_ms.is_none() {
             return;
+        }
+        if !open {
+            self.queue_search = None;
+            self.filter_revision = None;
+            self.queue_name = None;
         }
         self.island_from = self.island(now);
         self.island_goal = if open { 1.0 } else { 0.0 };
@@ -430,7 +531,37 @@ impl HomeChrome {
                     self.set_island(self.queue_open && !self.island_fm, now, trail);
                 }
             }
+            Message::Chord | Message::Commands | Message::LatticeCommands => {
+                self.retarget_tools(now, 0.0);
+                self.set_menu(now, false);
+                self.execute = matches!(message, Message::Chord);
+                self.command_query = Some(String::new());
+            }
+            Message::CommandQuery(query) => self.command_query = Some(query.clone()),
+            Message::RunCommand(_) => self.command_query = None,
+            Message::DockPress(at) => self.dock_drag = Some((at.x, 0.0)),
+            Message::DockMove(at) => {
+                if let Some((start, delta)) = &mut self.dock_drag {
+                    *delta = (*start - at.x).clamp(0.0, 44.0);
+                }
+            }
+            Message::DockRelease | Message::DockCancel => self.dock_drag = None,
+            Message::Escape | Message::Dismiss if self.command_query.is_some() => self.command_query = None,
+            Message::QueueSearch(query) => {
+                self.queue_search = query.clone();
+                self.filter_revision = None;
+            }
+            Message::Escape if self.queue_search.is_some() => {
+                self.queue_search = None;
+                self.filter_revision = None;
+            }
+            Message::SaveQueue => self.queue_name = Some(String::new()),
+            Message::QueueName(name) => self.queue_name = Some(name.clone()),
+            Message::CommitQueue => self.queue_name = None,
+            Message::Escape if self.queue_name.is_some() => self.queue_name = None,
+            Message::ToolsQueueToggle if self.island_fm => {}
             Message::ToolsQueueToggle => {
+                self.queue_name = None;
                 self.queue_open = !self.queue_open;
                 let open = self.queue_open && self.tools_goal > 0.5 && !self.island_fm;
                 self.set_island(open, now, None);
@@ -458,6 +589,7 @@ impl HomeChrome {
             }
             Message::Settings
             | Message::Catalog(_)
+            | Message::Destination
             | Message::Player
             | Message::Search
             | Message::Import
@@ -487,6 +619,7 @@ impl HomeChrome {
             }
             Message::Composing(composing) => self.composing = *composing,
             Message::Frame
+            | Message::RandomizeOnEntry
             | Message::HelpScrolled(_)
             | Message::HelpWheel(_)
             | Message::ListScrolled(_)
@@ -502,7 +635,27 @@ impl HomeChrome {
             | Message::PosterCover(_)
             | Message::SubmitSearch
             | Message::FilterSubmit => {}
-            Message::TitleFocus { .. } => {}
+            Message::CycleTab(_)
+            | Message::ExportAppearance
+            | Message::ImportAppearance
+            | Message::PastedAppearance(_)
+            | Message::CommitAppearance
+            | Message::LocatePlaying
+            | Message::Radio(_)
+            | Message::HideUpcoming(_)
+            | Message::Shuffle
+            | Message::GenerateTheme
+            | Message::WallLook(_)
+            | Message::Windows(_)
+            | Message::Lights(_)
+            | Message::Tint(_)
+            | Message::CustomTint(_)
+            | Message::TintColor(_)
+            | Message::Intensity(_)
+            | Message::SeamClear(_)
+            | Message::BackdropLyrics(_)
+            | Message::BackdropBlur(_)
+            | Message::TitleFocus { .. } => {}
         }
     }
 
@@ -600,6 +753,57 @@ impl HomeChrome {
         }
     }
 
+    pub fn queue_editing(&self) -> bool {
+        self.queue_name.is_some() || self.queue_search.is_some()
+    }
+    pub fn filter_queue(&mut self, queue: &[Track], revision: u64) {
+        if self.filter_revision == Some(revision) {
+            return;
+        }
+        if self.queue_search.is_some() || self.queue.filtered() {
+            self.queue.filter(queue, self.queue_search.as_deref().unwrap_or_default());
+        }
+        self.filter_revision = Some(revision);
+    }
+
+    pub(crate) fn covers_wall(
+        &self,
+        at: iced::Point,
+        size: iced::Size,
+        queue_len: usize,
+        forms: (bool, bool),
+        has_track: bool,
+        now: Instant,
+    ) -> bool {
+        let (lattice, radio) = forms;
+        let edge = if size.width < 640.0 { 16.0 } else { 24.0 };
+        let back = iced::Rectangle::new(
+            iced::Point::new(
+                if lattice { 20.0 } else { edge },
+                if !lattice && size.width < 640.0 { 14.0 } else { 20.0 },
+            ),
+            iced::Size::new(40.0, 40.0),
+        );
+        self.more_open()
+            || self.command_query().is_some()
+            || at.y < 32.0
+            || tools::over_dock(self, at, size, queue_len, lattice, radio, now)
+            || (lattice || has_track && self.back(now) > 0.5) && back.contains(at)
+    }
+
+    pub fn queue_name(&self) -> Option<&str> {
+        self.queue_name.as_deref()
+    }
+    pub fn command_query(&self) -> Option<&str> {
+        self.command_query.as_deref()
+    }
+    pub fn executing(&self) -> bool {
+        self.execute && self.command_query.is_some()
+    }
+    pub fn dock_delta(&self) -> Option<f32> {
+        self.dock_drag.map(|(_, delta)| delta)
+    }
+
     pub fn close_search(&mut self, now: Instant) {
         if !self.search_open {
             return;
@@ -628,7 +832,7 @@ impl HomeChrome {
     }
 
     pub fn menu_open(&self) -> bool {
-        self.more || self.tools_open()
+        self.command_query.is_some() || self.more || self.tools_open()
     }
 
     /// The help list's wheel: the list eases towards the stacked target.
@@ -854,6 +1058,11 @@ pub fn seam_safe_bottom(offset: f32, presence: f32) -> f32 {
 }
 
 pub struct Host<'a> {
+    pub wall: folia_store::WallAppearance,
+    pub lattice: bool,
+    pub can_save: bool,
+    pub can_generate: bool,
+    pub generating: bool,
     pub i18n: &'a I18n,
     pub text: Color,
     pub background: Color,
@@ -863,6 +1072,7 @@ pub struct Host<'a> {
     pub busy: bool,
     /// The explore tab's 「换一批」 (`refresh-explore`): `Some(enabled)` while the tab shows the page.
     pub explore_refresh: Option<bool>,
+    pub randomize_on_entry: bool,
     pub volume: f32,
     pub muted: bool,
     /// The queue island's colours (settings tokens faded by the island's own animation).
@@ -994,15 +1204,25 @@ pub struct AccountSlot<'a> {
 /// Back button, then the seam, then a dismiss layer, then the tools. The seam paints over the back.
 pub fn overlay<'a>(home: &'a HomeChrome, host: Host<'a>, now: Instant) -> Element<'a, Message> {
     let back = tools::back(&host, home.back(now), home.back_hover.value(now));
-    let mut layers = iced::widget::stack![back, seam::bar(home, &host, now)];
+    let mut layers = if host.lattice {
+        iced::widget::stack![tools::lattice_back(&host)]
+    } else {
+        iced::widget::stack![back, seam::bar(home, &host, now)]
+    };
     if home.menu_open() {
         let scrim = mouse_area(space().width(Length::Fill).height(Length::Fill)).on_press(Message::Dismiss);
         layers = layers.push(scrim);
     }
-    if let Some(menu) = seam::popup(home, &host, now) {
+    if !host.lattice
+        && let Some(menu) = seam::popup(home, &host, now)
+    {
         layers = layers.push(menu);
     }
-    layers.push(tools::dock(home, &host, now)).width(Length::Fill).height(Length::Fill).into()
+    layers = layers.push(tools::dock(home, &host, now));
+    if let Some(query) = home.command_query() {
+        layers = layers.push(commands::view(&host, query));
+    }
+    layers.width(Length::Fill).height(Length::Fill).into()
 }
 
 fn tr<'a>(host: &Host<'a>, key: &'static str) -> &'a str {
