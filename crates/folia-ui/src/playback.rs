@@ -30,6 +30,7 @@ pub struct Playback {
     seeking: Option<f64>,
     restored: Option<(i64, f64)>,
     start_position: f64,
+    seek_revision: u64,
     /// Tracks that failed one after another; playback stops once the whole queue has failed.
     failures: usize,
     /// Keep the requested direction while skipping unplayable candidates.
@@ -75,6 +76,7 @@ enum Notice {
 pub enum Message {
     Scrobble(bool),
     Reported(u64),
+    Media(folia_media::Command),
     Toggle,
     Next,
     Previous,
@@ -148,6 +150,7 @@ impl Playback {
             seeking: None,
             restored: None,
             start_position: 0.0,
+            seek_revision: 0,
             failures: 0,
             failure_forward: true,
             fm: None,
@@ -174,6 +177,10 @@ impl Playback {
 
     pub fn request_id(&self) -> u64 {
         self.request
+    }
+
+    pub fn seek_revision(&self) -> u64 {
+        self.seek_revision
     }
 
     pub fn current(&self) -> Option<&Track> {
@@ -507,6 +514,7 @@ impl Playback {
                 }
                 Task::none()
             }
+            Message::Media(command) => self.media_command(command, store),
             Message::Toggle => {
                 self.listen.discontinuity();
                 if self.loading.active() {
@@ -545,6 +553,7 @@ impl Playback {
             }
             Message::SeekDone => {
                 self.listen.discontinuity();
+                self.seek_revision = self.seek_revision.wrapping_add(1);
                 if let Some((_, restored)) = self.restored.as_mut() {
                     if let Some(position) = self.seeking.take() {
                         *restored = if position.is_finite() { position.max(0.0) } else { 0.0 };
@@ -697,6 +706,66 @@ impl Playback {
                 self.step(finished)
             }
         }
+    }
+
+    fn media_command(&mut self, command: folia_media::Command, store: &Store) -> Task<Message> {
+        use folia_media::Command;
+        match command {
+            Command::Raise => Task::none(),
+            Command::Play if !self.is_playing() => self.update(Message::Toggle, store),
+            Command::Pause if self.loading.active() => {
+                let position = self.heard_position();
+                let task = self.media_stop();
+                if let Some(track) = self.current() {
+                    self.restored = Some((track.id, position));
+                    self.status = Status { state: PlayerState::Paused, position, duration: self.duration() };
+                }
+                task
+            }
+            Command::Pause if self.is_playing() => self.update(Message::Toggle, store),
+            Command::Play | Command::Pause => Task::none(),
+            Command::PlayPause => {
+                let command = if self.is_playing() || self.loading.active() { Command::Pause } else { Command::Play };
+                self.media_command(command, store)
+            }
+            Command::Stop => self.media_stop(),
+            Command::Next | Command::Previous => {
+                let forward = command == Command::Next;
+                if self.is_playing() || self.loading.active() {
+                    return self.skip(forward);
+                }
+                let state =
+                    if self.status.state == PlayerState::Paused { PlayerState::Paused } else { PlayerState::Idle };
+                let selected = if forward { self.queue.advance(false) } else { self.queue.back() };
+                let Some(track) = selected.cloned() else { return Task::none() };
+                let stop = self.media_stop();
+                self.restored = Some((track.id, 0.0));
+                self.status = Status { state, position: 0.0, duration: track.duration };
+                self.lyrics = None;
+                self.lyric_offset = 0.0;
+                self.lyrics_pending = true;
+                Task::batch([stop, self.read_lyrics(&track, self.request)])
+            }
+            Command::Volume(value) if value.is_finite() => {
+                let change = self.update(Message::Volume(value.clamp(0.0, 1.0) as f32), store);
+                Task::batch([change, self.update(Message::VolumeDone, store)])
+            }
+            Command::Volume(_) => Task::none(),
+        }
+    }
+
+    fn media_stop(&mut self) -> Task<Message> {
+        let duration = self.duration();
+        self.restored = None;
+        self.start_position = 0.0;
+        self.seeking = None;
+        self.topping_up = false;
+        self.lyrics_pending = false;
+        self.active_input = None;
+        self.prefetch_task = None;
+        let task = self.stop_current();
+        self.status = Status { state: PlayerState::Idle, position: 0.0, duration };
+        task
     }
 
     fn tick(&mut self) -> Task<Message> {

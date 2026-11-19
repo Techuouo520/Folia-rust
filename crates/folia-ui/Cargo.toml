@@ -11,6 +11,7 @@ folia-acoustics.workspace = true
 folia-ai.workspace = true
 folia-analysis.workspace = true
 folia-core.workspace = true
+folia-media.workspace = true
 folia-lyrics.workspace = true
 folia-i18n.workspace = true
 folia-library.workspace = true

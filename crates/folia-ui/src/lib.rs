@@ -27,6 +27,8 @@ mod library;
 mod login;
 mod lots;
 mod measured;
+#[cfg(target_os = "linux")]
+mod media_session;
 mod mode_picker;
 mod motion;
 mod now_playing;
@@ -212,6 +214,8 @@ enum NavigationEntry {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    #[cfg(target_os = "linux")]
+    Media(folia_media::Command),
     BackgroundPainted(u64, Option<iced::widget::image::Handle>),
     BackgroundPicked(Option<std::path::PathBuf>),
     BackgroundLoaded(u64, std::path::PathBuf, Result<std::sync::Arc<image::RgbaImage>, String>),
@@ -332,6 +336,8 @@ const ART_BYTES: usize = 4 * 1024 * 1024;
 const ART_PX: u32 = 360;
 
 pub struct Shell {
+    #[cfg(target_os = "linux")]
+    media_session: media_session::Bridge,
     store: Store,
     /// The page being left for or from the player fades out over the new one.
     page_fade: Option<page_fade::PageFade>,
@@ -544,6 +550,8 @@ impl Shell {
     }
 
     pub fn new(init: Init) -> (Self, Task<Message>) {
+        #[cfg(target_os = "linux")]
+        let media_session = media_session::Bridge::new(init.cache_dir.clone());
         typeface::language(init.i18n.language());
         motion::configure(&init.graphics.motion, init.system_reduced_motion);
         let smart_beat =
@@ -582,6 +590,8 @@ impl Shell {
         let playback = Playback::new(init.playback, omni.clone());
         let playback_session = playback_session::Session::new(&playback, init.open_files.is_empty());
         let mut shell = Self {
+            #[cfg(target_os = "linux")]
+            media_session,
             store: init.store,
             general: init.general,
             lattice: None,
@@ -984,6 +994,11 @@ impl Shell {
         );
         let lyrics_settled = matches!(&message, Message::Playback(playback::Message::LyricsLoaded(request, ..)) if *request == self.playback.request_id());
         let task = self.handle(message);
+        #[cfg(target_os = "linux")]
+        self.media_session.sync(
+            &self.playback,
+            self.playback.current().and_then(|track| self.art.peek(&track.id)).and_then(Option::as_ref),
+        );
         if self.closing {
             return task;
         }
@@ -1501,6 +1516,8 @@ impl Shell {
 
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
+            #[cfg(target_os = "linux")]
+            Message::Media(command) => self.media_command(command),
             Message::UiFrame => {
                 let playback = if self.playback.is_playing() {
                     self.handle(Message::Playback(playback::Message::Tick))
@@ -3233,6 +3250,10 @@ impl Shell {
             iced::event::listen_with(chrome_pointer),
             iced::event::listen_with(developer_key),
         ];
+        #[cfg(target_os = "linux")]
+        if !self.closing {
+            parts.push(self.media_session.subscription());
+        }
         if self.graphics.motion.follow_system {
             parts.push(
                 iced::time::every(std::time::Duration::from_secs(3))

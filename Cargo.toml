@@ -20,6 +20,7 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 unicode-script = "0.5.8"
 unicode-vo = "0.1.0"
 folia-core = { path = "crates/folia-core" }
+folia-media = { path = "crates/folia-media" }
 folia-ai = { path = "crates/folia-ai" }
 folia-acoustics = { path = "crates/folia-acoustics" }
 folia-store = { path = "crates/folia-store" }
@@ -80,6 +81,8 @@ sys-locale = "0.3.2"
 sysinfo = { version = "=0.36.1", default-features = false, features = ["system"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", default-features = false, features = ["sync", "rt", "time", "net", "macros"] }
+url = "2.5.8"
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 toml = "1.1.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

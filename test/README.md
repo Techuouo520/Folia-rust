@@ -19,6 +19,8 @@ cargo test --manifest-path test/Cargo.toml --workspace --features test-ui/ci,tes
 
 `stress` 和 `live` 是单独的本地入口，通过显式特性和 `--ignored` 启用。
 
+Linux MPRIS 使用独立 `mpris` CI job：`cargo clippy -p folia-media --all-targets -- -D warnings` 与 `cargo test --manifest-path test/Cargo.toml -p test-media`。需要 `dbus-daemon`；用例自行启动临时会话总线，不读取桌面总线或真实设置，检查服务发现、属性类型、控制消息、本地 PNG 封面、变化信号、多实例及总线重启重连。UI 的暂停导航和停止契约并入 `test/ui/session.rs`。未覆盖具体 Wayland compositor 的窗口激活策略或 Noctalia UI。
+
 ## 长时间资源回归
 
 ```powershell

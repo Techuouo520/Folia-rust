@@ -1717,6 +1717,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "folia-media"
+version = "0.1.2"
+dependencies = [
+ "folia-core",
+ "futures-util",
+ "image",
+ "tokio",
+ "tracing",
+ "url",
+ "zbus",
+]
+
+[[package]]
 name = "folia-omni"
 version = "0.1.2"
 dependencies = [
@@ -1810,6 +1823,7 @@ dependencies = [
  "folia-i18n",
  "folia-library",
  "folia-lyrics",
+ "folia-media",
  "folia-omni",
  "folia-player",
  "folia-render",
@@ -6747,6 +6761,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-media"
+version = "0.0.0"
+dependencies = [
+ "folia-core",
+ "folia-media",
+ "futures-util",
+ "image",
+ "tempfile",
+ "tokio",
+ "url",
+ "zbus",
+]
+
+[[package]]
 name = "test-omni"
 version = "0.0.0"
 dependencies = [
@@ -6816,6 +6844,7 @@ dependencies = [
  "folia-i18n",
  "folia-library",
  "folia-lyrics",
+ "folia-media",
  "folia-omni",
  "folia-player",
  "folia-render",
@@ -7040,8 +7069,10 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -8692,6 +8723,7 @@ dependencies = [
  "rustix 1.1.6",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid",

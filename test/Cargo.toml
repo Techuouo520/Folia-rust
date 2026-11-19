@@ -1,6 +1,6 @@
 ﻿[workspace]
 resolver = "3"
-members = ["core", "store", "i18n", "lyrics", "library", "player", "visualizer", "omni", "ui", "render", "analysis", "ai", "acoustics", "visual/lumiere", "visual/monet", "bench/player"]
+members = ["core", "media", "store", "i18n", "lyrics", "library", "player", "visualizer", "omni", "ui", "render", "analysis", "ai", "acoustics", "visual/lumiere", "visual/monet", "bench/player"]
 
 [workspace.package]
 edition = "2024"
@@ -10,6 +10,11 @@ publish = false
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 folia-core = { path = "../crates/folia-core" }
+folia-media = { path = "../crates/folia-media" }
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "net", "macros"] }
+futures-util = "0.3.34"
+url = "2.5.8"
 folia-ai = { path = "../crates/folia-ai" }
 folia-acoustics = { path = "../crates/folia-acoustics" }
 folia-store = { path = "../crates/folia-store" }

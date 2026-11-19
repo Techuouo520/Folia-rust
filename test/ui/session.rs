@@ -72,6 +72,57 @@ fn saved_session() -> PlaybackSession {
 }
 
 #[test]
+fn media_controls_are_idempotent_and_keep_paused_queue_navigation() {
+    use folia_media::Command;
+    use folia_player::PlayerState;
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path());
+    let mut player = Playback::new(PlaybackSettings::default(), None);
+    drop(player.restore(saved_session()));
+    let pending = player.request_id();
+    player.loading.begin(pending);
+    for _ in 0..2 {
+        drop(player.update(PlaybackMessage::Media(Command::Pause), &store));
+    }
+    assert!(!player.loading.active());
+    assert_ne!(player.request_id(), pending);
+    drop(
+        player.update(
+            PlaybackMessage::AudioReady(pending, 2, Err(folia_ui::AudioFailure::CustomSourceUnavailable)),
+            &store,
+        ),
+    );
+    assert_eq!(player.status.state, PlayerState::Paused);
+    assert_eq!(player.position(), 42.75);
+    drop(player.update(PlaybackMessage::Media(Command::Next), &store));
+    assert_eq!(player.current().unwrap().id, 3);
+    assert_eq!(player.status.state, PlayerState::Paused);
+    assert_eq!(player.position(), 0.0);
+    assert!(player.analysis_input().is_none());
+    drop(player.update(PlaybackMessage::Media(Command::Previous), &store));
+    assert_eq!(player.current().unwrap().id, 2);
+    for _ in 0..2 {
+        drop(player.update(PlaybackMessage::Media(Command::Stop), &store));
+    }
+    assert_eq!(player.status.state, PlayerState::Idle);
+    assert_eq!(player.position(), 0.0);
+    assert_eq!(player.queue.items().len(), 3);
+    assert_eq!(player.current().unwrap().id, 2);
+    drop(player.update(PlaybackMessage::Media(Command::Next), &store));
+    assert_eq!(player.status.state, PlayerState::Idle);
+    assert_eq!(player.current().unwrap().id, 3);
+    drop(player.update(PlaybackMessage::Media(Command::Volume(2.0)), &store));
+    assert_eq!(player.settings.volume, 1.0);
+    drop(player.update(PlaybackMessage::Media(Command::Volume(f64::NAN)), &store));
+    assert_eq!(player.settings.volume, 1.0);
+    player.status.state = PlayerState::Ended;
+    drop(player.update(PlaybackMessage::Media(Command::Previous), &store));
+    drop(player.update(PlaybackMessage::Tick, &store));
+    assert_eq!(player.current().unwrap().id, 2);
+    assert_eq!(player.status.state, PlayerState::Idle);
+}
+
+#[test]
 fn restored_playback_stays_paused_and_can_seek_before_loading_audio() {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::at(temp.path());
