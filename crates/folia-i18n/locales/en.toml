@@ -2,6 +2,7 @@
 name = "Folia"
 
 [options]
+settingsRowDetails = "Details"
 cacheMigratingBeforeClose = "Exiting after the cache move"
 cacheMigrating = "Moving cache"
 cacheMigrationFailed = "Migration failed. The previous directory is still in use. Check space, permissions or conflicting files."

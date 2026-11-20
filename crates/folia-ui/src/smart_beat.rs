@@ -338,6 +338,7 @@ pub(crate) fn global_page<'a>(
     i18n: &'a folia_i18n::I18n,
     tokens: crate::settings_kit::Tokens,
     view: View<'a>,
+    notes: &crate::workbench_notes::Notes,
 ) -> iced::Element<'a, crate::Message> {
     use crate::settings_kit::{self as kit, Group, Row};
     use iced::widget::{column, space};
@@ -353,8 +354,9 @@ pub(crate) fn global_page<'a>(
         .map(|(value, key)| (value, i18n.t(key).to_owned()))
         .collect();
     let mut rows = vec![Row {
+        note: Some(notes.view(i18n, tokens, "options.smartBeatMode", i18n.t(key).to_owned())),
         label: i18n.t("options.smartBeatMode").to_owned(),
-        hint: Some(i18n.t(key).to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::segmented(tokens, choices, settings.mode, None, |mode| {
@@ -364,7 +366,7 @@ pub(crate) fn global_page<'a>(
     if settings.mode.active()
         && let Some(status) = status_text(i18n, view.status)
     {
-        rows.push(Row { label: status, hint: None, sub: true, below: None, control: space().into() });
+        rows.push(kit::notice_row(tokens, &status, space().into()));
     }
     column![kit::group(
         tokens,
@@ -380,25 +382,26 @@ pub(crate) fn effects_page<'a>(
     tokens: crate::settings_kit::Tokens,
     style: folia_visualizer::Style,
     view: View<'a>,
+    notes: &crate::workbench_notes::Notes,
 ) -> Option<iced::Element<'a, crate::Message>> {
     use crate::settings_kit::{self as kit, Group, Row};
-    use iced::widget::{button, column};
+    use iced::widget::column;
     if style != folia_visualizer::Style::Nebbia {
         return None;
     }
     let settings = view.settings;
     let mut rows = Vec::new();
     if !settings.mode.active() {
-        rows.push(Row {
-            label: i18n.t("options.beatEffectsNeedSmartBeat").to_owned(),
-            hint: None,
-            sub: false,
-            below: None,
-            control: button(crate::typeface::text(i18n.t("options.beatEffectsOpenSmartBeat")))
-                .on_press(crate::Message::Workbench(crate::workbench::Message::Tab(crate::workbench::Tab::Global)))
-                .style(button::secondary)
-                .into(),
-        });
+        rows.push(kit::notice_row(
+            tokens,
+            i18n.t("options.beatEffectsNeedSmartBeat"),
+            kit::sheet_button(
+                tokens,
+                i18n.t("options.beatEffectsOpenSmartBeat"),
+                false,
+                Some(crate::Message::Workbench(crate::workbench::Message::Tab(crate::workbench::Tab::Global))),
+            ),
+        ));
     }
     for (id, name, description, parts) in [
         (
@@ -421,8 +424,9 @@ pub(crate) fn effects_page<'a>(
     ] {
         let effect = settings.effect(id);
         rows.push(Row {
+            note: Some(notes.view(i18n, tokens, description, i18n.t(description).to_owned())),
             label: i18n.t(name).to_owned(),
-            hint: Some(i18n.t(description).to_owned()),
+            hint: None,
             sub: false,
             below: None,
             control: kit::toggle(
@@ -455,24 +459,23 @@ fn strength_row<'a>(
     setting: &BeatEffectSetting,
 ) -> crate::settings_kit::Row<'a, crate::Message> {
     use crate::settings_kit::{self as kit, Row};
-    use iced::widget::{row, slider};
+    use iced::widget::slider;
     let value = setting.part(part);
     let control = slider(0.0..=2.0, value, move |value| {
         crate::Message::Workbench(crate::workbench::Message::SmartBeat(Change::Strength(effect, part, value)))
     })
     .step(0.05_f32)
     .on_release(crate::Message::Workbench(crate::workbench::Message::Commit))
-    .width(140)
+    .width(iced::Length::Fill)
+    .height(32)
     .style(move |_, _| kit::slider_style(tokens));
     Row {
+        note: None,
         label: i18n.t(label).to_owned(),
         hint: None,
         sub: true,
-        below: None,
-        control: row![control, kit::value(tokens, format!("{value:.2}x"))]
-            .spacing(12)
-            .align_y(iced::Alignment::Center)
-            .into(),
+        below: Some(control.into()),
+        control: kit::value(tokens, format!("{value:.2}x")),
     }
 }
 

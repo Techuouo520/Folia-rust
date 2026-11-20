@@ -15,6 +15,29 @@ const W: u32 = 1240;
 const H: u32 = 780;
 
 #[test]
+fn details_finish_their_last_frame_without_resuming_the_preview() {
+    let mut bench = Workbench::open();
+    let appearance = AppearanceSettings::default();
+    let manifest = Style::Nebbia.manifest();
+    let latent = folia_visualizer::LatentTuning::DEFAULT;
+    bench.update(WorkbenchMessage::Pause, manifest, &appearance, latent);
+    assert!(!bench.ticking());
+    for message in
+        [WorkbenchMessage::ToggleDetails("options.nebbiaBehindHint"), WorkbenchMessage::Tab(WorkbenchTab::Global)]
+    {
+        let update = bench.update(message, manifest, &appearance, latent);
+        assert!(matches!(update.effect, WorkbenchEffect::None));
+        assert!(bench.controls_animating());
+        assert!(!bench.ticking());
+        std::thread::sleep(std::time::Duration::from_millis(350));
+        assert!(bench.controls_animating(), "the final control frame must remain pending");
+        bench.update(WorkbenchMessage::ControlsFrame, manifest, &appearance, latent);
+        assert!(!bench.controls_animating());
+        assert!(!bench.ticking());
+    }
+}
+
+#[test]
 #[cfg_attr(feature = "ci", ignore = "needs a GPU for native scene-window layout")]
 fn scene_window_seats_and_controls_follow_wide_and_narrow_layouts() {
     use folia_core::{SceneId, SceneQuality};

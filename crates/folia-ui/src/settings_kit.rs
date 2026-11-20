@@ -44,6 +44,7 @@ pub struct Tokens {
     pub muted: Color,
     pub hover: Color,
     pub shadow: Color,
+    pub warn: Color,
 }
 
 impl Tokens {
@@ -76,6 +77,7 @@ impl Tokens {
             muted: rgb(theme.secondary, 0.7),
             hover: if daylight { Color { a: 0.04, ..Color::BLACK } } else { Color { a: 0.06, ..Color::WHITE } },
             shadow: Color::BLACK,
+            warn: pick(0xb97a10, 0xe3a949),
         }
     }
 
@@ -112,6 +114,7 @@ impl Tokens {
             muted: fade(self.muted),
             hover: fade(self.hover),
             shadow: fade(self.shadow),
+            warn: fade(self.warn),
         }
     }
 }
@@ -256,11 +259,18 @@ impl<T> std::fmt::Display for Choice<T> {
 pub struct Row<'a, M> {
     pub label: String,
     pub hint: Option<String>,
+    pub note: Option<Note<'a, M>>,
     /// Belongs under the row above it: indented 40px instead of 16px.
     pub sub: bool,
     /// A block under the label and control, as the kit's `below` pictures and tile grids.
     pub below: Option<Element<'a, M>>,
     pub control: Element<'a, M>,
+}
+
+/// An information trigger beside the label and its expanding full-width explanation.
+pub struct Note<'a, M> {
+    pub trigger: Element<'a, M>,
+    pub content: Element<'a, M>,
 }
 
 /// Rows in one card under a small heading; a `bare` group has no heading.
@@ -335,29 +345,28 @@ fn row_view<'a, M: 'a>(tokens: Tokens, entry: Row<'a, M>) -> Element<'a, M> {
             .width(Length::Fill)
             .into();
     }
-    let mut label = column![crate::typeface::LABEL.text(entry.label).color(tokens.t1)];
+    let mut title =
+        row![crate::typeface::LABEL.text(entry.label).color(tokens.t1)].spacing(6).align_y(Alignment::Center);
+    let mut note = None;
+    if let Some(detail) = entry.note {
+        title = title.push(detail.trigger);
+        note = Some(detail.content);
+    }
+    let mut label = column![title];
     if let Some(hint) = entry.hint {
         label = label.push(space().height(2)).push(crate::typeface::HINT.text(hint).color(tokens.t2));
     }
     let left = if entry.sub { 40.0 } else { 16.0 };
     let content = row![container(label).width(Length::Fill), entry.control].spacing(24).align_y(Alignment::Center);
     // The zero-width strut keeps the row at its 56px minimum, `min-h-14`.
-    let mut row = column![];
-    row = row.push(iced::widget::row![space().height(36), content].align_y(Alignment::Center).padding(Padding {
-        top: 10.0,
-        right: 16.0,
-        bottom: 10.0,
-        left,
-    }));
+    let mut body = column![content].extend(note);
     if let Some(below) = entry.below {
-        row = row.push(container(below).width(Length::Fill).padding(Padding {
-            top: 0.0,
-            right: 16.0,
-            bottom: 10.0,
-            left,
-        }));
+        body = body.push(container(below).width(Length::Fill).padding(Padding::ZERO.top(10).bottom(4)));
     }
-    row.into()
+    container(row![space().height(36), body].align_y(Alignment::Center))
+        .padding(Padding { top: 10.0, right: 16.0, bottom: 10.0, left })
+        .width(Length::Fill)
+        .into()
 }
 
 /// The on/off switch; `position` runs from 0 (off) to 1 (on) and is between the two while the thumb glides.
@@ -388,19 +397,19 @@ pub fn toggle<'a, M: Clone + 'a>(tokens: Tokens, position: f32, on_press: M) -> 
 
 /// The same switch, drawn and not clickable.
 pub fn toggle_fixed<'a, M: 'a>(tokens: Tokens, position: f32) -> Element<'a, M> {
+    let tokens = tokens.faded(0.4);
     let knob_color = mix(tokens.knob, tokens.on_accent, position);
     let knob = container(space()).width(18).height(18).style(move |_| container::Style {
         background: Some(knob_color.into()),
         border: Border { radius: 9.0.into(), ..Border::default() },
         shadow: Shadow {
-            color: Color { a: 0.15 * tokens.shadow.a, ..Color::BLACK },
+            color: Color { a: 0.3 * tokens.shadow.a, ..Color::BLACK },
             offset: Vector::new(0.0, 1.0),
             blur_radius: 2.0,
         },
         ..container::Style::default()
     });
     let track_color = mix(tokens.track, tokens.accent, position);
-    let track_color = Color { a: track_color.a * 0.45, ..track_color };
     container(knob)
         .width(40)
         .height(24)
@@ -458,15 +467,17 @@ fn segmented_choices<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     let widths: Vec<f32> = options.iter().map(|(_, label)| label_width(label, 13.0) + 24.0).collect();
     let total: f32 = widths.iter().sum();
     let mark = mark.or_else(|| options.iter().position(|(option, _)| *option == value).map(|index| index as f32));
-    let ground = fill_box(tokens.fill).width(total + 4.0).height(32).style(move |_| rounded(tokens.fill, 8.0));
+    let ground_fill = if enabled { tokens.fill } else { Color { a: tokens.fill.a * 0.4, ..tokens.fill } };
+    let ground = fill_box(ground_fill).width(total + 4.0).height(32).style(move |_| rounded(ground_fill, 8.0));
     let mut layers = stack![ground];
     if let Some(mark) = mark {
         let (x, width) = slide(&widths, mark);
+        let paint = if enabled && !unavailable.contains(&value) { tokens } else { tokens.faded(0.4) };
         let raised = container(space()).width(width).height(28).style(move |_| container::Style {
-            background: Some(tokens.raise.into()),
+            background: Some(paint.raise.into()),
             border: Border { radius: 6.0.into(), ..Border::default() },
             shadow: Shadow {
-                color: Color { a: 0.2 * tokens.shadow.a, ..Color::BLACK },
+                color: Color { a: 0.2 * paint.shadow.a, ..Color::BLACK },
                 offset: Vector::new(0.0, 1.0),
                 blur_radius: 2.0,
             },
@@ -480,7 +491,7 @@ fn segmented_choices<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
         let selected = option == value;
         let ink = if selected { tokens.t1 } else { tokens.t2 };
         let ink = if enabled { ink } else { Color { a: ink.a * 0.4, ..ink } };
-        let label = container(text(label).size(crate::typeface::size::CONTROL).color(ink)).center_x(width).center_y(28);
+        let label = container(text(label).size(crate::typeface::size::CONTROL)).center_x(width).center_y(28);
         let choice = button(label).padding(0).style(move |_, status| button::Style {
             text_color: if enabled && (selected || status == button::Status::Hovered) { tokens.t1 } else { ink },
             ..button::Style::default()
@@ -542,6 +553,17 @@ pub fn tabs<'a, M: Clone + 'a>(
     top: f32,
     side: f32,
 ) -> Element<'a, M> {
+    column![tab_strip(tokens, tabs, chosen, mark, top, side), hairline(tokens)].into()
+}
+
+pub(crate) fn tab_strip<'a, M: Clone + 'a>(
+    tokens: Tokens,
+    tabs: Vec<(String, M)>,
+    chosen: Option<usize>,
+    mark: Option<f32>,
+    top: f32,
+    side: f32,
+) -> Element<'a, M> {
     let widths: Vec<f32> = tabs.iter().map(|(label, _)| label_width(label, 13.0)).collect();
     let mut strip = row![].spacing(22);
     for (index, ((label, message), width)) in tabs.into_iter().zip(widths.iter().copied()).enumerate() {
@@ -563,7 +585,7 @@ pub fn tabs<'a, M: Clone + 'a>(
         });
         layers = layers.push(container(line).padding(Padding { top: 34.0, left: x, ..Padding::ZERO }));
     }
-    column![container(layers).padding(Padding { top, left: side, right: side, bottom: 0.0 }), hairline(tokens)].into()
+    container(layers).padding(Padding { top, left: side, right: side, bottom: 0.0 }).into()
 }
 
 /// A plain value in a row's control slot.
@@ -646,10 +668,26 @@ pub(crate) fn sheet_button<'a, M: Clone + 'a>(
     primary: bool,
     on_press: Option<M>,
 ) -> Element<'a, M> {
+    action_button(tokens, label, None, primary, on_press)
+}
+
+/// The settings kit's filled action, optionally with a Lucide icon.
+pub(crate) fn action_button<'a, M: Clone + 'a>(
+    tokens: Tokens,
+    label: &'a str,
+    mark: Option<lucide_static_svg::Icon>,
+    primary: bool,
+    on_press: Option<M>,
+) -> Element<'a, M> {
     let enabled = on_press.is_some();
     let text_color = if primary { tokens.on_accent } else { tokens.t1 };
     let ink = if enabled { text_color } else { Color { a: text_color.a * 0.4, ..text_color } };
-    button(container(text(label).size(crate::typeface::size::CONTROL).color(ink)).center_y(32))
+    let mut content = row![].spacing(6).align_y(Alignment::Center);
+    if let Some(mark) = mark {
+        content = content.push(icon(mark, 14.0, ink));
+    }
+    content = content.push(text(label).size(crate::typeface::size::CONTROL).color(ink));
+    button(container(content).center_y(32))
         .height(32)
         .padding([0, 12])
         .on_press_maybe(on_press)
@@ -666,6 +704,42 @@ pub(crate) fn sheet_button<'a, M: Clone + 'a>(
             rounded_button(fill, 8.0)
         })
         .into()
+}
+
+/// The compact action beside a settings heading, matching the kit's quiet button.
+pub(crate) fn quiet_button<'a, M: Clone + 'a>(tokens: Tokens, label: &'a str, on_press: M) -> Element<'a, M> {
+    button(container(text(label).size(12).line_height(px(16.0))).center_y(24))
+        .height(24)
+        .padding([0, 6])
+        .on_press(on_press)
+        .style(move |_, status| {
+            let hot = matches!(status, button::Status::Hovered | button::Status::Pressed);
+            button::Style {
+                text_color: if hot { tokens.t1 } else { tokens.t2 },
+                background: hot.then_some(tokens.fill.into()),
+                border: Border { radius: 6.0.into(), ..Border::default() },
+                ..button::Style::default()
+            }
+        })
+        .into()
+}
+
+pub(crate) fn notice_row<'a, M: 'a>(tokens: Tokens, message: &str, control: Element<'a, M>) -> Row<'a, M> {
+    let dot = container(space()).width(6).height(6).style(move |_| rounded(tokens.warn, 3.0));
+    let notice = row![
+        container(dot).padding(Padding::ZERO.top(7)),
+        text(message.to_owned()).size(13).line_height(px(20.0)).color(tokens.t1)
+    ]
+    .spacing(8)
+    .width(Length::Fill);
+    Row {
+        label: String::new(),
+        hint: None,
+        note: None,
+        sub: false,
+        below: None,
+        control: row![notice, control].spacing(24).align_y(Alignment::Center).width(Length::Fill).into(),
+    }
 }
 
 pub fn input_style(tokens: Tokens) -> iced::widget::text_input::Style {

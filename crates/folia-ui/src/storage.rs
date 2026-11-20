@@ -216,6 +216,7 @@ impl Storage {
             title: i18n.t("options.mediaCache").into(),
             bare: false,
             rows: vec![Row {
+                note: None,
                 label: i18n.t("options.cacheDirectory").into(),
                 hint: Some(display_path(&self.active)),
                 sub: false,

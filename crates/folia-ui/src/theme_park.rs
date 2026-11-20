@@ -474,6 +474,7 @@ impl ThemePark {
                     rows: vec![
                         option(i18n, "options.themeName", name),
                         Row {
+                            note: None,
                             label: i18n.t("theme.themeDescription").into(),
                             hint: None,
                             sub: false,
@@ -518,6 +519,7 @@ impl ThemePark {
             .spacing(6)
             .into();
             words.push(Row {
+                note: None,
                 label: String::new(),
                 hint: None,
                 sub: false,
@@ -526,6 +528,7 @@ impl ThemePark {
             });
         }
         let mut icons = vec![Row {
+            note: None,
             label: String::new(),
             hint: None,
             sub: false,
@@ -545,6 +548,7 @@ impl ThemePark {
         }];
         for (index, name) in self.draft().dark.lyrics_icons.iter().enumerate() {
             icons.push(Row {
+                note: None,
                 label: name.clone(),
                 hint: None,
                 sub: false,
@@ -626,7 +630,7 @@ fn limited(value: &str, limit: usize) -> String {
         .collect()
 }
 fn option<'a>(i18n: &I18n, label: &str, control: Element<'a, crate::Message>) -> Row<'a, crate::Message> {
-    Row { label: i18n.t(label).into(), hint: None, sub: false, below: None, control }
+    Row { note: None, label: i18n.t(label).into(), hint: None, sub: false, below: None, control }
 }
 fn action<'a>(tokens: Tokens, label: &'a str, message: Option<Message>) -> Element<'a, crate::Message> {
     button(text(label).size(13).color(tokens.t1))

@@ -235,7 +235,7 @@ fn stage<'a>(
 }
 
 fn setting<'a>(i18n: &I18n, label: &str, control: Element<'a, Message>) -> Row<'a, Message> {
-    Row { label: i18n.t(label).to_owned(), hint: None, sub: false, below: None, control }
+    Row { note: None, label: i18n.t(label).to_owned(), hint: None, sub: false, below: None, control }
 }
 
 fn scene_controls<'a>(

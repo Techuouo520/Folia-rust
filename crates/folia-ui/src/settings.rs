@@ -791,6 +791,7 @@ impl Settings {
         let group =
             |def: GroupDef, rows| Group { title: i18n.t(def.title).to_owned(), bare: def.bare, rows, foot: None };
         let row = |label: &str, hint: Option<String>, sub: bool, control| Row {
+            note: None,
             label: i18n.t(label).to_owned(),
             hint,
             sub,
@@ -1178,7 +1179,8 @@ fn wall_group<'a>(wall: folia_store::WallAppearance, i18n: &'a I18n, tokens: Tok
     use crate::Message::Home;
     use crate::home::Message as Change;
     use folia_store::WallLook;
-    let row = |key, control| Row { label: i18n.t(key).to_owned(), control, hint: None, below: None, sub: false };
+    let row =
+        |key, control| Row { note: None, label: i18n.t(key).to_owned(), control, hint: None, below: None, sub: false };
     let toggle = |key, on, message| row(key, kit::toggle(tokens, if on { 1.0 } else { 0.0 }, Home(message)));
     let look = kit::segmented(
         tokens,

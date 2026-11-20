@@ -198,6 +198,7 @@ pub fn settings_groups<'a>(
 ) -> Vec<Group<'a, crate::Message>> {
     let capturing = settings.console_capture_enabled;
     let mut rows = vec![Row {
+        note: None,
         label: i18n.t("options.consoleLogCapture").to_owned(),
         hint: Some(i18n.t("options.consoleLogCaptureDesc").to_owned()),
         sub: false,
@@ -214,6 +215,7 @@ pub fn settings_groups<'a>(
         let index = mode_index(settings.runtime_log_mode);
         let modes = mode_choices(i18n);
         rows.push(Row {
+            note: None,
             label: i18n.t("options.debugLogsToFile").to_owned(),
             hint: Some(log.path().display().to_string()),
             sub: true,
@@ -241,6 +243,7 @@ pub fn settings_groups<'a>(
     }
     let monitoring = settings.memory_monitor_enabled;
     rows.push(Row {
+        note: None,
         label: i18n.t("options.memoryMonitor").to_owned(),
         hint: Some(i18n.t("options.memoryMonitorDesc").to_owned()),
         sub: false,
@@ -256,6 +259,7 @@ pub fn settings_groups<'a>(
     if monitoring {
         let index = mode_index(settings.memory_log_mode);
         rows.push(Row {
+            note: None,
             label: i18n.t("options.debugLogsToFile").to_owned(),
             hint: Some(memory_path.display().to_string()),
             sub: true,
@@ -281,6 +285,7 @@ pub fn settings_groups<'a>(
             .into(),
         });
         rows.push(Row {
+            note: None,
             label: i18n.t("options.memoryMonitorInterval").to_owned(),
             hint: None,
             sub: true,

@@ -2,6 +2,7 @@
 name = "Folia"
 
 [options]
+settingsRowDetails = "Chi tiết"
 cacheMigratingBeforeClose = "Thoát sau khi di chuyển xong"
 cacheMigrating = "Đang di chuyển bộ nhớ đệm"
 cacheMigrationFailed = "Di chuyển thất bại. Vẫn dùng thư mục cũ. Kiểm tra dung lượng, quyền truy cập hoặc tệp trùng."

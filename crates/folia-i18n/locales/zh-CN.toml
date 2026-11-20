@@ -2,6 +2,7 @@
 name = "Folia"
 
 [options]
+settingsRowDetails = "详情"
 cacheMigratingBeforeClose = "迁移完成后退出"
 cacheMigrating = "正在迁移缓存"
 cacheMigrationFailed = "迁移失败，继续使用原目录。请检查空间、权限或目标文件冲突。"

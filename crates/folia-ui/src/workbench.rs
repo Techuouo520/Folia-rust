@@ -34,6 +34,7 @@ const HEADER: f32 = 64.0;
 /// The style shelf and the settings body keep their own offsets.
 const GRID: &str = "workbench-styles";
 const PAGE: &str = "workbench-page";
+const TABS: &str = "workbench-tabs";
 const MEDIUM: Font = crate::typeface::MEDIUM;
 const HOTSPOT_FADE: Duration = Duration::from_millis(200);
 
@@ -81,6 +82,9 @@ pub enum FontTarget {
 
 #[derive(Clone, Debug)]
 pub enum Message {
+    ToggleDetails(&'static str),
+    DetailsMeasured(&'static str, f32),
+    ControlsFrame,
     PreviewArt(u64, usize, Result<Arc<crate::preview_art::Art>, String>),
     PreviewBackground(u64, u64, Option<iced::widget::image::Handle>),
     SmartBeat(crate::smart_beat::Change),
@@ -300,6 +304,9 @@ impl LiveSnapshot {
 }
 
 pub struct Workbench {
+    notes: crate::workbench_notes::Notes,
+    tab_mark: crate::motion::Tween,
+    tabs_dirty: bool,
     tab: Tab,
     source: Source,
     sample: Sample,
@@ -330,6 +337,14 @@ impl Workbench {
     pub fn open() -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            notes: Default::default(),
+            tab_mark: crate::motion::Tween::new(
+                0.0,
+                220.0,
+                folia_visualizer::Ease::new(0.22, 1.0, 0.36, 1.0),
+                Instant::now(),
+            ),
+            tabs_dirty: false,
             tab: Tab::Lyrics,
             source: Source::Builtin,
             sample: Sample::Default,
@@ -384,6 +399,18 @@ impl Workbench {
         let mut appearance = current.clone();
         let mut changed = false;
         let result = match message {
+            Message::ToggleDetails(key) => {
+                self.notes.toggle(key);
+                Update::effect(Effect::None)
+            }
+            Message::DetailsMeasured(key, height) => {
+                self.notes.measure(key, height);
+                Update::effect(Effect::None)
+            }
+            Message::ControlsFrame => {
+                self.notes.frame();
+                Update::effect(Effect::None)
+            }
             Message::PreviewArt(id, index, result) => {
                 if id == self.preview_id && index < self.sample_art.len() {
                     match result {
@@ -417,6 +444,13 @@ impl Workbench {
             }
             Message::Tab(tab) => {
                 let scroll_top = self.tab != tab;
+                if scroll_top {
+                    self.notes.clear();
+                    self.notes.frame();
+                    let index = Tab::ALL.iter().position(|value| *value == tab).unwrap_or(0);
+                    self.tab_mark.set(index as f32, self.notes.sampled());
+                    self.tabs_dirty = true;
+                }
                 self.tab = tab;
                 let mut update = Update::effect(self.release_drag());
                 update.scroll_top = scroll_top;
@@ -446,6 +480,10 @@ impl Workbench {
                 Update::effect(Effect::None)
             }
             Message::Style(style) => {
+                self.notes.clear();
+                self.notes.frame();
+                self.tab_mark.set(0.0, self.notes.sampled());
+                self.tabs_dirty = true;
                 let released = self.release_drag();
                 self.tab = Tab::Lyrics;
                 let mut update = Update::effect(Effect::Style(style));
@@ -817,6 +855,11 @@ impl Workbench {
         self.source == Source::Builtin && !self.paused || self.scrolling()
     }
 
+    /// Control transitions need UI frames even while the lyric preview is paused.
+    pub fn controls_animating(&self) -> bool {
+        self.notes.animating() || self.tab_mark.running(self.notes.sampled())
+    }
+
     /// Takes the live picture only in response to pause or choosing the live source.
     pub fn capture_live(&mut self, live: Option<Live<'_>>, choosing_live: bool) {
         if self.source != Source::Live && !choosing_live {
@@ -917,10 +960,19 @@ impl Workbench {
     pub fn scroll_frame(&mut self, now: Instant) -> Task<Message> {
         let grid = self.grid.frame(now);
         let page = self.page.frame(now);
-        if grid.is_some() || page.is_some() || std::mem::take(&mut self.scroll_dirty) {
-            Task::batch([self.grid.apply(Id::new(GRID)), self.page.apply(Id::new(PAGE))])
+        let tabs = if std::mem::take(&mut self.tabs_dirty) {
+            let index = Tab::ALL.iter().position(|tab| *tab == self.tab).unwrap_or(0);
+            iced::widget::operation::snap_to(
+                Id::new(TABS),
+                iced::widget::scrollable::RelativeOffset { x: index as f32 / (Tab::ALL.len() - 1) as f32, y: 0.0 },
+            )
         } else {
             Task::none()
+        };
+        if grid.is_some() || page.is_some() || std::mem::take(&mut self.scroll_dirty) {
+            Task::batch([self.grid.apply(Id::new(GRID)), self.page.apply(Id::new(PAGE)), tabs])
+        } else {
+            tabs
         }
     }
 
@@ -1276,12 +1328,17 @@ impl Workbench {
             .map(|tab| (i18n.t(tab.key()).to_owned(), crate::Message::Workbench(Message::Tab(tab))))
             .collect();
         let chosen = Tab::ALL.iter().position(|tab| *tab == self.tab);
-        let reset = button(text(i18n.t("ui.default")).size(crate::typeface::size::CONTROL).color(tokens.t1))
-            .padding(Padding { left: 8.0, right: 8.0, ..Padding::ZERO })
-            .style(|_, _| button::Style::default())
-            .on_press(crate::Message::Workbench(Message::Reset));
-        let tabs = row![kit::tabs(tokens, tabs, chosen, chosen.map(|index| index as f32), 8.0, 16.0), reset]
-            .align_y(Alignment::Center);
+        let reset = kit::quiet_button(tokens, i18n.t("ui.default"), crate::Message::Workbench(Message::Reset));
+        let strip = kit::tab_strip(tokens, tabs, chosen, Some(self.tab_mark.value(self.notes.sampled())), 8.0, 24.0);
+        let strip = scrollable(strip)
+            .id(TABS)
+            .width(Length::Fill)
+            .height(44)
+            .direction(scrollable::Direction::Horizontal(scrollable::Scrollbar::hidden()));
+        let tabs = column![
+            row![strip, container(reset).padding(Padding::ZERO.right(16))].align_y(Alignment::Center),
+            kit::hairline(tokens),
+        ];
         let page = self.page(look, tokens);
         let page = scrollable(page)
             .id(settings_scroll_id())
@@ -1298,20 +1355,27 @@ impl Workbench {
     }
 
     fn page<'a>(&'a self, look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
-        let Look { i18n, theme, style, font_scale, appearance, .. } = look;
+        let Look { i18n, theme, style, .. } = look;
         match self.tab {
             Tab::Lyrics => {
-                let page =
-                    style_page(i18n, tokens, theme, style.manifest(), &self.values, look.graphics.lyric_render_quality);
-                match crate::smart_beat::effects_page(i18n, tokens, style, look.smart_beat) {
+                let page = style_page(
+                    i18n,
+                    tokens,
+                    theme,
+                    style.manifest(),
+                    &self.values,
+                    look.graphics.lyric_render_quality,
+                    &self.notes,
+                );
+                match crate::smart_beat::effects_page(i18n, tokens, style, look.smart_beat, &self.notes) {
                     Some(effects) => column![effects, page].into(),
                     None => page,
                 }
             }
-            Tab::Background => background_page(look, tokens),
-            Tab::Font => font_page(i18n, tokens, theme, style, self.sample, font_scale, appearance),
-            Tab::Subtitle => subtitle_page(i18n, tokens, theme, appearance),
-            Tab::Global => crate::smart_beat::global_page(i18n, tokens, look.smart_beat),
+            Tab::Background => background_page(look, tokens, &self.notes),
+            Tab::Font => font_page(look, tokens, self.sample, &self.notes),
+            Tab::Subtitle => subtitle_page(look, tokens, &self.notes),
+            Tab::Global => crate::smart_beat::global_page(i18n, tokens, look.smart_beat, &self.notes),
         }
     }
 
@@ -1381,7 +1445,7 @@ impl Workbench {
             fallback
         ];
         let wanted = picker.search.trim().to_lowercase();
-        let mut list = column![].spacing(2);
+        let mut list = column![].spacing(4);
         let mut shown = 0;
         for family in fonts {
             if !wanted.is_empty() && !family.to_lowercase().contains(&wanted) {
@@ -1389,18 +1453,29 @@ impl Workbench {
             }
             shown += 1;
             let face = Font { family: iced::font::Family::Name(fonts::intern(family)), ..crate::typeface::SYSTEM };
+            let chosen = font.family.as_deref() == Some(family.as_str());
             let label = text(family.as_str())
-                .size(crate::typeface::size::ACTION)
+                .size(17)
+                .line_height(iced::widget::text::LineHeight::Absolute(24.0.into()))
                 .font(crate::typeface::adapt(face))
                 .color(tokens.t1);
             list = list.push(
-                button(label)
+                button(container(label).center_y(60))
                     .width(Length::Fill)
-                    .padding([7, 10])
+                    .height(60)
+                    .padding([0, 12])
                     .on_press(crate::Message::Workbench(Message::PickFont(family.clone())))
                     .style(move |_, status| button::Style {
-                        background: (status == button::Status::Hovered).then_some(IcedBackground::Color(tokens.fill)),
-                        border: Border { radius: 6.0.into(), ..Border::default() },
+                        background: if chosen {
+                            Some(tokens.fill2.into())
+                        } else {
+                            (status == button::Status::Hovered).then_some(tokens.fill.into())
+                        },
+                        border: Border {
+                            radius: 8.0.into(),
+                            width: if chosen { 1.5 } else { 0.0 },
+                            color: tokens.accent,
+                        },
                         ..button::Style::default()
                     }),
             );
@@ -1411,11 +1486,12 @@ impl Workbench {
             scrollable(list).height(Length::Fill).direction(kit::scrollbar()).style(kit::scroll_style(tokens)).into()
         };
         // "Back to the built-in font" clears the custom family.
-        let clear =
-            button(text(i18n.t("options.clearSystemFont")).size(crate::typeface::size::CONTROL).color(tokens.t1))
-                .padding([6, 10])
-                .on_press(crate::Message::Workbench(Message::ClearFont(picker.target)))
-                .style(|_, _| button::Style::default());
+        let clear = kit::sheet_button(
+            tokens,
+            i18n.t("options.clearSystemFont"),
+            false,
+            Some(crate::Message::Workbench(Message::ClearFont(picker.target))),
+        );
         let dialog = container(
             column![heading, search, current, fallback, container(body).height(Length::Fill), clear]
                 .spacing(10)
@@ -1462,6 +1538,7 @@ fn style_page<'a>(
     manifest: Manifest,
     values: &'a Values,
     global: folia_core::LyricRenderQuality,
+    notes: &crate::workbench_notes::Notes,
 ) -> Element<'a, crate::Message> {
     let mut page = column![];
     for (index, group) in manifest.groups.iter().enumerate() {
@@ -1470,7 +1547,7 @@ fn style_page<'a>(
             if manifest.hidden(values, item.key()) {
                 continue;
             }
-            rows.push(item_row(i18n, tokens, theme, manifest, values, *item));
+            rows.push(item_row(i18n, tokens, theme, manifest, values, *item, notes));
         }
         page = page.push(kit::group(
             tokens,
@@ -1510,6 +1587,7 @@ fn render_quality_group<'a>(
     };
     let rows = vec![
         Row {
+            note: None,
             label: i18n.t("options.lyricRenderScale").to_owned(),
             hint: Some(i18n.format("options.lyricRenderScaleStyleHint", &[("value", &format!("{}×", global.scale))])),
             sub: false,
@@ -1519,6 +1597,7 @@ fn render_quality_group<'a>(
             }),
         },
         Row {
+            note: None,
             label: i18n.t("options.lyricAntialias").to_owned(),
             hint: Some(i18n.format("options.lyricAntialiasStyleHint", &[("value", i18n.t(antialias))])),
             sub: false,
@@ -1550,6 +1629,7 @@ fn item_row<'a>(
     manifest: Manifest,
     values: &'a Values,
     item: Item,
+    notes: &crate::workbench_notes::Notes,
 ) -> Row<'a, crate::Message> {
     let member = match item {
         Item::Member { option, .. } => Some(option),
@@ -1602,17 +1682,12 @@ fn item_row<'a>(
         }
         Item::Button { key, path_key, .. } => {
             let enabled = path_key.is_some() || manifest.paths.iter().any(|path| values.path(path).is_some());
-            let label = text(i18n.t(item_label(item))).size(crate::typeface::size::CONTROL).color(if enabled {
-                tokens.t1
-            } else {
-                tokens.t3
-            });
-            let button = button(label).padding([6, 10]).style(|_, _| button::Style::default());
-            if enabled {
-                button.on_press(crate::Message::Workbench(Message::Button(key))).into()
-            } else {
-                button.into()
-            }
+            kit::sheet_button(
+                tokens,
+                i18n.t(item_label(item)),
+                false,
+                enabled.then_some(crate::Message::Workbench(Message::Button(key))),
+            )
         }
         Item::Member { key, option, .. } if locked => {
             kit::toggle_fixed(tokens, f32::from(values.member(manifest, key, option)))
@@ -1667,11 +1742,14 @@ fn item_row<'a>(
         | Item::Picture { hint_key: Some(hint), .. } => Some(i18n.t(manifest.label(values, hint)).to_owned()),
         _ => None,
     };
-    if matches!(item, Item::Select { .. })
-        && let Some(description) = hint.take()
-    {
-        below = Some(crate::typeface::HINT.text(description).color(tokens.t2).width(Length::Fill).into());
-    }
+    let note_key = match item {
+        Item::Slider { hint_key, .. }
+        | Item::Switch { hint_key, .. }
+        | Item::Select { hint_key, .. }
+        | Item::Picture { hint_key, .. } => hint_key,
+        _ => None,
+    };
+    let note = note_key.and_then(|key| hint.take().map(|description| notes.view(i18n, tokens, key, description)));
     let label = manifest
         .labels_when
         .iter()
@@ -1679,6 +1757,7 @@ fn item_row<'a>(
         .map_or(item_label(item), |(_, _, label)| label);
     let label = i18n.t(manifest.label(values, label)).to_owned();
     Row {
+        note,
         label,
         hint,
         sub: matches!(item, Item::Text { .. }) || manifest.indented.contains(&item.key()),
@@ -1687,7 +1766,11 @@ fn item_row<'a>(
     }
 }
 
-fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Message> {
+fn background_page<'a>(
+    look: Look<'a>,
+    tokens: Tokens,
+    notes: &crate::workbench_notes::Notes,
+) -> Element<'a, crate::Message> {
     let Look { i18n, theme, appearance, latent, sora, monet, nomand, has_background_upload, .. } = look;
     let current = Background::resolve(appearance.stored_background_mode());
     let choices: Vec<PictureOption> = Background::ALL
@@ -1702,6 +1785,7 @@ fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Mes
         crate::Message::Workbench(Message::BackgroundMode(Background::from_id(id).unwrap_or_default()))
     });
     let mode = Row {
+        note: None,
         label: i18n.t("options.visualizerBackgroundMode").to_owned(),
         hint: None,
         sub: false,
@@ -1709,8 +1793,14 @@ fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Mes
         control: space().into(),
     };
     let vignette = Row {
+        note: Some(notes.view(
+            i18n,
+            tokens,
+            "options.disableVisualizerVignetteDesc",
+            i18n.t("options.disableVisualizerVignetteDesc").to_owned(),
+        )),
         label: i18n.t("options.disableVisualizerVignette").to_owned(),
-        hint: Some(i18n.t("options.disableVisualizerVignetteDesc").to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::toggle(
@@ -1720,8 +1810,14 @@ fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Mes
         ),
     };
     let geometric = Row {
+        note: Some(notes.view(
+            i18n,
+            tokens,
+            "options.disableVisualizerGeometricBackgroundDesc",
+            i18n.t("options.disableVisualizerGeometricBackgroundDesc").to_owned(),
+        )),
         label: i18n.t("options.disableVisualizerGeometricBackground").to_owned(),
-        hint: Some(i18n.t("options.disableVisualizerGeometricBackgroundDesc").to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::toggle(
@@ -1741,7 +1837,7 @@ fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Mes
         true,
     )];
     if current == Background::Latent {
-        for (title, rows) in latent_groups(i18n, tokens, latent) {
+        for (title, rows) in latent_groups(i18n, tokens, latent, notes) {
             page = page.push(kit::group(tokens, Group { title, bare: false, rows, foot: None }, false));
         }
     }
@@ -1762,8 +1858,14 @@ fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Mes
                 title: i18n.t("options.soraBackgroundSettings").to_owned(),
                 bare: false,
                 rows: vec![Row {
+                    note: Some(notes.view(
+                        i18n,
+                        tokens,
+                        "options.soraBlankDesc",
+                        i18n.t("options.soraBlankDesc").to_owned(),
+                    )),
                     label: i18n.t("options.soraBlank").to_owned(),
-                    hint: Some(i18n.t("options.soraBlankDesc").to_owned()),
+                    hint: None,
                     sub: false,
                     below: None,
                     control: kit::toggle(
@@ -1789,8 +1891,14 @@ fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Mes
             false,
         ));
         let mut rows = vec![Row {
+            note: Some(notes.view(
+                i18n,
+                tokens,
+                "options.coverColorBackgroundDesc",
+                i18n.t("options.coverColorBackgroundDesc").to_owned(),
+            )),
             label: i18n.t("theme.addCoverColor").to_owned(),
-            hint: Some(i18n.t("options.coverColorBackgroundDesc").to_owned()),
+            hint: None,
             sub: false,
             below: None,
             control: kit::toggle(
@@ -1801,6 +1909,7 @@ fn background_page<'a>(look: Look<'a>, tokens: Tokens) -> Element<'a, crate::Mes
         }];
         if appearance.use_cover_color_bg {
             rows.push(Row {
+                note: None,
                 label: i18n.t("options.previewCoverBackgroundOpacity").to_owned(),
                 hint: None,
                 sub: true,
@@ -1856,24 +1965,17 @@ fn draw_latent_picture(frame: &mut Frame, rect: Rectangle, theme: &Theme) {
 }
 
 fn background_upload_row<'a>(i18n: &'a I18n, tokens: Tokens, has_image: bool) -> Row<'a, crate::Message> {
-    let action = |key, label, icon, enabled| {
-        let alpha = if enabled { 1.0 } else { 0.4 };
-        let ink = Color { a: tokens.t1.a * alpha, ..tokens.t1 };
-        button(
-            row![crate::icons::icon(icon, 14.0, ink), text(i18n.t(label)).size(13).color(ink)]
-                .height(32)
-                .spacing(6)
-                .align_y(Alignment::Center),
+    let action = |key, label, icon, enabled: bool| {
+        kit::action_button(
+            tokens,
+            i18n.t(label),
+            Some(icon),
+            false,
+            enabled.then_some(crate::Message::Workbench(Message::Button(key))),
         )
-        .height(32)
-        .padding([0, 12])
-        .style(move |_, status| {
-            let fill = if status == button::Status::Hovered { tokens.fill2 } else { tokens.fill };
-            kit::rounded_button(Color { a: fill.a * alpha, ..fill }, 8.0)
-        })
-        .on_press_maybe(enabled.then_some(crate::Message::Workbench(Message::Button(key))))
     };
     Row {
+        note: None,
         label: i18n.t("options.monetUploadBackground").to_owned(),
         hint: None,
         sub: false,
@@ -1896,6 +1998,7 @@ fn nomand_groups<'a>(
 ) -> Vec<(String, Vec<Row<'a, crate::Message>>)> {
     use folia_visualizer::nomand::{Effect, Number};
     let flag = |key: &str, value: bool, change: fn(&mut folia_visualizer::nomand::Tuning, bool)| Row {
+        note: None,
         label: i18n.t(key).to_owned(),
         hint: None,
         sub: false,
@@ -1908,6 +2011,7 @@ fn nomand_groups<'a>(
     };
     let mut basic = vec![
         Row {
+            note: None,
             label: i18n.t("options.nomandBackgroundSource").to_owned(),
             hint: None,
             sub: false,
@@ -1942,6 +2046,7 @@ fn nomand_groups<'a>(
             format!("{value:.2}")
         };
         Row {
+            note: None,
             label: i18n.t(&label).to_owned(),
             hint: None,
             sub: field == Number::Overlay,
@@ -1983,6 +2088,7 @@ fn nomand_groups<'a>(
         })
         .collect();
     let mut effects = vec![Row {
+        note: None,
         label: String::new(),
         hint: None,
         sub: false,
@@ -1995,6 +2101,7 @@ fn nomand_groups<'a>(
     }];
     if tuning.effect == Effect::Dithering {
         effects.push(Row {
+            note: None,
             label: i18n.t("options.nomandBackgroundDitheringType").to_owned(),
             hint: None,
             sub: false,
@@ -2082,6 +2189,7 @@ fn monet_groups<'a>(
                   selected,
                   labels: [&str; 2],
                   change: fn(&mut folia_visualizer::monet_background::Tuning, bool)| Row {
+        note: None,
         label: i18n.t(label).to_owned(),
         hint: None,
         sub: false,
@@ -2099,6 +2207,7 @@ fn monet_groups<'a>(
         ),
     };
     let toggle = |label: &str, value: bool, change: fn(&mut folia_visualizer::monet_background::Tuning, bool)| Row {
+        note: None,
         label: i18n.t(label).to_owned(),
         hint: None,
         sub: false,
@@ -2206,6 +2315,7 @@ fn monet_groups<'a>(
     if tuning.custom_wash {
         let color = tuning.wash_color;
         tint.push(Row {
+            note: None,
             label: i18n.t("options.monetBackgroundWashCustomColor").to_owned(),
             hint: None,
             sub: true,
@@ -2247,6 +2357,7 @@ fn monet_number<'a>(
         format!("{value:.0}%")
     };
     Row {
+        note: None,
         label: i18n.t(key).to_owned(),
         hint: None,
         sub: false,
@@ -2270,6 +2381,7 @@ fn latent_groups<'a>(
     i18n: &'a I18n,
     tokens: Tokens,
     latent: folia_visualizer::LatentTuning,
+    notes: &crate::workbench_notes::Notes,
 ) -> Vec<(String, Vec<Row<'a, crate::Message>>)> {
     use folia_visualizer::{LatentColors, LatentLayers};
     let layers = vec![
@@ -2283,6 +2395,7 @@ fn latent_groups<'a>(
     ];
     let mut head = vec![
         Row {
+            note: None,
             label: i18n.t("options.latentDisplayMode").to_owned(),
             hint: None,
             sub: false,
@@ -2294,6 +2407,7 @@ fn latent_groups<'a>(
             }),
         },
         Row {
+            note: None,
             label: i18n.t("options.latentColorSource").to_owned(),
             hint: None,
             sub: false,
@@ -2305,33 +2419,33 @@ fn latent_groups<'a>(
             }),
         },
         latent_flag(
+            notes,
             i18n,
             tokens,
             latent,
-            "options.latentDynamicOnlyInPlayer",
-            "options.latentDynamicOnlyInPlayerDesc",
+            ("options.latentDynamicOnlyInPlayer", "options.latentDynamicOnlyInPlayerDesc"),
             latent.dynamic_only,
             |tuning, on| {
                 tuning.dynamic_only = on;
             },
         ),
         latent_flag(
+            notes,
             i18n,
             tokens,
             latent,
-            "options.latentEnhancedBeatResponse",
-            "options.latentEnhancedBeatResponseDesc",
+            ("options.latentEnhancedBeatResponse", "options.latentEnhancedBeatResponseDesc"),
             latent.enhanced,
             |tuning, on| {
                 tuning.enhanced = on;
             },
         ),
         latent_flag(
+            notes,
             i18n,
             tokens,
             latent,
-            "options.nomandBackgroundOverlay",
-            "options.nomandBackgroundOverlayDesc",
+            ("options.nomandBackgroundOverlay", "options.nomandBackgroundOverlayDesc"),
             latent.overlay_on,
             |tuning, on| {
                 tuning.overlay_on = on;
@@ -2471,17 +2585,19 @@ fn latent_groups<'a>(
 }
 
 fn latent_flag<'a>(
+    notes: &crate::workbench_notes::Notes,
     i18n: &'a I18n,
     tokens: Tokens,
     latent: folia_visualizer::LatentTuning,
-    label: &'static str,
-    hint: &'static str,
+    copy: (&'static str, &'static str),
     on: bool,
     write: impl Fn(&mut folia_visualizer::LatentTuning, bool) + 'static,
 ) -> Row<'a, crate::Message> {
+    let (label, hint) = copy;
     Row {
+        note: Some(notes.view(i18n, tokens, hint, i18n.t(hint).to_owned())),
         label: i18n.t(label).to_owned(),
-        hint: Some(i18n.t(hint).to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::toggle(tokens, if on { 1.0 } else { 0.0 }, {
@@ -2502,6 +2618,7 @@ fn latent_number<'a>(
     change: impl Fn(f32) -> folia_visualizer::LatentTuning + 'a,
 ) -> Row<'a, crate::Message> {
     Row {
+        note: None,
         label,
         hint: None,
         sub: false,
@@ -2518,20 +2635,19 @@ fn latent_number<'a>(
 }
 
 fn font_page<'a>(
-    i18n: &'a I18n,
+    look: Look<'a>,
     tokens: Tokens,
-    theme: &'a Theme,
-    style: Style,
     sample: Sample,
-    font_scale: f32,
-    appearance: &AppearanceSettings,
+    notes: &crate::workbench_notes::Notes,
 ) -> Element<'a, crate::Message> {
+    let Look { i18n, theme, style, font_scale, appearance, .. } = look;
     let font = &appearance.lyrics_font;
     let samples = vec![
         (Sample::Default, i18n.t("options.previewTextDefault").to_owned()),
         (Sample::Reserved, i18n.t("options.previewTextReserved").to_owned()),
     ];
     let mut rows = vec![Row {
+        note: None,
         label: i18n.t("options.previewText").to_owned(),
         hint: None,
         sub: false,
@@ -2544,65 +2660,62 @@ fn font_page<'a>(
     rows.extend(font_tiles(i18n, tokens, theme, font));
     if font.style == FontStyle::Custom {
         rows.push(Row {
+            note: None,
             label: i18n.t("options.currentFont").to_owned(),
             hint: font.family.clone(),
             sub: true,
             below: None,
-            control: button(
-                text(i18n.t("options.chooseSystemFont")).size(crate::typeface::size::CONTROL).color(tokens.t1),
-            )
-            .padding([6, 10])
-            .on_press(crate::Message::Workbench(Message::Picker(Some(FontTarget::Lyrics))))
-            .style(|_, _| button::Style::default())
-            .into(),
+            control: kit::sheet_button(
+                tokens,
+                i18n.t("options.chooseSystemFont"),
+                false,
+                Some(crate::Message::Workbench(Message::Picker(Some(FontTarget::Lyrics)))),
+            ),
         });
     }
     rows.push(Row {
+        note: None,
         label: i18n.t("options.fontSize").to_owned(),
         hint: None,
         sub: false,
-        below: None,
-        control: if auto.is_some() {
-            kit::value(tokens, format!("{}%", (font_scale * 100.0).round()))
+        below: if auto.is_some() {
+            None
         } else {
-            row![
-                slider(0.85_f32..=1.4, font_scale, |value| crate::Message::Workbench(Message::Scale(
-                    FontTarget::Lyrics,
-                    value
-                )))
+            Some(
+                slider(0.85_f32..=1.4, font_scale, |value| {
+                    crate::Message::Workbench(Message::Scale(FontTarget::Lyrics, value))
+                })
                 .step(0.05_f32)
-                .width(160)
+                .width(Length::Fill)
+                .height(32)
                 .on_release(crate::Message::Workbench(Message::Commit))
-                .style(move |_, _| kit::slider_style(tokens)),
-                kit::value(tokens, format!("{}%", (font_scale * 100.0).round())),
-            ]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .into()
+                .style(move |_, _| kit::slider_style(tokens))
+                .into(),
+            )
         },
+        control: kit::value(tokens, format!("{}%", (font_scale * 100.0).round())),
     });
-    rows.push(weight_auto_row(tokens, i18n, FontTarget::Lyrics, font));
+    rows.push(weight_auto_row(notes, tokens, i18n, FontTarget::Lyrics, font));
     if let Some(weight) = font.weight {
         rows.push(weight_row(tokens, i18n, FontTarget::Lyrics, weight));
     }
     rows.push(Row {
+        note: None,
         label: i18n.t("options.visualizerOpacity").to_owned(),
         hint: None,
         sub: false,
-        below: None,
-        control: row![
+        below: Some(
             slider(0.2_f32..=1.0, appearance.visualizer_opacity, |value| {
                 crate::Message::Workbench(Message::Opacity(value))
             })
             .step(0.05_f32)
-            .width(160)
+            .width(Length::Fill)
+            .height(32)
             .on_release(crate::Message::Workbench(Message::Commit))
-            .style(move |_, _| kit::slider_style(tokens)),
-            kit::value(tokens, format!("{}%", (appearance.visualizer_opacity * 100.0).round())),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into(),
+            .style(move |_, _| kit::slider_style(tokens))
+            .into(),
+        ),
+        control: kit::value(tokens, format!("{}%", (appearance.visualizer_opacity * 100.0).round())),
     });
     let mut page = column![kit::group(
         tokens,
@@ -2651,6 +2764,7 @@ fn font_tiles<'a>(
         },
     ];
     vec![Row {
+        note: None,
         label: i18n.t("options.fontFamily").to_owned(),
         hint: None,
         sub: false,
@@ -2660,14 +2774,21 @@ fn font_tiles<'a>(
 }
 
 fn weight_auto_row<'a>(
+    notes: &crate::workbench_notes::Notes,
     tokens: Tokens,
     i18n: &'a I18n,
     target: FontTarget,
     font: &FontSettings,
 ) -> Row<'a, crate::Message> {
     Row {
+        note: Some(notes.view(
+            i18n,
+            tokens,
+            "options.fontWeightAutoDesc",
+            i18n.t("options.fontWeightAutoDesc").to_owned(),
+        )),
         label: i18n.t("options.fontWeightAuto").to_owned(),
-        hint: Some(i18n.t("options.fontWeightAutoDesc").to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::toggle(
@@ -2680,40 +2801,45 @@ fn weight_auto_row<'a>(
 
 fn weight_row<'a>(tokens: Tokens, i18n: &'a I18n, target: FontTarget, weight: u16) -> Row<'a, crate::Message> {
     Row {
+        note: None,
         label: i18n.t("options.fontWeight").to_owned(),
         hint: None,
         sub: true,
-        below: None,
-        control: row![
-            slider(100.0_f32..=900.0, f32::from(weight), move |value| crate::Message::Workbench(Message::Weight(
-                target, value
-            )))
+        below: Some(
+            slider(100.0_f32..=900.0, f32::from(weight), move |value| {
+                crate::Message::Workbench(Message::Weight(target, value))
+            })
             .step(10.0_f32)
-            .width(160)
+            .width(Length::Fill)
+            .height(32)
             .on_release(crate::Message::Workbench(Message::Commit))
-            .style(move |_, _| kit::slider_style(tokens)),
-            kit::value(tokens, weight.to_string()),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into(),
+            .style(move |_, _| kit::slider_style(tokens))
+            .into(),
+        ),
+        control: kit::value(tokens, weight.to_string()),
     }
 }
 
 fn subtitle_page<'a>(
-    i18n: &'a I18n,
+    look: Look<'a>,
     tokens: Tokens,
-    theme: &'a Theme,
-    appearance: &AppearanceSettings,
+    notes: &crate::workbench_notes::Notes,
 ) -> Element<'a, crate::Message> {
+    let Look { i18n, theme, appearance, .. } = look;
     let subtitle = &appearance.subtitle;
     let layout = &subtitle.layout;
     let count = layout.count() as u8;
     let rows = layout.rows();
     let mut subtitle_rows = vec![
         Row {
+            note: Some(notes.view(
+                i18n,
+                tokens,
+                "options.hidePlayerTranslationSubtitleDesc",
+                i18n.t("options.hidePlayerTranslationSubtitleDesc").to_owned(),
+            )),
             label: i18n.t("options.hidePlayerTranslationSubtitle").to_owned(),
-            hint: Some(i18n.t("options.hidePlayerTranslationSubtitleDesc").to_owned()),
+            hint: None,
             sub: false,
             below: None,
             control: kit::toggle(
@@ -2723,8 +2849,14 @@ fn subtitle_page<'a>(
             ),
         },
         Row {
+            note: Some(notes.view(
+                i18n,
+                tokens,
+                "options.subtitleOverlayRowsDesc",
+                i18n.t("options.subtitleOverlayRowsDesc").to_owned(),
+            )),
             label: i18n.t("options.subtitleOverlayRows").to_owned(),
-            hint: Some(i18n.t("options.subtitleOverlayRowsDesc").to_owned()),
+            hint: None,
             sub: false,
             below: None,
             control: kit::segmented(
@@ -2745,6 +2877,7 @@ fn subtitle_page<'a>(
         subtitle_rows.push(source_row(i18n, tokens, 0, source, true));
     } else {
         subtitle_rows.push(Row {
+            note: None,
             label: i18n.t("options.subtitleOverlayRow1").to_owned(),
             hint: None,
             sub: true,
@@ -2763,8 +2896,14 @@ fn subtitle_page<'a>(
         }
     }
     subtitle_rows.push(Row {
+        note: Some(notes.view(
+            i18n,
+            tokens,
+            "options.subtitleContentModeDesc",
+            i18n.t("options.subtitleContentModeDesc").to_owned(),
+        )),
         label: i18n.t("options.subtitleContentMode").to_owned(),
-        hint: Some(i18n.t("options.subtitleContentModeDesc").to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::select(
@@ -2786,25 +2925,30 @@ fn subtitle_page<'a>(
         ),
     });
     subtitle_rows.push(Row {
+        note: None,
         label: i18n.t("options.subtitleOverlayOpacity").to_owned(),
         hint: None,
         sub: false,
-        below: None,
-        control: row![
+        below: Some(
             slider(0.2_f32..=1.0, subtitle.opacity, |value| crate::Message::Workbench(Message::SubtitleOpacity(value)))
                 .step(0.05_f32)
-                .width(160)
+                .width(Length::Fill)
+                .height(32)
                 .on_release(crate::Message::Workbench(Message::Commit))
-                .style(move |_, _| kit::slider_style(tokens)),
-            kit::value(tokens, format!("{}%", (subtitle.opacity * 100.0).round())),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into(),
+                .style(move |_, _| kit::slider_style(tokens))
+                .into(),
+        ),
+        control: kit::value(tokens, format!("{}%", (subtitle.opacity * 100.0).round())),
     });
     subtitle_rows.push(Row {
+        note: Some(notes.view(
+            i18n,
+            tokens,
+            "options.subtitleOverlayBackgroundDesc",
+            i18n.t("options.subtitleOverlayBackgroundDesc").to_owned(),
+        )),
         label: i18n.t("options.subtitleOverlayBackground").to_owned(),
-        hint: Some(i18n.t("options.subtitleOverlayBackgroundDesc").to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::toggle(
@@ -2814,6 +2958,7 @@ fn subtitle_page<'a>(
         ),
     });
     subtitle_rows.push(Row {
+        note: None,
         label: i18n.t("options.subtitleUpcomingLyricsBlur").to_owned(),
         hint: None,
         sub: false,
@@ -2825,8 +2970,14 @@ fn subtitle_page<'a>(
         ),
     });
     subtitle_rows.push(Row {
+        note: Some(notes.view(
+            i18n,
+            tokens,
+            "options.showHarmonySubtitleDesc",
+            i18n.t("options.showHarmonySubtitleDesc").to_owned(),
+        )),
         label: i18n.t("options.showHarmonySubtitle").to_owned(),
-        hint: Some(i18n.t("options.showHarmonySubtitleDesc").to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::toggle(
@@ -2837,8 +2988,14 @@ fn subtitle_page<'a>(
     });
     if subtitle.show_harmony {
         subtitle_rows.push(Row {
+            note: Some(notes.view(
+                i18n,
+                tokens,
+                "options.harmonySubtitleBackgroundDesc",
+                i18n.t("options.harmonySubtitleBackgroundDesc").to_owned(),
+            )),
             label: i18n.t("options.harmonySubtitleBackground").to_owned(),
-            hint: Some(i18n.t("options.harmonySubtitleBackgroundDesc").to_owned()),
+            hint: None,
             sub: true,
             below: None,
             control: kit::toggle(
@@ -2849,8 +3006,14 @@ fn subtitle_page<'a>(
         });
     }
     let mut font_rows = vec![Row {
+        note: Some(notes.view(
+            i18n,
+            tokens,
+            "options.subtitleFontInheritsLyricsDesc",
+            i18n.t("options.subtitleFontInheritsLyricsDesc").to_owned(),
+        )),
         label: i18n.t("options.subtitleFontInheritsLyrics").to_owned(),
-        hint: Some(i18n.t("options.subtitleFontInheritsLyricsDesc").to_owned()),
+        hint: None,
         sub: false,
         below: None,
         control: kit::toggle(
@@ -2863,47 +3026,45 @@ fn subtitle_page<'a>(
         let font = &subtitle.font;
         let tiles = font_tiles(i18n, tokens, theme, font);
         for tile in tiles {
-            font_rows.push(Row { sub: true, ..tile });
+            font_rows.push(Row { note: None, sub: true, ..tile });
         }
         if font.style == FontStyle::Custom {
             font_rows.push(Row {
+                note: None,
                 label: i18n.t("options.currentFont").to_owned(),
                 hint: font.family.clone(),
                 sub: true,
                 below: None,
-                control: button(
-                    text(i18n.t("options.chooseSystemFont")).size(crate::typeface::size::CONTROL).color(tokens.t1),
-                )
-                .padding([6, 10])
-                .on_press(crate::Message::Workbench(Message::Picker(Some(FontTarget::Subtitle))))
-                .style(|_, _| button::Style::default())
-                .into(),
+                control: kit::sheet_button(
+                    tokens,
+                    i18n.t("options.chooseSystemFont"),
+                    false,
+                    Some(crate::Message::Workbench(Message::Picker(Some(FontTarget::Subtitle)))),
+                ),
             });
         }
-        font_rows.push(weight_auto_row(tokens, i18n, FontTarget::Subtitle, font));
+        font_rows.push(weight_auto_row(notes, tokens, i18n, FontTarget::Subtitle, font));
         if let Some(weight) = font.weight {
             font_rows.push(weight_row(tokens, i18n, FontTarget::Subtitle, weight));
         }
     }
     font_rows.push(Row {
+        note: None,
         label: i18n.t("options.subtitleFontScale").to_owned(),
         hint: None,
         sub: false,
-        below: None,
-        control: row![
-            slider(0.85_f32..=1.4, subtitle.font_scale, |value| crate::Message::Workbench(Message::Scale(
-                FontTarget::Subtitle,
-                value
-            )))
+        below: Some(
+            slider(0.85_f32..=1.4, subtitle.font_scale, |value| {
+                crate::Message::Workbench(Message::Scale(FontTarget::Subtitle, value))
+            })
             .step(0.05_f32)
-            .width(160)
+            .width(Length::Fill)
+            .height(32)
             .on_release(crate::Message::Workbench(Message::Commit))
-            .style(move |_, _| kit::slider_style(tokens)),
-            kit::value(tokens, format!("{}%", (subtitle.font_scale * 100.0).round())),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into(),
+            .style(move |_, _| kit::slider_style(tokens))
+            .into(),
+        ),
+        control: kit::value(tokens, format!("{}%", (subtitle.font_scale * 100.0).round())),
     });
     column![
         kit::group(
@@ -2961,6 +3122,7 @@ fn source_row<'a>(
         .unwrap_or("options.subtitleOverlayRow1");
     let selected = options.iter().find(|choice| choice.value == current).cloned().unwrap_or_else(|| options[0].clone());
     Row {
+        note: None,
         label: i18n.t(label_key).to_owned(),
         hint: None,
         sub: true,

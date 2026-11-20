@@ -2,6 +2,7 @@
 name = "Folia"
 
 [options]
+settingsRowDetails = "Detail"
 cacheMigratingBeforeClose = "Keluar setelah cache dipindahkan"
 cacheMigrating = "Memindahkan cache"
 cacheMigrationFailed = "Migrasi gagal. Direktori lama tetap digunakan. Periksa ruang, izin, atau berkas yang bertentangan."

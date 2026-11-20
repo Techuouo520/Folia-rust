@@ -81,6 +81,7 @@ mod wall_hover;
 mod wall_pan;
 mod wall_shift;
 mod workbench;
+mod workbench_notes;
 
 pub use background::{error_chain, format_time};
 pub use chrome::resize_viewport;
@@ -465,6 +466,7 @@ pub struct Shell {
 
 struct UiFrames {
     settings: bool,
+    workbench_controls: bool,
     login: bool,
     timeline: bool,
     splash: bool,
@@ -484,6 +486,7 @@ impl UiFrames {
     fn active(&self) -> bool {
         [
             self.settings,
+            self.workbench_controls,
             self.login,
             self.timeline,
             self.splash,
@@ -507,6 +510,7 @@ impl Shell {
     fn ui_frames(&self, now: std::time::Instant) -> UiFrames {
         UiFrames {
             settings: self.settings.as_ref().is_some_and(settings::Settings::animating),
+            workbench_controls: self.workbench.as_ref().is_some_and(workbench::Workbench::controls_animating),
             login: self.login.animating(now),
             timeline: self.timeline.is_open() && self.timeline.animating(now),
             splash: self.splash.showing(now),
@@ -538,6 +542,7 @@ impl Shell {
         let mut run = |active, message| if active { self.handle(message) } else { Task::none() };
         Task::batch([
             run(frames.settings, Message::Settings(settings::Message::Frame)),
+            run(frames.workbench_controls, Message::Workbench(workbench::Message::ControlsFrame)),
             run(frames.login, Message::Login(login::Message::Frame)),
             run(frames.timeline, Message::Timeline(timeline::Message::Frame)),
             run(frames.splash, Message::SplashFrame),

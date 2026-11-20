@@ -242,6 +242,7 @@ impl Sources {
             });
         let mut rows = vec![
             Row {
+                note: None,
                 label: i18n.t("options.sourceCustomOnly").into(),
                 hint: Some(i18n.t("options.sourceCustomOnlyHint").into()),
                 sub: false,
@@ -257,6 +258,7 @@ impl Sources {
                 },
             },
             Row {
+                note: None,
                 label: i18n.t("options.sourceImportUrl").into(),
                 hint: Some(i18n.t(if self.busy { "options.sourceWorking" } else { "options.sourceUrlHint" }).into()),
                 sub: false,
@@ -277,6 +279,7 @@ impl Sources {
                 control: control(i18n, tokens, "options.sourcePasteUrl", Message::PasteUrl, !self.busy),
             },
             Row {
+                note: None,
                 label: i18n.t("options.sourceImport").into(),
                 hint: Some(i18n.t(if self.busy { "options.sourceWorking" } else { "options.sourceImportHint" }).into()),
                 sub: false,
@@ -320,6 +323,7 @@ impl Sources {
             .spacing(6)
             .into();
             rows.push(Row {
+                note: None,
                 label: source.metadata.name.clone(),
                 hint: Some(hint),
                 sub: false,
@@ -336,6 +340,7 @@ impl Sources {
                 control(i18n, tokens, "options.sourceUpdateDismiss", Message::DismissUpdates, true)
             };
             rows.push(Row {
+                note: None,
                 label: i18n.format("options.sourceUpdate", &[("name", name)]),
                 hint: Some(alert.log.clone()),
                 sub: false,

@@ -28,6 +28,7 @@ fn option<'a>(
     control: Element<'a, crate::Message>,
 ) -> Row<'a, crate::Message> {
     Row {
+        note: None,
         label: i18n.t(label).to_owned(),
         hint: hint.map(|key| i18n.t(key).to_owned()),
         sub: false,
@@ -195,7 +196,7 @@ pub fn connection_group<'a>(state: &'a SongThemes, i18n: &'a I18n, tokens: Token
         ),
         key_row,
         option(i18n, "options.useSystemProxyAI", Some("options.useSystemProxyAIDesc"), toggle),
-        Row { label: String::new(), hint: None, sub: false, below: None, control: buttons },
+        Row { note: None, label: String::new(), hint: None, sub: false, below: None, control: buttons },
     ];
     if folia_ai::temperature_supported(&state.draft) {
         rows.insert(4, option(i18n, "options.openaiApiTemperature", None, temperature));
