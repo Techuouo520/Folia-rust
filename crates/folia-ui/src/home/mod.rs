@@ -158,6 +158,8 @@ enum Level {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Remote,
+    UnlockWindows,
     Catalog(crate::catalog::Message),
     Fold,
     Expand,
@@ -669,7 +671,9 @@ impl HomeChrome {
             | Message::SeamClear(_)
             | Message::BackdropLyrics(_)
             | Message::BackdropBlur(_)
-            | Message::TitleFocus { .. } => {}
+            | Message::TitleFocus { .. }
+            | Message::Remote
+            | Message::UnlockWindows => {}
         }
     }
 

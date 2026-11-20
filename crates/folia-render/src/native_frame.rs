@@ -24,6 +24,76 @@ const SUBCLASS_ID: usize = 0x464f_4c49;
 const DIRECT_COMPOSITION: usize = 1;
 const DRAG_PENDING: usize = 2;
 
+pub fn monitor_work_area(bounds: iced::Rectangle) -> Option<iced::Rectangle> {
+    let rect = RECT {
+        left: bounds.x as i32,
+        top: bounds.y as i32,
+        right: (bounds.x + bounds.width) as i32,
+        bottom: (bounds.y + bounds.height) as i32,
+    };
+    let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+    // SAFETY: Both APIs borrow valid stack records and GetMonitorInfoW writes only the declared structure.
+    let found = unsafe { GetMonitorInfoW(MonitorFromRect(&rect, MONITOR_DEFAULTTONULL), &mut info) };
+    (found != 0).then(|| {
+        iced::Rectangle::new(
+            iced::Point::new(info.rcWork.left as f32, info.rcWork.top as f32),
+            iced::Size::new(
+                (info.rcWork.right - info.rcWork.left) as f32,
+                (info.rcWork.bottom - info.rcWork.top) as f32,
+            ),
+        )
+    })
+}
+
+pub fn set_shape(window: &winit::window::Window, regions: &[iced::Rectangle]) -> Result<(), Error> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, RGN_OR, SetWindowRgn,
+    };
+    let hwnd = owned_window(window)?;
+    let scale = window.scale_factor() as f32;
+    // SAFETY: The empty region is an owned GDI object until it is transferred to the window below.
+    let combined = unsafe { CreateRectRgn(0, 0, 0, 0) };
+    if combined.is_null() {
+        return Err(Error::Style(std::io::Error::last_os_error()));
+    }
+    for rect in regions {
+        // SAFETY: Coordinates are values; every temporary region is deleted after the union operation.
+        let success = unsafe {
+            let piece = CreateRoundRectRgn(
+                (rect.x * scale).floor() as i32,
+                (rect.y * scale).floor() as i32,
+                ((rect.x + rect.width) * scale).ceil() as i32 + 1,
+                ((rect.y + rect.height) * scale).ceil() as i32 + 1,
+                (36.0 * scale) as i32,
+                (36.0 * scale) as i32,
+            );
+            if piece.is_null() {
+                false
+            } else {
+                let result = CombineRgn(combined, combined, piece, RGN_OR);
+                DeleteObject(piece);
+                result != 0
+            }
+        };
+        if !success {
+            // SAFETY: Ownership was not transferred; this releases the accumulated region.
+            unsafe {
+                DeleteObject(combined);
+            }
+            return Err(Error::Style(std::io::Error::last_os_error()));
+        }
+    }
+    // SAFETY: On success Windows owns combined; on failure we still own and release it.
+    if unsafe { SetWindowRgn(hwnd, combined, 1) } == 0 {
+        // SAFETY: The failed transfer leaves ownership of this region with the caller.
+        unsafe {
+            DeleteObject(combined);
+        }
+        return Err(Error::Style(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
 pub fn system_reduced_motion() -> std::io::Result<bool> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
     let mut enabled = 1i32;

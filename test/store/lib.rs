@@ -15,6 +15,36 @@ mod log_file;
 mod theme_settings;
 
 #[test]
+fn remote_defaults_presets_and_appearance_keep_window_security_separate() {
+    use folia_store::{RemoteAppearance, RemoteBackground, RemoteSettings, RemoteSource};
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::at(temp.path());
+    let mut settings: RemoteSettings = store.load().unwrap();
+    assert!(settings.always_on_top && settings.appearance.expand_cover);
+    assert!(!settings.click_through && !settings.hide_taskbar_icon && !settings.appearance.text_shade);
+    assert_eq!(settings.size_presets, [[1280, 720], [1920, 1080], [1080, 1920]]);
+    settings.appearance.background = RemoteBackground::Transparent;
+    settings.appearance.lyric_pairs = 2;
+    settings.appearance.lyric_rows =
+        [RemoteSource::Translation, RemoteSource::None, RemoteSource::Original, RemoteSource::Romanization];
+    settings.click_through = true;
+    settings.position = Some([-1920, 200]);
+    store.save(&settings).unwrap();
+    assert_eq!(store.load::<RemoteSettings>().unwrap(), settings);
+    let preset = settings.appearance.export().unwrap();
+    assert!(!preset.contains("click_through") && !preset.contains("position"));
+    assert_eq!(RemoteAppearance::import(&preset).unwrap(), settings.appearance);
+    assert!(RemoteAppearance::import("").is_err());
+    assert!(RemoteAppearance::import("volume = 0.5").is_err());
+    assert_eq!(RemoteBackground::Default.next().next().next(), RemoteBackground::Default);
+    settings.size = [f32::NAN, -1.0];
+    settings.size_presets[0] = [241, u32::MAX];
+    settings.normalize();
+    assert_eq!(settings.size, [602.0, 184.0]);
+    assert_eq!(settings.size_presets[0], [242, 4320]);
+}
+
+#[test]
 fn missing_file_gives_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let settings: GeneralSettings = Store::at(dir.path()).load().unwrap();

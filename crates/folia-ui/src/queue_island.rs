@@ -94,6 +94,7 @@ struct Drag {
 }
 
 pub struct QueueList {
+    row_height: f32,
     matches: Option<Vec<usize>>,
     id: Id,
     scroll: Scroll,
@@ -110,6 +111,7 @@ pub struct QueueList {
 impl Default for QueueList {
     fn default() -> Self {
         Self {
+            row_height: ROW,
             id: Id::unique(),
             matches: None,
             scroll: Scroll::default(),
@@ -125,6 +127,10 @@ impl Default for QueueList {
 }
 
 impl QueueList {
+    pub(crate) fn compact() -> Self {
+        Self { row_height: 36.0, ..Self::default() }
+    }
+
     /// The list came on screen: centre the playing row once it is laid out (`scrollToRow align: 'center'`).
     pub(crate) fn filter(&mut self, queue: &[Track], query: &str) {
         let terms = query.trim().to_lowercase();
@@ -175,13 +181,13 @@ impl QueueList {
 
     /// One frame: the pending centring, the smooth scroll, the drag's edge scrolling.
     pub fn frame(&mut self, queue: &[Track], current: Option<usize>, list_h: f32, now: Instant) -> Task<Message> {
-        let max = max_offset(self.row_count(queue.len()), list_h);
+        let max = max_offset(self.row_count(queue.len()), list_h, self.row_height);
         self.scroll.set_max(max);
         if self.center_pending {
             self.center_pending = false;
             self.following = current.and_then(|index| queue.get(index)).map(|track| track.id);
             let Some(index) = current.and_then(|i| self.row_of(i)) else { return self.scroll.apply(self.id.clone()) };
-            self.scroll.jump((index as f32 * ROW + ROW / 2.0 - list_h / 2.0).clamp(0.0, max));
+            self.scroll.jump((index as f32 * self.row_height + self.row_height / 2.0 - list_h / 2.0).clamp(0.0, max));
             return self.scroll.apply(self.id.clone());
         }
         if self.scroll.animating(now) {
@@ -214,14 +220,14 @@ impl QueueList {
         else {
             return;
         };
-        let max = max_offset(self.row_count(queue.len()), list_h);
+        let max = max_offset(self.row_count(queue.len()), list_h, self.row_height);
         self.scroll.set_max(max);
-        let (top, bottom) = (index as f32 * ROW, index as f32 * ROW + ROW);
+        let (top, bottom) = (index as f32 * self.row_height, index as f32 * self.row_height + self.row_height);
         let (view_top, view_bottom) = (self.scroll.offset(), self.scroll.offset() + list_h);
         let goal = if top >= view_top && bottom <= view_bottom {
             return;
         } else if bottom < view_top - list_h || top > view_bottom + list_h {
-            top + ROW / 2.0 - list_h / 2.0
+            top + self.row_height / 2.0 - list_h / 2.0
         } else if top < view_top {
             top
         } else {
@@ -232,7 +238,7 @@ impl QueueList {
 
     pub fn update(&mut self, message: Message, queue: &[Track], list_h: f32) -> (Task<Message>, Option<Change>) {
         let now = Instant::now();
-        self.scroll.set_max(max_offset(self.row_count(queue.len()), list_h));
+        self.scroll.set_max(max_offset(self.row_count(queue.len()), list_h, self.row_height));
         match message {
             Message::Scrolled(viewport) => {
                 self.scroll.scrolled(&viewport, now);
@@ -246,7 +252,7 @@ impl QueueList {
                 (self.scroll.apply(self.id.clone()), None)
             }
             Message::Press(at) => {
-                let index = ((at.y + self.scroll.offset()) / ROW).floor().max(0.0) as usize;
+                let index = ((at.y + self.scroll.offset()) / self.row_height).floor().max(0.0) as usize;
                 if let Some(track) = queue.get(index) {
                     self.scroll.jump(self.scroll.offset());
                     self.drag = Some(Drag {
@@ -255,7 +261,7 @@ impl QueueList {
                         track: track.id,
                         start: at,
                         pointer: at.y,
-                        grab: at.y + self.scroll.offset() - index as f32 * ROW,
+                        grab: at.y + self.scroll.offset() - index as f32 * self.row_height,
                         suppressed: edge_at(at.y, list_h),
                         active: false,
                     });
@@ -317,8 +323,8 @@ impl QueueList {
     /// `resolveDropIndex` for the pointer, and the rows between the old and new place start moving aside.
     fn retarget(&mut self, count: usize, now: Instant) {
         let Some(drag) = self.drag.as_mut() else { return };
-        let center = drag.pointer + self.scroll.offset() - drag.grab + ROW / 2.0;
-        let to = ((center / ROW).floor().max(0.0) as usize).min(count.saturating_sub(1));
+        let center = drag.pointer + self.scroll.offset() - drag.grab + self.row_height / 2.0;
+        let to = ((center / self.row_height).floor().max(0.0) as usize).min(count.saturating_sub(1));
         if to == drag.to {
             return;
         }
@@ -351,11 +357,11 @@ impl QueueList {
         now: Instant,
     ) -> Element<'a, Message> {
         let count = self.row_count(queue.len());
-        let total = count as f32 * ROW;
+        let total = count as f32 * self.row_height;
         let dragging = self.drag.as_ref().filter(|drag| drag.active);
         let offset = self.scroll.offset();
-        let first = ((offset / ROW).floor().max(0.0) as usize).saturating_sub(OVERSCAN);
-        let last = (((offset + list_h) / ROW).ceil().max(0.0) as usize + OVERSCAN).min(count);
+        let first = ((offset / self.row_height).floor().max(0.0) as usize).saturating_sub(OVERSCAN);
+        let last = (((offset + list_h) / self.row_height).ceil().max(0.0) as usize + OVERSCAN).min(count);
         let mut layers = vec![space().width(Length::Fill).height(Length::Fixed(total)).into()];
         for row in first..last {
             let index = self.matches.as_ref().map_or(row, |rows| rows[row]);
@@ -367,7 +373,7 @@ impl QueueList {
             }
             let shift = self.shifts.get(&index).map_or(0.0, |tween| tween.value(now));
             let face = queue_row(self, look, track, index, current == Some(index), dragging.is_some());
-            layers.push(pin(face).y(row as f32 * ROW + shift).width(Length::Fill).into());
+            layers.push(pin(face).y(row as f32 * self.row_height + shift).width(Length::Fill).into());
         }
         let rows = stack(layers).width(Length::Fill).height(Length::Fixed(total));
         let list = scrollable(container(rows).padding([0.0, SIDE]))
@@ -385,7 +391,7 @@ impl QueueList {
         if let Some(drag) = dragging
             && let Some(track) = queue.get(drag.from).filter(|track| track.id == drag.track)
         {
-            let y = (drag.pointer - drag.grab).clamp(-ROW / 2.0, list_h - ROW / 2.0);
+            let y = (drag.pointer - drag.grab).clamp(-self.row_height / 2.0, list_h - self.row_height / 2.0);
             let ghost = container(ghost(look, track)).padding([0.0, SIDE]);
             face = face.push(pin(ghost).y(y).width(Length::Fill));
         }
@@ -405,6 +411,7 @@ pub struct Look<'a> {
     pub daylight: bool,
     /// The panel's queue keeps all three actions on the playing row; the island leaves the song where it is.
     pub actions_on_current: bool,
+    pub actions_enabled: bool,
     /// The wall tools island drags its rows by a handle; the player panel's queue only scrolls.
     pub reorder: bool,
     pub row: RowLook,
@@ -497,7 +504,7 @@ fn queue_row<'a>(
     // The actions float over the right end: the song button fills the row, so a plain Row would let it take
     // the press first and open the song instead of the action. A Stack updates its last child first. The
     // stack stays in place when the row is not hot (an empty layer), so iced never keeps a stale action row.
-    let actions = if hot {
+    let actions = if hot && look.actions_enabled {
         // The island leaves the playing row alone; the panel's queue offers every action there too.
         let current_actions = !active || look.actions_on_current;
         let mut actions = row![].align_y(Alignment::Center);
@@ -535,7 +542,7 @@ fn queue_row<'a>(
     let alpha = ink.a;
     let body = container(face)
         .width(Length::Fill)
-        .height(Length::Fixed(ROW))
+        .height(Length::Fixed(list.row_height))
         .padding(iced::Padding { top: 2.0, right: 4.0, bottom: 2.0, left: 0.0 })
         .align_y(Alignment::Center)
         .style(move |_| container::Style {
@@ -621,8 +628,8 @@ fn ghost<'a>(look: Look<'a>, track: &'a Track) -> Element<'a, Message> {
         .into()
 }
 
-fn max_offset(count: usize, list_h: f32) -> f32 {
-    (count as f32 * ROW - list_h).max(0.0)
+fn max_offset(count: usize, list_h: f32, row_height: f32) -> f32 {
+    (count as f32 * row_height - list_h).max(0.0)
 }
 
 /// `queueRowShift`: rows between the two places move one row towards where the dragged song left.

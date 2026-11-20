@@ -420,6 +420,7 @@ fn island_face<'a>(home: &'a HomeChrome, face: Face<'a>, geo: &Geometry, now: In
             ink: paint.text(),
             daylight: paint.daylight(),
             actions_on_current: false,
+            actions_enabled: true,
             reorder: home.queue_search.as_ref().is_none_or(|query| query.trim().is_empty()),
             row: queue_island::ISLAND_ROW,
         };

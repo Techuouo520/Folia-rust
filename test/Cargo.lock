@@ -1797,6 +1797,7 @@ dependencies = [
  "wgpu",
  "windows-sys 0.61.2",
  "winit",
+ "x11rb",
 ]
 
 [[package]]
@@ -6820,6 +6821,7 @@ dependencies = [
  "iced_wgpu",
  "image",
  "pollster",
+ "serde_json",
  "tempfile",
  "toml",
  "wgpu",

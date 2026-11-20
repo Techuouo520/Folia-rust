@@ -17,6 +17,11 @@ const APP_DIR: &str = if cfg!(debug_assertions) { "Folia-rust-dev" } else { "Fol
 const DEFAULT_LOG: &str =
     if cfg!(debug_assertions) { "debug,wgpu=warn,naga=warn,iced=info,cosmic_text=warn" } else { "info" };
 
+// Keep the event-loop state small on the Windows main-thread stack.
+struct Desktop {
+    shell: Box<Shell>,
+}
+
 fn window_settings() -> anyhow::Result<iced::window::Settings> {
     let image =
         image::load_from_memory_with_format(include_bytes!("../../../assets/icon.png"), image::ImageFormat::Png)?
@@ -130,14 +135,24 @@ fn main() -> anyhow::Result<()> {
         system_locale,
     };
     let interface_font = folia_ui::interface_font_for(init.i18n.language());
-    let result = iced::application(move || Shell::new(init.clone()), Shell::update, host_view)
-        .default_font(interface_font)
-        .title(Shell::title)
-        .theme(Shell::theme)
-        .style(Shell::window_style)
-        .subscription(Shell::subscription)
-        .window(window_settings()?)
-        .run();
+    let settings = window_settings()?;
+    let result = iced::daemon(
+        move || {
+            let (shell, task) = Shell::boot(init.clone(), settings.clone());
+            (Desktop { shell: Box::new(shell) }, task)
+        },
+        |desktop: &mut Desktop, message| desktop.shell.update(message),
+        host_view,
+    )
+    .default_font(interface_font)
+    .title(|desktop: &Desktop, id| desktop.shell.title_for(id))
+    .theme(|desktop: &Desktop, _| desktop.shell.theme())
+    .style(|desktop: &Desktop, theme| iced::theme::Style {
+        background_color: iced::Color::TRANSPARENT,
+        ..desktop.shell.window_style(theme)
+    })
+    .subscription(|desktop: &Desktop| desktop.shell.subscription())
+    .run();
     if let Err(err) = result {
         tracing::error!(error = &err as &dyn std::error::Error, "application initialization failed");
         log.sync();
@@ -152,6 +167,9 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn host_view(shell: &Shell) -> iced::Element<'_, folia_ui::Message, iced::Theme, folia_render::HostRenderer> {
-    folia_render::host(shell.view())
+fn host_view(
+    desktop: &Desktop,
+    window: iced::window::Id,
+) -> iced::Element<'_, folia_ui::Message, iced::Theme, folia_render::HostRenderer> {
+    folia_render::host(desktop.shell.view_window(window))
 }

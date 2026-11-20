@@ -16,6 +16,7 @@ mod memory;
 mod playback;
 mod playback_session;
 mod player;
+mod remote;
 mod runtime_log;
 mod scene;
 mod smart_beat;
@@ -38,6 +39,7 @@ pub use memory::{MEMORY_HISTORY, MemoryHistory, MemoryMonitor, MemorySample};
 pub use playback::PlaybackSettings;
 pub use playback_session::{FmSession, PlaybackSession};
 pub use player::{BOTTOM_BAR_BASE, PlayerSettings, bottom_bar_max_offset, clamp_bottom_bar_offset};
+pub use remote::{RemoteAppearance, RemoteBackground, RemoteChrome, RemoteSettings, RemoteSource};
 pub use runtime_log::{LogLine, RuntimeLog, clock, error_chain, iso};
 pub use scene::{SceneOptions, SceneSettings};
 pub use smart_beat::{

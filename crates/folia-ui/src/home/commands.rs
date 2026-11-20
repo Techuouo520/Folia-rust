@@ -8,6 +8,8 @@ use iced::{Alignment, Element, Length};
 pub(super) fn view<'a>(host: &Host<'a>, query: &'a str) -> Element<'a, Message> {
     let wall = host.wall;
     let mut choices = vec![
+        ("remote.open", "", Some(Message::Remote)),
+        ("remote.unlock", "", Some(Message::UnlockWindows)),
         ("options.chooseCacheDirectory", "", Some(Message::CacheDirectory)),
         ("options.neteaseScrobble", "", (host.scrobble_ready || host.scrobble_enabled).then_some(Message::Scrobble)),
         ("wallTools.shuffle", "R", (!host.fm && host.queue.len() > 1).then_some(Message::Shuffle)),

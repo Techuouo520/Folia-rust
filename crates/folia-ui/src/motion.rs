@@ -82,6 +82,12 @@ impl Tween {
         self.at = now;
     }
 
+    pub fn snap(&mut self, value: f32, now: Instant) {
+        self.from = value;
+        self.goal = value;
+        self.at = now;
+    }
+
     /// The value `set` is easing towards.
     pub fn goal(&self) -> f32 {
         self.goal

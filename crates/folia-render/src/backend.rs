@@ -144,6 +144,14 @@ pub async fn device_with_options(
 
 // Only a weak native-window handle is shared; winit dispatches native changes to its event loop.
 static WINDOW: Mutex<Weak<winit::window::Window>> = Mutex::new(Weak::new());
+static WINDOWS: Mutex<Vec<Weak<winit::window::Window>>> = Mutex::new(Vec::new());
+
+/// Resolves a live compositor window without extending its lifetime beyond the operation.
+pub fn native_window(raw_id: u64) -> Option<Arc<winit::window::Window>> {
+    let mut windows = WINDOWS.lock();
+    windows.retain(|window| window.strong_count() > 0);
+    windows.iter().filter_map(Weak::upgrade).find(|window| u64::from(window.id()) == raw_id)
+}
 
 // Prepared before window creation and read when the compositor receives the native window.
 #[cfg(windows)]
@@ -162,7 +170,17 @@ pub(crate) fn remember(window: &impl std::any::Any, direct_composition: bool) {
     #[cfg(not(windows))]
     let _ = direct_composition;
     if let Some(window) = (window as &dyn std::any::Any).downcast_ref::<Arc<winit::window::Window>>() {
-        *WINDOW.lock() = Arc::downgrade(window);
+        let mut primary = WINDOW.lock();
+        if primary.upgrade().is_none() {
+            *primary = Arc::downgrade(window);
+        }
+        drop(primary);
+        let mut windows = WINDOWS.lock();
+        windows.retain(|window| window.strong_count() > 0);
+        if !windows.iter().any(|entry| entry.ptr_eq(&Arc::downgrade(window))) {
+            windows.push(Arc::downgrade(window));
+        }
+        drop(windows);
         #[cfg(windows)]
         if let Err(err) = configure_native_frame(window, direct_composition) {
             tracing::error!(error = &err as &dyn std::error::Error, "native frame setup failed");

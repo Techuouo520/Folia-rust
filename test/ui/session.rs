@@ -5,7 +5,7 @@ use folia_ui::{HomeMessage, Message, Playback, PlaybackMessage, Shell};
 use iced::Task;
 use iced::futures::StreamExt;
 
-fn complete(shell: &mut Shell, initial: Task<Message>) -> usize {
+pub(super) fn complete(shell: &mut Shell, initial: Task<Message>) -> usize {
     let mut tasks = vec![initial];
     let mut exits = 0;
     while let Some(task) = tasks.pop() {

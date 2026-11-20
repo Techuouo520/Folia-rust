@@ -1575,6 +1575,7 @@ fn queue_tab<'a>(panel: &'a PlayerPanel, view: View<'a>, tokens: Faded, ink: Col
         ink,
         daylight: view.daylight,
         actions_on_current: true,
+        actions_enabled: true,
         reorder: false,
         row: queue_island::PANEL_ROW,
     };

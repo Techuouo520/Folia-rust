@@ -24,17 +24,20 @@ pub use backdrop::{
 #[cfg(feature = "dev")]
 pub use backdrop::{external_paints, foreground_held, underlay_binds};
 pub use blur::{Pyramid, levels_for_radius, pyramid_bytes, source_size};
-pub use frame::{frames_at, grain_frame};
+pub use frame::{frames_at, grain_frame, window_frames};
 pub use plate::{Plate, compile_plate, css_saturate, glass_over, source_over, to_linear_channel, to_srgb_channel};
 pub use scene::{Program as StyleScene, capture as capture_canvas, capture_layers};
 pub use wash::{Glow, Veil, Wash};
 
 pub mod backend;
+pub mod desktop_window;
 mod host;
 mod host_widget;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod native_frame;
+#[cfg(target_os = "linux")]
+mod x11_window;
 pub use host::Renderer as HostRenderer;
 pub use host_widget::host;
 

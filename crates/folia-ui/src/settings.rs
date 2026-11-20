@@ -33,6 +33,7 @@ const LIMIT_WHEN_SWITCHED_ON: FrameRate = FrameRate::Fps120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
+    Remote,
     Appearance,
     Player,
     General,
@@ -47,6 +48,7 @@ pub enum Section {
 impl Section {
     fn label_key(self) -> &'static str {
         match self {
+            Section::Remote => "options.settingsPageRemote",
             Section::Appearance => "options.settingsPageAppearance",
             Section::Player => "options.settingsPagePlayer",
             Section::General => "options.settingsPageGeneral",
@@ -61,6 +63,7 @@ impl Section {
 
     fn icon(self) -> Icon {
         match self {
+            Section::Remote => Icon::Radio,
             Section::Appearance => Icon::Contrast,
             Section::Player => Icon::MonitorPlay,
             Section::General => Icon::SlidersHorizontal,
@@ -76,7 +79,7 @@ impl Section {
 
 /// The side list's groups, `SETTINGS_NAV_GROUP_SPECS` without the categories Folia-rust has nothing on yet.
 const NAV: [(&str, &[Section]); 3] = [
-    ("options.settingsGroupInterface", &[Section::Appearance, Section::Player]),
+    ("options.settingsGroupInterface", &[Section::Appearance, Section::Player, Section::Remote]),
     (
         "options.settingsGroupApp",
         &[Section::General, Section::Graphics, Section::Sources, Section::Ai, Section::Integration, Section::Storage],
@@ -108,7 +111,20 @@ const SERVICES: GroupDef = GroupDef { id: "services", title: "options.settingsHe
 const MEDIA: GroupDef = GroupDef { id: "mediaCache", title: "options.mediaCache", bare: false };
 
 /// Every option the pages draw, in page order: what the search finds.
+const REMOTE: GroupDef = GroupDef { id: "remoteControl", title: "options.remoteControlWindowGroup", bare: false };
+const REMOTE_LYRICS: GroupDef = GroupDef { id: "remoteLyrics", title: "options.remoteLyricsGroup", bare: false };
+
 const OPTIONS: &[(Section, GroupDef, &str)] = &[
+    (Section::Remote, REMOTE, "options.hideRemoteControlTaskbarIcon"),
+    (Section::Remote, REMOTE, "options.hideRemoteControlTitlebar"),
+    (Section::Remote, REMOTE, "options.remoteControlClickThrough"),
+    (Section::Remote, REMOTE, "options.remoteControlExpandCover"),
+    (Section::Remote, REMOTE, "options.remoteControlTextShade"),
+    (Section::Remote, REMOTE_LYRICS, "options.remoteLyricPairs"),
+    (Section::Remote, REMOTE_LYRICS, "options.remoteLyricRow1"),
+    (Section::Remote, REMOTE_LYRICS, "options.remoteLyricRow2"),
+    (Section::Remote, REMOTE_LYRICS, "options.remoteLyricRow3"),
+    (Section::Remote, REMOTE_LYRICS, "options.remoteLyricRow4"),
     (Section::Storage, MEDIA, "options.cacheDirectory"),
     (Section::Integration, SERVICES, "options.neteaseScrobble"),
     (Section::Ai, AI, "options.aiProvider"),
@@ -203,6 +219,8 @@ struct Motion {
 
 /// What the pages show and change; the shell owns the values.
 pub struct Values<'a> {
+    pub remote: &'a folia_store::RemoteSettings,
+    pub remote_taskbar_available: bool,
     pub storage: &'a crate::storage::Storage,
     pub scrobble_enabled: bool,
     pub scrobble_ready: bool,
@@ -799,6 +817,9 @@ impl Settings {
             control,
         };
         match self.section {
+            Section::Remote => {
+                crate::remote_settings::groups(values.remote, values.remote_taskbar_available, i18n, tokens)
+            }
             Section::Ai => vec![crate::ai_settings::connection_group(values.song_themes, i18n, tokens)],
             Section::Storage => vec![values.storage.group(i18n, tokens)],
             Section::Appearance => {

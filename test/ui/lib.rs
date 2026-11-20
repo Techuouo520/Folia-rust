@@ -16,6 +16,7 @@ mod picker;
 mod player_bar;
 mod player_fixture;
 mod polish;
+mod remote;
 mod reorder;
 mod scene;
 mod scroll_timeline;

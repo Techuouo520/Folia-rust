@@ -31,6 +31,7 @@ pub fn resize_viewport(current: iced::Size, reported: iced::Size, fullscreen: bo
 
 #[derive(Debug, Clone, Copy)]
 pub enum Message {
+    Remote,
     Drag,
     /// Press on the drag strip. The window starts moving only after the pointer travels a few pixels,
     /// so a double click is not swallowed by the system move loop.
@@ -104,7 +105,7 @@ pub const REVEAL_HEIGHT: f32 = 56.0;
 const BACKDROP_MS: f64 = 180.0;
 /// Button reveal and hover from `WindowControls.tsx`: Tailwind `transition-all duration-200`.
 const BUTTON_MS: f64 = 200.0;
-const BUTTONS: usize = 4;
+const BUTTONS: usize = 5;
 /// Hidden buttons sit 4px higher, `-translate-y-1`.
 const BUTTON_LIFT: f32 = 4.0;
 
@@ -184,6 +185,7 @@ impl Titlebar {
         };
         // Only fullscreen and maximize carry a `title` in the original.
         let specs = [
+            (Icon::Radio, 13.0, Some(i18n.t("remote.open")), Message::Remote),
             (fullscreen_icon, 13.0, Some(i18n.t(fullscreen_key)), Message::ToggleFullscreen),
             (Icon::Minus, 16.0, None, Message::Minimize),
             (maximize_icon, 13.0, Some(i18n.t(maximize_key)), Message::ToggleMaximize),

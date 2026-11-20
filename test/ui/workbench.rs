@@ -189,11 +189,18 @@ fn workbench_frames_follow_the_selected_limit_and_pause() {
     let temporary = tempfile::tempdir().unwrap();
     let (mut shell, initial) = Shell::new(super::player_fixture::init(temporary.path()));
     drop(initial);
+    let window = iced::window::Id::unique();
+    drop(shell.update(Message::WindowReady(Some(window))));
     drop(shell.update(Message::OpenWorkbench));
     for rate in FrameRate::ALL {
         drop(shell.update(Message::FrameRate(rate)));
         let expected = if rate.fps().is_some() { 10 } else { 150 };
-        let frames = visual_frames(shell.subscription(), expected, Duration::from_secs(5));
+        let frames = visual_frames(
+            shell.subscription(),
+            window,
+            if rate.fps().is_some() { expected } else { 300 },
+            if rate.fps().is_some() { Duration::from_secs(5) } else { Duration::from_millis(250) },
+        );
         assert_eq!(frames.len(), expected, "{rate:?} did not keep producing visual frames");
         if let Some(fps) = rate.fps() {
             let elapsed = frames.last().unwrap().duration_since(frames[0]);
@@ -204,13 +211,14 @@ fn workbench_frames_follow_the_selected_limit_and_pause() {
     }
     drop(shell.update(Message::Workbench(WorkbenchMessage::Pause)));
     assert!(
-        visual_frames(shell.subscription(), 1, Duration::from_millis(250)).is_empty(),
+        visual_frames(shell.subscription(), window, 1, Duration::from_millis(250)).is_empty(),
         "paused Builtin preview kept its frame loop"
     );
 }
 
 fn visual_frames(
     subscription: iced::Subscription<folia_ui::Message>,
+    window: iced::window::Id,
     wanted: usize,
     timeout: std::time::Duration,
 ) -> Vec<std::time::Instant> {
@@ -218,11 +226,14 @@ fn visual_frames(
     use iced::futures::{StreamExt, stream};
     let runtime = iced::executor::Default::new().unwrap();
     runtime.block_on(async {
+        let other = iced::window::Id::unique();
         let redraws: Vec<_> = (0..150)
-            .map(|_| Event::Interaction {
-                window: iced::window::Id::unique(),
-                event: iced::Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now())),
-                status: iced::event::Status::Ignored,
+            .flat_map(|_| {
+                [window, other].map(|window| Event::Interaction {
+                    window,
+                    event: iced::Event::Window(iced::window::Event::RedrawRequested(std::time::Instant::now())),
+                    status: iced::event::Status::Ignored,
+                })
             })
             .collect();
         let streams = into_recipes(subscription)

@@ -2,6 +2,16 @@
 
 use std::time::{Duration, Instant};
 
+/// One visible window drives display-rate updates, even when a compositor owns several surfaces.
+pub fn window_frames(window: Option<iced::window::Id>) -> iced::Subscription<Instant> {
+    iced::event::listen_raw(|event, _, id| match event {
+        iced::Event::Window(iced::window::Event::RedrawRequested(at)) => Some((id, at)),
+        _ => None,
+    })
+    .with(window)
+    .filter_map(|(selected, (id, at))| (selected == Some(id)).then_some(at))
+}
+
 /// Wakes an active visual surface at its cap without accumulating missed frames.
 pub fn frames_at(fps: u32) -> iced::Subscription<Instant> {
     iced::Subscription::run_with(fps.max(1), |fps| {

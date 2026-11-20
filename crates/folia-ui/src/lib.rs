@@ -55,6 +55,12 @@ mod queue_island;
 pub mod radio;
 mod radio_art;
 mod radio_backdrop;
+pub mod remote;
+mod remote_face;
+mod remote_host;
+mod remote_lyrics;
+mod remote_settings;
+mod remote_view;
 mod reorder;
 mod scene_settings;
 mod scene_sound;
@@ -218,6 +224,9 @@ enum NavigationEntry {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Remote(remote::Message),
+    RemoteInput(iced::window::Id, Box<Message>),
+    MainNative(u64),
     Storage(storage::Message),
     #[cfg(target_os = "linux")]
     Media(folia_media::Command),
@@ -409,6 +418,8 @@ pub struct Shell {
     status_serial: u64,
     empty_lyrics: Lyrics,
     window: Option<iced::window::Id>,
+    main_raw_id: Option<u64>,
+    remote: remote::State,
     maximized: bool,
     fullscreen: bool,
     /// Origin for [`ChromeClock`] milliseconds.
@@ -464,7 +475,9 @@ pub struct Shell {
     system_fonts: Vec<String>,
 }
 
+#[derive(Default)]
 struct UiFrames {
+    remote: bool,
     settings: bool,
     workbench_controls: bool,
     login: bool,
@@ -485,6 +498,7 @@ struct UiFrames {
 impl UiFrames {
     fn active(&self) -> bool {
         [
+            self.remote,
             self.settings,
             self.workbench_controls,
             self.login,
@@ -508,7 +522,11 @@ impl UiFrames {
 
 impl Shell {
     fn ui_frames(&self, now: std::time::Instant) -> UiFrames {
+        if self.graphics.background_throttling && folia_render::backend::window_hidden() {
+            return UiFrames { remote: self.remote.animating(now), ..Default::default() };
+        }
         UiFrames {
+            remote: self.remote.animating(now),
             settings: self.settings.as_ref().is_some_and(settings::Settings::animating),
             workbench_controls: self.workbench.as_ref().is_some_and(workbench::Workbench::controls_animating),
             login: self.login.animating(now),
@@ -535,12 +553,27 @@ impl Shell {
     }
 
     fn advance_ui_frames(&mut self) -> Task<Message> {
+        self.advance_remote_shift();
+        if let Some(at) = self.remote.error_at
+            && at.elapsed().as_millis() > 3500
+        {
+            if self.status.as_ref().is_some_and(|(_, _, started)| *started == at) {
+                self.status = None;
+            }
+            self.remote.error_at = None;
+        }
+        self.remote.frame(std::time::Instant::now());
+        if self.graphics.background_throttling && folia_render::backend::window_hidden() {
+            return self.advance_remote_queue();
+        }
         let frames = self.ui_frames(std::time::Instant::now());
         if !frames.active() {
             return Task::none();
         }
+        let remote_queue = self.advance_remote_queue();
         let mut run = |active, message| if active { self.handle(message) } else { Task::none() };
         Task::batch([
+            remote_queue,
             run(frames.settings, Message::Settings(settings::Message::Frame)),
             run(frames.workbench_controls, Message::Workbench(workbench::Message::ControlsFrame)),
             run(frames.login, Message::Login(login::Message::Frame)),
@@ -664,6 +697,8 @@ impl Shell {
             omni,
             empty_lyrics: Lyrics::default(),
             window: None,
+            main_raw_id: None,
+            remote: remote::State::default(),
             maximized: false,
             fullscreen: false,
             started: std::time::Instant::now(),
@@ -721,9 +756,11 @@ impl Shell {
         let sources = shell.sources.restore(shell.omni.clone(), shell.store.clone(), shell.data_dir.clone());
         let motion = if shell.graphics.motion.follow_system { graphics::poll() } else { Task::none() };
         let restore = playback_session::load(shell.store.clone());
+        let remote = remote::load(shell.store.clone());
         (
             shell,
             Task::batch([
+                remote,
                 load.map(Message::Library),
                 open,
                 window,
@@ -977,6 +1014,25 @@ impl Shell {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let message = if let Message::RemoteInput(id, message) = message {
+            if self.remote.id != Some(id) {
+                return Task::none();
+            }
+            match &*message {
+                Message::Playback(playback::Message::Seeking(_)) => self.remote.seek_drag = true,
+                Message::Playback(playback::Message::SeekDone) if !std::mem::take(&mut self.remote.seek_drag) => {
+                    return Task::none();
+                }
+                Message::Playback(playback::Message::Volume(_)) => self.remote.volume_drag = true,
+                Message::Playback(playback::Message::VolumeDone) if !std::mem::take(&mut self.remote.volume_drag) => {
+                    return Task::none();
+                }
+                _ => {}
+            }
+            *message
+        } else {
+            message
+        };
         if self.closing {
             return match message {
                 Message::Session(message) => self.playback_session.update(message, &mut self.playback, &self.store),
@@ -1219,6 +1275,8 @@ impl Shell {
         self.sync_native_blur();
         let analysis = self.sync_smart_beat(frame_tick);
         let session = self.playback_session.observe(&self.playback, &self.store, seek_finished);
+        let remote = self.sync_remote_visuals();
+        let task = Task::batch([task, remote]);
         let task = if analysis.units() == 0 { task } else { Task::batch([task, analysis]) };
         if session.units() == 0 { task } else { Task::batch([task, session]) }
     }
@@ -1528,6 +1586,22 @@ impl Shell {
 
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Remote(message) => self.remote_message(message),
+            Message::RemoteInput(id, message) => {
+                if self.remote.id == Some(id) {
+                    self.handle(*message)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::MainNative(raw) => {
+                self.main_raw_id = Some(raw);
+                if let Some(window) = folia_render::backend::native_window(raw) {
+                    self.remote.capabilities = folia_render::desktop_window::capabilities(&window);
+                }
+                self.apply_main_window();
+                Task::none()
+            }
             #[cfg(target_os = "linux")]
             Message::Media(command) => self.media_command(command),
             Message::UiFrame => {
@@ -1541,6 +1615,9 @@ impl Shell {
             Message::VisualFrame => {
                 let playback = self.handle(Message::Playback(playback::Message::Tick));
                 let ui = self.advance_ui_frames();
+                if self.graphics.background_throttling && folia_render::backend::window_hidden() {
+                    return Task::batch([playback, ui]);
+                }
                 let lattice = if self.page == Page::Lattice {
                     self.handle(Message::Lattice(self.lattice_generation, lattice::Message::Frame))
                 } else {
@@ -1914,7 +1991,12 @@ impl Shell {
             Message::OpenFiles(_) => Task::none(),
             Message::WindowReady(id) => {
                 self.window = id.or(self.window);
-                self.window.map_or_else(Task::none, |id| iced::window::scale_factor(id).map(Message::WindowScale))
+                self.window.map_or_else(Task::none, |id| {
+                    Task::batch([
+                        iced::window::scale_factor(id).map(Message::WindowScale),
+                        iced::window::raw_id::<Message>(id).map(Message::MainNative),
+                    ])
+                })
             }
             Message::WindowScale(scale) => {
                 self.window_scale = scale.max(0.5);
@@ -2503,6 +2585,14 @@ impl Shell {
     }
 
     fn request_close(&mut self) -> Task<Message> {
+        if self.remote.id.is_some() {
+            self.remote.close_application = true;
+            return self.close_remote();
+        }
+        if self.remote.saving || self.remote.finishing_sliders > 0 {
+            self.remote.close_application = true;
+            return Task::none();
+        }
         if self.storage.defer_close() {
             return Task::none();
         }
@@ -2567,6 +2657,7 @@ impl Shell {
             }
             chrome::Message::Resize(direction) if !self.fullscreen => iced::window::drag_resize(id, direction),
             chrome::Message::Resize(_) => Task::none(),
+            chrome::Message::Remote => self.remote_message(remote::Message::Open),
             chrome::Message::Minimize => iced::window::minimize(id, true),
             chrome::Message::ToggleMaximize => {
                 if self.fullscreen {
@@ -3008,6 +3099,8 @@ impl Shell {
         }
         if let Some(window) = &self.settings {
             let values = settings::Values {
+                remote: &self.remote.settings,
+                remote_taskbar_available: self.remote.capabilities.taskbar,
                 storage: &self.storage,
                 scrobble_enabled: self.playback.settings.netease_scrobble_enabled,
                 scrobble_ready: self.omni.as_ref().is_some_and(|omni| omni.playback_reporting_ready("netease")),
@@ -3178,8 +3271,10 @@ impl Shell {
             maximized: self.maximized,
             fullscreen: self.fullscreen,
         };
-        frame = frame.push(self.titlebar.view(look, now).map(Message::Chrome));
-        if !self.fullscreen {
+        if self.remote.main_border {
+            frame = frame.push(self.titlebar.view(look, now).map(Message::Chrome));
+        }
+        if !self.fullscreen && self.remote.main_border {
             frame = frame.push(chrome::resize_frame().map(Message::Chrome));
         }
         let now = std::time::Instant::now();
@@ -3210,7 +3305,12 @@ impl Shell {
     }
 
     fn chrome_visible(&self) -> bool {
-        self.page != Page::NowPlaying || self.clock.visible(self.now_ms(), self.pointer_held)
+        self.page != Page::NowPlaying
+            || match self.remote.main_chrome {
+                remote::Chrome::Visible => true,
+                remote::Chrome::Auto => self.clock.visible(self.now_ms(), self.pointer_held),
+                remote::Chrome::Hidden => false,
+            }
     }
 
     /// Settings, the lyric workbench, the sign-in window or the lyrics timeline.
@@ -3278,12 +3378,16 @@ impl Shell {
     pub fn subscription(&self) -> Subscription<Message> {
         let mut parts = vec![
             iced::system::theme_changes().map(Message::SystemTheme),
-            iced::window::resize_events().map(|(_id, size)| Message::WindowResized(size)),
-            iced::event::listen_with(fullscreen_key),
-            iced::event::listen_with(window_pointer),
+            iced::window::resize_events()
+                .with(self.window)
+                .filter_map(|(main, (id, size))| (main == Some(id)).then_some(Message::WindowResized(size))),
+            self.remote_events(),
+            self.main_events(fullscreen_key),
+            self.main_events(window_pointer),
             // The release must reach every page, or a press that ends off the drag strip leaves the drag armed.
-            iced::event::listen_with(chrome_pointer),
-            iced::event::listen_with(developer_key),
+            self.main_events(chrome_pointer),
+            self.main_events(developer_key),
+            self.main_events(remote_keys),
         ];
         #[cfg(target_os = "linux")]
         if !self.closing {
@@ -3295,7 +3399,7 @@ impl Shell {
                     .map(|_| Message::Graphics(graphics::Message::Poll)),
             );
         }
-        if self.graphics.background_throttling && folia_render::backend::window_hidden() {
+        if self.graphics.background_throttling && folia_render::backend::window_hidden() && !self.remote.active() {
             if self.playback.is_playing() {
                 parts.push(
                     iced::time::every(std::time::Duration::from_millis(250))
@@ -3310,7 +3414,7 @@ impl Shell {
             );
         }
         if self.sources.has_alert() && self.settings.is_none() {
-            parts.push(iced::event::listen_with(settings_key));
+            parts.push(self.main_events(settings_key));
         }
         if self.developer.log_open || self.settings.as_ref().is_some_and(settings::Settings::shows_developer) {
             parts.push(
@@ -3325,11 +3429,7 @@ impl Shell {
             );
         }
         if self.playback.current().is_some() && !self.blocks_space() {
-            parts.push(iced::event::listen_with(if self.page == Page::Lattice {
-                lattice_space_key
-            } else {
-                space_key
-            }));
+            parts.push(self.main_events(if self.page == Page::Lattice { lattice_space_key } else { space_key }));
         }
         if self.page == Page::NowPlaying && self.clock.until_ms.is_some() {
             parts.push(iced::time::every(std::time::Duration::from_millis(200)).map(|_| Message::ChromeTick));
@@ -3343,34 +3443,34 @@ impl Shell {
             && !self.timeline.is_open()
             && self.positioning.is_none();
         if player_keys {
-            parts.push(iced::event::listen_with(player_key));
-            parts.push(iced::event::listen_with(player_ime));
+            parts.push(self.main_events(player_key));
+            parts.push(self.main_events(player_ime));
         }
         if self.settings.is_some()
             && self.workbench.is_none()
             && self.theme_park.is_none()
             && self.scene_window.is_none()
         {
-            parts.push(iced::event::listen_with(settings_key));
+            parts.push(self.main_events(settings_key));
         }
         if self.workbench.is_some() {
-            parts.push(iced::event::listen_with(workbench_key));
+            parts.push(self.main_events(workbench_key));
         }
         if self.theme_park.is_some() {
-            parts.push(iced::event::listen_with(theme_park_key));
+            parts.push(self.main_events(theme_park_key));
         }
         if self.scene_window.is_some() {
-            parts.push(iced::event::listen_with(scene_settings_key));
+            parts.push(self.main_events(scene_settings_key));
         }
         if self.positioning.is_some() {
-            parts.push(iced::event::listen_with(positioner_key));
+            parts.push(self.main_events(positioner_key));
         }
         let sheets =
             self.settings.is_none() && self.workbench.is_none() && self.theme_park.is_none() && !self.login.is_open();
         // The tools panel leaves the wall its keys; only its Escape is the panel's (`WallToolsSurface`).
         let beside_tools = self.home.tools_open() && !self.home.more_open() && !self.library.menu_open();
         if self.page == Page::Lattice && sheets && !self.home.more_open() && !self.home.queue_editing() {
-            parts.push(iced::event::listen_with(if beside_tools { wall_key_beside_tools } else { wall_key }));
+            parts.push(self.main_events(if beside_tools { wall_key_beside_tools } else { wall_key }));
         }
         if self.page == Page::Library
             && sheets
@@ -3379,24 +3479,24 @@ impl Shell {
             && (!self.home_menu_open() || beside_tools)
         {
             if self.home.search_query().is_some() {
-                parts.push(iced::event::listen_with(seam_search_key));
-                parts.push(iced::event::listen_with(seam_search_ime));
+                parts.push(self.main_events(seam_search_key));
+                parts.push(self.main_events(seam_search_ime));
             } else {
                 if beside_tools {
-                    parts.push(iced::event::listen_with(wall_key_beside_tools));
+                    parts.push(self.main_events(wall_key_beside_tools));
                 } else {
-                    parts.push(iced::event::listen_with(wall_key));
+                    parts.push(self.main_events(wall_key));
                 }
                 if self.library.filter_editing() {
-                    parts.push(iced::event::listen_with(filter_escape));
+                    parts.push(self.main_events(filter_escape));
                 }
             }
         }
         if self.login.is_open() {
-            parts.push(iced::event::listen_with(login_key));
+            parts.push(self.main_events(login_key));
         }
         if self.timeline.is_open() {
-            parts.push(iced::event::listen_with(timeline_key));
+            parts.push(self.main_events(timeline_key));
         }
         let now = std::time::Instant::now();
         let loading_motion = self.playback.loading.active()
@@ -3407,13 +3507,13 @@ impl Shell {
                 page.animating(now) || self.playback.is_playing() && page.lyrics_visible(&self.playback)
             });
         if matches!(self.page, Page::Library | Page::Lattice) && self.home_menu_open() {
-            parts.push(iced::event::listen_with(home_dismiss));
+            parts.push(self.main_events(home_dismiss));
         }
         if self.page == Page::Catalog && sheets {
-            parts.push(iced::event::listen_with(catalog_key));
+            parts.push(self.main_events(catalog_key));
         }
         if self.page == Page::Search && self.settings.is_none() {
-            parts.push(iced::event::listen_with(search_key));
+            parts.push(self.main_events(search_key));
         }
         let preview = self
             .workbench
@@ -3423,14 +3523,19 @@ impl Shell {
                 park.preview.ticking() || (park.preview.live_running() && self.playback.is_playing())
             });
         let ui_motion = self.ui_frames(now).active();
-        let visual = self.scene_active()
-            || lattice_motion
-            || preview
-            || loading_motion
-            || (self.wall_backdrop_visible() && self.playback.is_playing())
-            || (self.page == Page::NowPlaying && (self.playback.is_playing() || self.panel.visualizing()));
+        let remote_motion = self.remote.active() && (self.playback.is_playing() || loading_motion);
+        let main_visible = !(self.graphics.background_throttling && folia_render::backend::window_hidden());
+        let visual = remote_motion
+            || main_visible
+                && (self.scene_active()
+                    || lattice_motion
+                    || preview
+                    || loading_motion
+                    || (self.wall_backdrop_visible() && self.playback.is_playing())
+                    || (self.page == Page::NowPlaying && (self.playback.is_playing() || self.panel.visualizing())));
         if visual || ui_motion {
-            let cap = if ui_motion
+            let cap = if remote_motion
+                || ui_motion
                 || self.scene_active()
                 || preview
                 || self.panel.visualizing()
@@ -3447,7 +3552,11 @@ impl Shell {
             };
             let frames = match fps {
                 Some(fps) => folia_render::frames_at(fps),
-                None => iced::window::frames(),
+                None => folia_render::window_frames(if folia_render::backend::window_hidden() {
+                    self.remote.id.or(self.window)
+                } else {
+                    self.window
+                }),
             };
             parts.push(if visual { frames.map(|_| Message::VisualFrame) } else { frames.map(|_| Message::UiFrame) });
         } else if self.playback.is_playing() {
@@ -4659,6 +4768,8 @@ impl Shell {
         }
         let mut replan = reopen;
         let task = match message {
+            home::Message::Remote => self.remote_message(remote::Message::Open),
+            home::Message::UnlockWindows => self.remote_message(remote::Message::Unlock),
             home::Message::RandomizeOnEntry => {
                 self.general.wall_randomize_on_entry = !self.general.wall_randomize_on_entry;
                 Task::batch([
@@ -5170,6 +5281,26 @@ pub fn space_toggle(event: iced::Event, status: iced::event::Status) -> Option<M
             repeat: false,
             ..
         }) => Some(Message::Playback(playback::Message::Toggle)),
+        _ => None,
+    }
+}
+
+fn remote_keys(event: iced::Event, _status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
+    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+        key: iced::keyboard::Key::Character(key),
+        modifiers,
+        repeat: false,
+        ..
+    }) = event
+    else {
+        return None;
+    };
+    if !modifiers.control() || !modifiers.shift() {
+        return None;
+    }
+    match key.to_ascii_lowercase().as_str() {
+        "r" => Some(Message::Remote(remote::Message::Open)),
+        "u" => Some(Message::Remote(remote::Message::Unlock)),
         _ => None,
     }
 }

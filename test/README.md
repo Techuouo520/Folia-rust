@@ -31,6 +31,16 @@ cargo test --release --manifest-path test/Cargo.toml -p test-visualizer --featur
 
 莫奈图集回归默认运行 24000 帧，覆盖历史上第 21298 帧出现的溢出。`FOLIA_ATLAS_FRAMES` 可指定正整数用于短程检查，结束时关闭工作台，再将播放主视图与全新渲染器比较。完整时长回归应使用默认帧数。
 
+## 本机窗口验证
+
+Windows 遥控器的完整窗口探针在独立的非输入桌面运行，不切换用户桌面；使用临时设置、静音音频和同一套 `Shell::boot`/HostRenderer。验证主窗最小化时的共享帧钟、小窗关闭释放、穿透解锁、向上展开队列及透明表面的 alpha，并打印 CPU、工作集、私有内存与更新间隔。以下命令关闭测试包默认的开发 API，探针使用生产特性；最后一个可选参数是临时截图与指标输出目录。
+
+```powershell
+cargo run --release --manifest-path test/Cargo.toml -p test-render --no-default-features --features stress --bin remote-window-probe -- "$env:TEMP/folia-remote-probe"
+```
+
+该探针只验证 Windows；不在基础 CI 执行。完整主窗口的不同歌词样式和真实桌面合成性能应另外测量，不能把探针数字当作整款应用的性能结论。
+
 ## 真实服务检查
 
 ```powershell

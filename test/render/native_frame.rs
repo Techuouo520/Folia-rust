@@ -26,6 +26,8 @@ const STATE_SYSTEM_INVISIBLE: u32 = 0x8000;
 #[derive(Default)]
 struct Fixture {
     window: Option<Arc<Window>>,
+    companion: Option<Arc<Window>>,
+    open_companion: bool,
 }
 
 impl ApplicationHandler for Fixture {
@@ -47,6 +49,20 @@ impl ApplicationHandler for Fixture {
                 )
                 .unwrap(),
         ));
+        if self.open_companion {
+            self.companion = Some(Arc::new(
+                events
+                    .create_window(
+                        Window::default_attributes()
+                            .with_visible(false)
+                            .with_decorations(false)
+                            .with_transparent(true)
+                            .with_undecorated_shadow(false)
+                            .with_inner_size(winit::dpi::LogicalSize::new(602.0, 184.0)),
+                    )
+                    .unwrap(),
+            ));
+        }
     }
     fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
 }
@@ -178,6 +194,7 @@ fn frame_case() {
         }
     }
     assert_maximized_client_respects_work_area(window, handle.hwnd.get() as HWND);
+    assert_companion_native_controls(window);
     folia_render::backend::configure_native_frame(window, false).unwrap();
     assert_eq!(backing_alpha(handle.hwnd.get() as HWND), 0xa5, "other presentation backends retain their pixels");
     #[cfg(not(feature = "ci"))]
@@ -189,9 +206,51 @@ fn frame_case() {
     events.pump_app_events(Some(Duration::ZERO), &mut fixture);
 }
 
+fn assert_companion_native_controls(window: &Window) {
+    use folia_render::desktop_window;
+    use windows_sys::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, GetWindowRgn, PtInRegion};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GWL_EXSTYLE, WS_EX_TOPMOST, WS_EX_TRANSPARENT};
+    let RawWindowHandle::Win32(handle) = window.window_handle().unwrap().as_raw() else { panic!("expected Win32") };
+    let hwnd = handle.hwnd.get() as HWND;
+    let caps = desktop_window::capabilities(window);
+    assert!(caps.pin && caps.taskbar && caps.click_through && caps.position);
+    for enabled in [true, false, true, false] {
+        desktop_window::set_pin(window, enabled).unwrap();
+        desktop_window::set_click_through(window, enabled).unwrap();
+        desktop_window::set_taskbar(window, !enabled).unwrap();
+        // SAFETY: Reads native style bits from the live hidden fixture window.
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        assert_eq!(style & WS_EX_TRANSPARENT != 0, enabled);
+        assert_eq!(style & WS_EX_TOPMOST != 0, enabled);
+    }
+    let geometry = desktop_window::geometry(window);
+    assert!(geometry.current_work_area.is_some());
+    desktop_window::set_shape(
+        window,
+        &[iced::Rectangle::new(iced::Point::new(178.0, 4.0), iced::Size::new(420.0, 176.0))],
+        true,
+    )
+    .unwrap();
+    // SAFETY: The test owns this temporary region and deletes it after reading the window region.
+    unsafe {
+        let region = CreateRectRgn(0, 0, 0, 0);
+        assert!(!region.is_null());
+        assert_ne!(GetWindowRgn(hwnd, region), 0);
+        let scale = geometry.scale;
+        assert_eq!(
+            PtInRegion(region, (20.0 * scale) as i32, (90.0 * scale) as i32),
+            0,
+            "empty sleeve intercepts desktop clicks"
+        );
+        assert_ne!(PtInRegion(region, (300.0 * scale) as i32, (90.0 * scale) as i32), 0);
+        DeleteObject(region);
+    }
+    desktop_window::set_shape(window, &[iced::Rectangle::with_size(geometry.size)], true).unwrap();
+}
+
 fn maximized_case() {
     let mut events = EventLoop::builder().with_any_thread(true).build().unwrap();
-    let mut fixture = Fixture::default();
+    let mut fixture = Fixture { open_companion: true, ..Default::default() };
     events.pump_app_events(Some(Duration::ZERO), &mut fixture);
     let window = fixture.window.as_ref().unwrap().clone();
     folia_render::backend::configure_native_frame(&window, false).unwrap();
@@ -228,9 +287,41 @@ fn maximized_case() {
     window.set_maximized(false);
     events.pump_app_events(Some(Duration::from_millis(50)), &mut fixture);
     assert_eq!(window.outer_size(), restored_size, "restoring must recover the original window size");
+    #[cfg(not(feature = "ci"))]
+    companion_surface_lifetime(window.clone(), fixture.companion.take().unwrap());
     fixture.window.take();
     drop(window);
     events.pump_app_events(Some(Duration::ZERO), &mut fixture);
+}
+
+#[cfg(not(feature = "ci"))]
+fn companion_surface_lifetime(main: Arc<Window>, remote: Arc<Window>) {
+    use iced_wgpu::graphics::Compositor as _;
+    type Host = <folia_render::HostRenderer as iced_wgpu::graphics::compositor::Default>::Compositor;
+    let mut host = pollster::block_on(Host::with_backend(
+        iced_wgpu::graphics::Settings::default(),
+        main.clone(),
+        main.clone(),
+        iced_wgpu::graphics::Shell::headless(),
+        Some("wgpu"),
+    ))
+    .unwrap();
+    let main_surface = host.create_surface(main.clone(), 600, 400).unwrap();
+    let remote_surface = host.create_surface(remote.clone(), 602, 184).unwrap();
+    let main_id = u64::from(main.id());
+    let remote_id = u64::from(remote.id());
+    assert!(folia_render::backend::native_window(main_id).is_some());
+    assert!(folia_render::backend::native_window(remote_id).is_some());
+    assert!(!folia_render::backend::window_hidden(), "hidden remote replaced the visible main window handle");
+    let main_renderer = host.create_renderer();
+    let remote_renderer = host.create_renderer();
+    drop(remote_renderer);
+    drop(remote_surface);
+    drop(remote);
+    assert!(folia_render::backend::native_window(remote_id).is_none(), "closed companion retained its native surface");
+    assert!(folia_render::backend::native_window(main_id).is_some());
+    drop(main_renderer);
+    drop(main_surface);
 }
 
 static DRAG_MESSAGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
