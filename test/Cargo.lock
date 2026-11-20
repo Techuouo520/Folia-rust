@@ -6745,7 +6745,9 @@ version = "0.0.0"
 dependencies = [
  "encoding_rs",
  "folia-library",
+ "folia-lyrics",
  "image",
+ "lofty",
  "rusqlite",
  "tempfile",
 ]

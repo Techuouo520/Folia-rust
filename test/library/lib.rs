@@ -145,6 +145,105 @@ fn finds_sidecar_lyrics_with_translation() {
 }
 
 #[test]
+fn embedded_bilingual_lyrics_keep_original_focus_and_word_times() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{ItemKey, Tag, TagExt, TagType};
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source, timed) in [
+        ("plain", "[00:01.00]First verse\n[00:01.00]第一句译文\n[00:06.00]Next verse\n[00:06.00]下一句译文", false),
+        (
+            "words",
+            "[00:01.00]<00:01.00>First <00:03.00>verse<00:05.00>\n[00:01.00]第一句译文\n[00:06.00]<00:06.00>Next <00:08.00>verse<00:10.00>\n[00:06.00]下一句译文",
+            true,
+        ),
+    ] {
+        let path = dir.path().join(format!("{name}.flac"));
+        fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../player/fixtures/seek.flac"), &path).unwrap();
+        let mut tag = Tag::new(TagType::VorbisComments);
+        tag.insert_text(ItemKey::Lyrics, source.to_owned());
+        tag.save_to_path(&path, WriteOptions::default()).unwrap();
+        let lyrics = lyrics_for(&path).unwrap();
+        let original = if timed {
+            "[00:01.00]<00:01.00>First <00:03.00>verse<00:05.00>\n[00:06.00]<00:06.00>Next <00:08.00>verse<00:10.00>"
+        } else {
+            "[00:01.00]First verse\n[00:06.00]Next verse"
+        };
+        assert_eq!(
+            lyrics,
+            folia_lyrics::parse(
+                folia_lyrics::Format::detect(original),
+                original,
+                "[00:01.00]第一句译文\n[00:06.00]下一句译文",
+                ""
+            )
+        );
+        let rows: Vec<_> = lyrics.lines.iter().filter(|line| !line.is_interlude()).collect();
+        assert_eq!(rows.len(), 2, "{name}");
+        assert_eq!(rows[0].text, "First verse");
+        assert_eq!(rows[0].translation.as_deref(), Some("第一句译文"));
+        assert_eq!(rows[1].translation.as_deref(), Some("下一句译文"));
+        assert_eq!(lyrics.word_timed, timed);
+        assert_eq!(lyrics.lines[folia_lyrics::active_line(&lyrics.lines, 2.0).unwrap()].text, "First verse");
+        if timed {
+            assert_eq!((rows[0].words[0].start, rows[0].words[0].end), (1.0, 3.0));
+            assert_eq!((rows[0].words[1].start, rows[0].words[1].end), (3.0, 5.0));
+        }
+        fs::write(path.with_extension("lrc"), "[00:01.00]Sidecar wins").unwrap();
+        assert_eq!(lyrics_for(&path).unwrap().lines[0].text, "Sidecar wins");
+    }
+}
+
+#[test]
+fn embedded_tag_languages_and_descriptions_select_independent_tracks() {
+    use lofty::config::WriteOptions;
+    use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tagged.wav");
+    write_wav(&path, 12);
+    let mut primary = Tag::new(TagType::RiffInfo);
+    primary.insert_text(ItemKey::TrackTitle, "Primary tag without lyrics".into());
+    primary.save_to_path(&path, WriteOptions::default()).unwrap();
+    let mut tag = Tag::new(TagType::Id3v2);
+    for (language, description, content) in [
+        (*b"zho", "translation", "[00:01.00]独立译文\n[00:06.00]下一句独立译文"),
+        (*b"eng", "romanization", "[00:01.00]first romanization\n[00:06.00]next romanization"),
+        (
+            *b"eng",
+            "original",
+            "[00:01.00]First verse\n[00:01.00]混排旧译文\n[00:06.00]Next verse\n[00:06.00]下一句旧译文",
+        ),
+    ] {
+        let mut item = TagItem::new(ItemKey::UnsyncLyrics, ItemValue::Text(content.to_owned()));
+        item.set_lang(language);
+        item.set_description(description.to_owned());
+        tag.push(item);
+    }
+    tag.save_to_path(&path, WriteOptions::default()).unwrap();
+    let lyrics = lyrics_for(&path).unwrap();
+    let rows: Vec<_> = lyrics.lines.iter().filter(|line| !line.is_interlude()).collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].text, "First verse");
+    assert_eq!(rows[0].translation.as_deref(), Some("独立译文"));
+    assert_eq!(rows[0].romanization.as_deref(), Some("first romanization"));
+
+    let chinese = dir.path().join("chinese.wav");
+    write_wav(&chinese, 12);
+    let mut tag = Tag::new(TagType::Id3v2);
+    for (language, description, content) in
+        [(*b"eng", "translation", "[00:01.00]English translation"), (*b"zho", "vocals", "[00:01.00]中文原文")]
+    {
+        let mut item = TagItem::new(ItemKey::UnsyncLyrics, ItemValue::Text(content.to_owned()));
+        item.set_lang(language);
+        item.set_description(description.to_owned());
+        tag.push(item);
+    }
+    tag.save_to_path(&chinese, WriteOptions::default()).unwrap();
+    let lyrics = lyrics_for(&chinese).unwrap();
+    assert_eq!(lyrics.lines[0].text, "中文原文");
+    assert_eq!(lyrics.lines[0].translation.as_deref(), Some("English translation"));
+}
+
+#[test]
 fn decodes_legacy_encodings() {
     let (gbk, _, _) = encoding_rs::GB18030.encode("[00:01.00]你好");
     assert_eq!(decode_text(&gbk), "[00:01.00]你好");

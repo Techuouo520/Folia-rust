@@ -3,6 +3,7 @@
 mod align;
 mod chorus;
 mod clock;
+mod embedded;
 mod graphemes;
 mod hints;
 mod layout;
@@ -17,6 +18,7 @@ mod words;
 pub use chorus::{
     ChorusSource, chorus_ranges_of, detect_chorus_lines, mark_chorus_ranges, mark_chorus_text, resolve_chorus,
 };
+pub use embedded::parse_embedded;
 pub use graphemes::{GraphemeTiming, WordSpan, grapheme_timeline, graphemes, word_spans};
 pub use hints::{LinePhases, RenderHints, Reveal, Transition, active_line};
 pub use layout::{LayoutUnit, display_words, layout_units};

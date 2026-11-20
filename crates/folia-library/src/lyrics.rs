@@ -5,9 +5,8 @@ use std::path::Path;
 
 use encoding_rs::{Encoding, GB18030};
 use folia_core::Lyrics;
-use folia_lyrics::Format;
-
-use crate::tags;
+use lofty::prelude::*;
+use lofty::tag::TagItem;
 
 /// Sidecar formats in the order the original app prefers them; `<stem>.t.<ext>` holds a translation.
 const SIDECAR_EXTENSIONS: [&str; 6] = ["lrc", "vtt", "ttml", "qrc", "yrc", "krc"];
@@ -25,8 +24,62 @@ fn sidecar(track_path: &Path) -> Option<Lyrics> {
 }
 
 fn embedded(track_path: &Path) -> Option<Lyrics> {
-    let content = tags::embedded_lyrics(track_path)?;
-    Some(folia_lyrics::parse(Format::detect(&content), &content, "", "")).filter(|lyrics| !lyrics.lines.is_empty())
+    let file = lofty::read_from_path(track_path)
+        .inspect_err(|error| tracing::debug!(error = error as &dyn std::error::Error, "cannot read embedded lyrics"))
+        .ok()?;
+    let items = file.primary_tag().into_iter().chain(file.tags()).find_map(|tag| {
+        let items: Vec<_> = tag.items().filter(|item| lyric_text(item).is_some()).collect();
+        (!items.is_empty()).then_some(items)
+    })?;
+    let main = items
+        .iter()
+        .position(|item| original(item))
+        .or_else(|| items.iter().position(|item| !translated(item) && !romanized(item)))
+        .or_else(|| items.iter().position(|item| !translation_label(item) && !romanized(item)))
+        .or_else(|| items.iter().position(|item| !romanized(item)))
+        .unwrap_or(0);
+    let translation = items
+        .iter()
+        .enumerate()
+        .find(|(index, item)| *index != main && translation_label(item) && !romanized(item))
+        .or_else(|| {
+            items.iter().enumerate().find(|(index, item)| *index != main && translated(item) && !romanized(item))
+        })
+        .or_else(|| items.iter().enumerate().find(|(index, item)| *index != main && !romanized(item)))
+        .map(|(index, _)| index);
+    let romanization =
+        items.iter().enumerate().find(|(index, item)| *index != main && romanized(item)).map(|(index, _)| index);
+    let text = |index: Option<usize>| {
+        index.and_then(|index| items.get(index)).and_then(|item| lyric_text(item)).unwrap_or_default()
+    };
+    let lyrics = folia_lyrics::parse_embedded(text(Some(main)), text(translation), text(romanization));
+    (!lyrics.lines.is_empty()).then_some(lyrics)
+}
+
+fn lyric_text(item: &TagItem) -> Option<&str> {
+    matches!(item.key(), ItemKey::Lyrics | ItemKey::UnsyncLyrics)
+        .then(|| item.value().text())
+        .flatten()
+        .filter(|text| !text.trim().is_empty())
+}
+
+fn original(item: &TagItem) -> bool {
+    let description = item.description().to_lowercase();
+    description.contains("original") || description.contains("原文")
+}
+
+fn translated(item: &TagItem) -> bool {
+    translation_label(item) || item.lang().eq_ignore_ascii_case(b"chi") || item.lang().eq_ignore_ascii_case(b"zho")
+}
+
+fn translation_label(item: &TagItem) -> bool {
+    let description = item.description().to_lowercase();
+    description.contains("trans") || description.contains("翻译") || description.contains("译文")
+}
+
+fn romanized(item: &TagItem) -> bool {
+    let description = item.description().to_lowercase();
+    ["roman", "romaji", "pinyin", "音译", "罗马"].iter().any(|name| description.contains(name))
 }
 
 /// Reads a text file in UTF-8, UTF-16 with a BOM, or GB18030 as the fallback for legacy Chinese files.

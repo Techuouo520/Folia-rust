@@ -45,13 +45,6 @@ pub fn gain_from_tag(text: &str) -> Option<f32> {
     first.parse::<f32>().ok().filter(|gain| gain.is_finite())
 }
 
-/// Lyrics stored inside the file's tags, if any.
-pub fn embedded_lyrics(path: &Path) -> Option<String> {
-    let file = lofty::read_from_path(path).ok()?;
-    let tag = file.primary_tag().or_else(|| file.first_tag())?;
-    tag.get_string(ItemKey::Lyrics).filter(|text| !text.trim().is_empty()).map(str::to_owned)
-}
-
 struct NameMetadata {
     title: String,
     artist: Option<String>,

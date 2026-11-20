@@ -58,6 +58,52 @@ fn lrc_duet_lines_get_one_translation_each() {
 }
 
 #[test]
+fn embedded_tracks_preserve_words_blank_boundaries_and_ambiguous_voices() {
+    use folia_lyrics::parse_embedded;
+    for (mixed, main, translation, romanization) in [
+        (
+            "[00:01.00]\n[00:01.00]<00:01.00>First <00:03.00>verse<00:05.00>\n[00:01.000]第一句\n[00:06.00]Next",
+            "[00:01.00]<00:01.00>First <00:03.00>verse<00:05.00>\n[00:06.00]Next",
+            "[00:01.000]第一句",
+            "",
+        ),
+        (
+            "[00:01.00]First [00:03.00]verse[00:05.00]\n[00:01.00]第一句\n[00:06.00]Next",
+            "[00:01.00]First [00:03.00]verse[00:05.00]\n[00:06.00]Next",
+            "[00:01.00]第一句",
+            "",
+        ),
+        (
+            "[00:01.00]君と歩く\n[00:01.00]kimi to aruku\n[00:01.00]与你同行\n[00:06.00]Next",
+            "[00:01.00]君と歩く\n[00:06.00]Next",
+            "[00:01.00]与你同行",
+            "[00:01.00]kimi to aruku",
+        ),
+        (
+            "[00:01.00]First\n[00:01.00]第一句\n[00:06.00]Voice one\n[00:06.00]Voice two",
+            "[00:01.00]First\n[00:06.00]Voice one\n[00:06.00]Voice two",
+            "[00:01.00]第一句",
+            "",
+        ),
+    ] {
+        assert_eq!(parse_embedded(mixed, "", ""), parse(Format::detect(main), main, translation, romanization));
+    }
+    for unchanged in [
+        "[00:01.00]Voice one\n[00:01.00]Voice two",
+        "[00:01.00]First\n[00:01.00]第一句\n[00:01.00]Another voice",
+        "[00:01.00]君と歩く\n[00:01.00]kimi to aruku\n[00:01.00]another romanization",
+        "[00:01.00][00:09.00]Repeat\n[00:01.00][00:10.00]不同的重复时间",
+        include_str!("fixtures/lanterns.ttml"),
+        "WEBVTT\n\n00:01.000 --> 00:04.000\nOriginal\nTranslation\n",
+    ] {
+        assert_eq!(parse_embedded(unchanged, "", ""), parse(Format::detect(unchanged), unchanged, "", ""));
+    }
+    let combined = "[00:01.00]Original\n[00:01.00]内嵌翻译";
+    assert_eq!(sung(&parse_embedded(combined, "untimed alternate", ""))[0].translation.as_deref(), Some("内嵌翻译"));
+    assert_eq!(sung(&parse_embedded(combined, "[00:01.00]独立翻译", ""))[0].translation.as_deref(), Some("独立翻译"));
+}
+
+#[test]
 fn enhanced_lrc_word_times_and_metadata() {
     let content =
         "[ti:Song]\n[ar:Singer]\n[00:01.00]<00:01.00>Hel<00:01.50>lo <00:02.00>you<00:03.00>\n[00:04.00]plain";

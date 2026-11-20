@@ -9,6 +9,8 @@ path = "lib.rs"
 
 [dependencies]
 folia-library.workspace = true
+folia-lyrics.workspace = true
+lofty.workspace = true
 tempfile.workspace = true
 encoding_rs = "0.8.44"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
