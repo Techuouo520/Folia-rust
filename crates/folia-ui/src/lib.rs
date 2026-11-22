@@ -26,11 +26,11 @@ mod lattice_controls;
 mod library;
 mod login;
 mod lots;
+#[cfg(target_os = "macos")]
+mod macos_media;
 mod measured;
 #[cfg(target_os = "linux")]
 mod media_session;
-#[cfg(target_os = "macos")]
-mod macos_media;
 mod mode_picker;
 mod motion;
 mod now_playing;
@@ -230,6 +230,7 @@ pub enum Message {
     RemoteInput(iced::window::Id, Box<Message>),
     MainNative(u64),
     Storage(storage::Message),
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     Media(folia_media::Command),
     BackgroundPainted(u64, Option<iced::widget::image::Handle>),
     BackgroundPicked(Option<std::path::PathBuf>),
@@ -1614,6 +1615,7 @@ impl Shell {
                 self.apply_main_window();
                 Task::none()
             }
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             Message::Media(command) => self.media_command(command),
             Message::UiFrame => {
                 let playback = if self.playback.is_playing() {

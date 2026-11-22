@@ -1,10 +1,9 @@
 // Publishes what Folia plays to macOS Now Playing: Control Center, media keys and notch apps.
 use std::sync::mpsc::Receiver;
-use std::sync::{Mutex, Once};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, Once};
 
 use folia_media::Command;
-use folia_nowplaying::Info;
+use folia_nowplaying::{Artwork, Info};
 use iced::advanced::image::Handle;
 use iced::futures::SinkExt;
 use iced::{Subscription, Task};
@@ -43,16 +42,25 @@ fn art_key(id: &iced::advanced::image::Id) -> u64 {
     hasher.finish()
 }
 
+#[derive(PartialEq, Eq)]
+struct Key {
+    track: i64,
+    playing: bool,
+    position_quarter_secs: i64,
+    duration_ms: i64,
+    seek: u64,
+    art: Option<u64>,
+}
+
 pub(crate) struct Bridge {
-    last: Option<(i64, bool, i64, i64, u64, Option<u64>)>,
-    at: Option<Instant>,
-    artwork: Option<(u64, u32, u32, Vec<u8>)>,
+    last: Option<Key>,
+    artwork: Option<Arc<Artwork>>,
 }
 
 impl Bridge {
     pub fn new() -> Self {
         install_once();
-        Self { last: None, at: None, artwork: None }
+        Self { last: None, artwork: None }
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -82,7 +90,6 @@ impl Bridge {
             if self.last.is_some() {
                 folia_nowplaying::clear();
                 self.last = None;
-                self.at = None;
                 self.artwork = None;
             }
             return;
@@ -91,26 +98,27 @@ impl Bridge {
         let position = player.heard_position();
         let duration = player.duration();
         let art_id = art.map(|handle| art_key(&handle.id()));
-        let key = (
-            track.id,
+        let key = Key {
+            track: track.id,
             playing,
-            (position.max(0.0) * 4.0) as i64,
-            (duration.max(0.0) * 1000.0) as i64,
-            player.seek_revision(),
-            art_id,
-        );
-        let now = Instant::now();
+            position_quarter_secs: (position.max(0.0) * 4.0) as i64,
+            duration_ms: (duration.max(0.0) * 1000.0) as i64,
+            seek: player.seek_revision(),
+            art: art_id,
+        };
         // Four updates a second keep the system timeline honest without spinning on every frame.
-        if self.last == Some(key) {
+        if self.last.as_ref() == Some(&key) {
             return;
         }
         self.last = Some(key);
-        self.at = Some(now);
-        if self.artwork.as_ref().map(|(id, ..)| *id) != art_id {
+        if self.artwork.as_ref().map(|art| art.id) != art_id {
             self.artwork = match art {
-                Some(Handle::Rgba { id, width, height, pixels }) => {
-                    Some((art_key(id), *width, *height, pixels.as_ref().to_vec()))
-                }
+                Some(Handle::Rgba { id, width, height, pixels }) => Some(Arc::new(Artwork {
+                    id: art_key(id),
+                    width: *width,
+                    height: *height,
+                    rgba: pixels.as_ref().to_vec(),
+                })),
                 _ => None,
             };
         }

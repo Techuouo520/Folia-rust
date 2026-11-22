@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 image.workspace = true
 objc2 = "0.6"
@@ -22,3 +22,11 @@ objc2-media-player = { version = "0.3", features = [
     "objc2-app-kit",
     "objc2-core-foundation",
 ] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
