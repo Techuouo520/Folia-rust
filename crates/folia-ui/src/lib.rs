@@ -230,6 +230,8 @@ pub enum Message {
     Storage(storage::Message),
     #[cfg(target_os = "linux")]
     Media(folia_media::Command),
+    CloseWindow(iced::window::Id),
+    QuitApp,
     BackgroundPainted(u64, Option<iced::widget::image::Handle>),
     BackgroundPicked(Option<std::path::PathBuf>),
     BackgroundLoaded(u64, std::path::PathBuf, Result<std::sync::Arc<image::RgbaImage>, String>),
@@ -1604,6 +1606,11 @@ impl Shell {
             }
             #[cfg(target_os = "linux")]
             Message::Media(command) => self.media_command(command),
+            Message::CloseWindow(id) => iced::window::minimize(id, true),
+            Message::QuitApp => {
+                self.closing = true;
+                std::process::exit(0);
+            }
             Message::UiFrame => {
                 let playback = if self.playback.is_playing() {
                     self.handle(Message::Playback(playback::Message::Tick))
@@ -3388,6 +3395,7 @@ impl Shell {
             self.main_events(chrome_pointer),
             self.main_events(developer_key),
             self.main_events(remote_keys),
+            self.main_events(app_keys),
         ];
         #[cfg(target_os = "linux")]
         if !self.closing {
@@ -5322,6 +5330,22 @@ fn developer_key(event: iced::Event, _status: iced::event::Status, _id: iced::wi
 }
 
 /// F11 toggles fullscreen, the shortcut listed in the original help.
+/// ⌘W folds the window into the Dock and ⌘Q quits; the audio engine keeps running either way.
+fn app_keys(event: iced::Event, _status: iced::event::Status, id: iced::window::Id) -> Option<Message> {
+    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, repeat: false, .. }) = event else {
+        return None;
+    };
+    if !modifiers.command() {
+        return None;
+    }
+    let iced::keyboard::Key::Character(text) = key else { return None };
+    match text.to_lowercase().as_str() {
+        "w" => Some(Message::CloseWindow(id)),
+        "q" => Some(Message::QuitApp),
+        _ => None,
+    }
+}
+
 fn fullscreen_key(event: iced::Event, _status: iced::event::Status, _id: iced::window::Id) -> Option<Message> {
     match event {
         iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
