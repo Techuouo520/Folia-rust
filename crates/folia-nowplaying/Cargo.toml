@@ -1,0 +1,24 @@
+[package]
+name = "folia-nowplaying"
+description = "macOS Now Playing integration for Folia"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+block2 = "0.6"
+image.workspace = true
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSImage"] }
+objc2-core-foundation = "0.3"
+objc2-foundation = "0.3"
+objc2-media-player = { version = "0.3", features = [
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandEvent",
+    "block2",
+    "objc2-app-kit",
+    "objc2-core-foundation",
+] }
