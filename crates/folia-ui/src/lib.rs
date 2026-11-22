@@ -26,6 +26,8 @@ mod lattice_controls;
 mod library;
 mod login;
 mod lots;
+#[cfg(target_os = "macos")]
+mod macos_media;
 mod measured;
 #[cfg(target_os = "linux")]
 mod media_session;
@@ -228,7 +230,7 @@ pub enum Message {
     RemoteInput(iced::window::Id, Box<Message>),
     MainNative(u64),
     Storage(storage::Message),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     Media(folia_media::Command),
     BackgroundPainted(u64, Option<iced::widget::image::Handle>),
     BackgroundPicked(Option<std::path::PathBuf>),
@@ -353,6 +355,8 @@ pub struct Shell {
     storage: storage::Storage,
     #[cfg(target_os = "linux")]
     media_session: media_session::Bridge,
+    #[cfg(target_os = "macos")]
+    macos_media: macos_media::Bridge,
     store: Store,
     /// The page being left for or from the player fades out over the new one.
     page_fade: Option<page_fade::PageFade>,
@@ -596,6 +600,8 @@ impl Shell {
         let storage = storage::Storage::new(init.storage, init.cache_dir);
         #[cfg(target_os = "linux")]
         let media_session = media_session::Bridge::new(storage.active.clone());
+        #[cfg(target_os = "macos")]
+        let macos_media = macos_media::Bridge::new();
         typeface::language(init.i18n.language());
         motion::configure(&init.graphics.motion, init.system_reduced_motion);
         let smart_beat =
@@ -636,6 +642,8 @@ impl Shell {
         let mut shell = Self {
             #[cfg(target_os = "linux")]
             media_session,
+            #[cfg(target_os = "macos")]
+            macos_media,
             store: init.store,
             general: init.general,
             lattice: None,
@@ -1062,6 +1070,11 @@ impl Shell {
         );
         let lyrics_settled = matches!(&message, Message::Playback(playback::Message::LyricsLoaded(request, ..)) if *request == self.playback.request_id());
         let task = self.handle(message);
+        #[cfg(target_os = "macos")]
+        self.macos_media.sync(
+            &self.playback,
+            self.playback.current().and_then(|track| self.art.peek(&track.id)).and_then(Option::as_ref),
+        );
         #[cfg(target_os = "linux")]
         self.media_session.sync(
             &self.playback,
@@ -1602,7 +1615,7 @@ impl Shell {
                 self.apply_main_window();
                 Task::none()
             }
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             Message::Media(command) => self.media_command(command),
             Message::UiFrame => {
                 let playback = if self.playback.is_playing() {
@@ -3392,6 +3405,10 @@ impl Shell {
         #[cfg(target_os = "linux")]
         if !self.closing {
             parts.push(self.media_session.subscription());
+        }
+        #[cfg(target_os = "macos")]
+        if !self.closing {
+            parts.push(self.macos_media.subscription());
         }
         if self.graphics.motion.follow_system {
             parts.push(
